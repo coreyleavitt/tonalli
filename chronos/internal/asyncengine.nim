@@ -22,7 +22,21 @@ import ../[config, effects, futures, osdefs, oserrno, osutils, timer]
 import ./[asyncmacro, errors]
 
 export Port
-export deques, effects, errors, futures, timer, results
+export deques, effects, errors, timer, results
+# `userCallback`/`internalCallback`/`currentAsyncContext`/`context` are
+# dispatcher-internal (see `chronos/futures.nim` §Continuation-local
+# context) — excluded here so plain `import chronos` doesn't expose
+# them. Direct `import chronos/internal/asyncengine` or `import
+# chronos/futures` still see them, which is what `contextvars_impl.nim`
+# and this module's own code rely on.
+#
+# Contributor note: any new dispatcher-internal symbol added to
+# `chronos/futures.nim`'s §Continuation-local context section must be
+# added to this exclusion list AND to the negative assertions in
+# `tests/testcontextvarssurface.nim`, or it leaks through
+# plain `import chronos`.
+export futures except userCallback, internalCallback, currentAsyncContext,
+  context
 
 export
   asyncmacro.async, asyncmacro.await, asyncmacro.awaitne
@@ -92,9 +106,17 @@ type
 proc sentinelCallbackImpl(arg: pointer) {.gcsafe, noreturn.} =
   raiseAssert "Sentinel callback MUST not be scheduled"
 
-const
-  SentinelCallback = AsyncCallback(function: sentinelCallbackImpl,
-                                   udata: nil)
+template SentinelCallback(): AsyncCallback =
+  ## Sentinel value placed in the callbacks deque to delimit a batch.
+  ## A `template` (not `const` or `let`) because `AsyncCallback.context`
+  ## is now a `ref` field. Two Nim constraints rule out the alternatives:
+  ## (1) Nim 2.x rejects `const` of an object containing a `ref` field;
+  ## (2) a `let` with a `ref` field is gcsafe-inaccessible from
+  ## dispatcher procs like `poll`. The template emits a fresh rvalue
+  ## at each call site with `context: nil` — no global GC'd state to
+  ## read, gcsafe-clean. Struct-equality `isSentinel` below remains
+  ## valid because nil-ref comparison is pointer equality.
+  internalCallback(sentinelCallbackImpl, nil)
 
 proc isSentinel(acb: AsyncCallback): bool =
   acb == SentinelCallback
@@ -129,8 +151,12 @@ template processThreadCallbacks(loop) =
       # Move the callbacks to the regular callback list - this ensures we don't
       # starve the rest of the pipeline if the callbacks themselves keep adding
       # stuff
+      #
+      # `internalCallback`: the scheduling site was on another thread whose
+      # context (thread-local GC memory) cannot be captured here — the
+      # callback fires with an empty context.
       loop.callbacks.addLast(
-        AsyncCallback(function: node.callback, udata: node.udata)
+        internalCallback(node.callback, node.udata)
       )
       deallocShared(node)
 
@@ -197,6 +223,25 @@ template processTicks(loop: untyped) =
   while len(loop.ticks) > 0:
     loop.callbacks.addLast(loop.ticks.popFirst())
 
+template fireWithContext(callable: untyped) =
+  # Continuation-local context: restore the bindings captured at
+  # the callback's scheduling site (via `userCallback`). After
+  # firing, revert to whatever the dispatcher had so the next
+  # callback sees its own captured value. `callable` going out of
+  # scope at loop-iteration end drops the last ref to the captured
+  # chain (if any); Nim's MM frees it.
+  let chronosCtxPrev = currentAsyncContext
+  currentAsyncContext = callable.context
+  try:
+    # `callable.function` and `.udata` are UFCS calls to the getters in
+    # `futures.nim` (the fields are private) — `callable.function(callable.udata)`
+    # would parse as a 2-arg UFCS call on the getter, not "call the
+    # function value with udata". Parenthesize to force the intended
+    # read-then-call.
+    (callable.function)(callable.udata)
+  finally:
+    currentAsyncContext = chronosCtxPrev
+
 template processCallbacks(loop: untyped) =
   when chronosStrictReentrancy:
     # Process existing callbacks but not those that follow, to allow the network
@@ -204,14 +249,14 @@ template processCallbacks(loop: untyped) =
     for _ in 0 ..< len(loop.callbacks):
       let callable = loop.callbacks.popFirst()
       if not(isNil(callable.function)):
-        callable.function(callable.udata)
+        fireWithContext(callable)
   else:
     while true:
       let callable = loop.callbacks.popFirst()  # len must be > 0 due to sentinel
       if isSentinel(callable):
         break
       if not(isNil(callable.function)):
-        callable.function(callable.udata)
+        fireWithContext(callable)
 
 proc raiseAsDefect*(exc: ref Exception, msg: string) {.noreturn, noinline.} =
   # Reraise an exception as a Defect, where it's unexpected and can't be handled
@@ -717,8 +762,23 @@ elif defined(windows):
             else:
               OSErrorCode(rtlNtStatusToDosError(res))
         customOverlapped.data.bytesCount = events[i].dwNumberOfBytesTransferred
-        let acb = AsyncCallback(function: customOverlapped.data.cb,
-                                udata: cast[pointer](customOverlapped))
+        # TODO(contextvars): IOCP completion path loses registration-time
+        # context. `CompletionData.cb` is stored as a bare `CallbackFunc`
+        # (no context captured at `registerWaitable` time), then wrapped
+        # here via `internalCallback`, which stores an empty context that
+        # `fireWithContext` installs around the invocation. User
+        # callbacks scheduled via `addProcess2`/`addSignal2` on Windows
+        # therefore fire with an EMPTY context rather than the
+        # registrant's — fail-closed: propagation is missing, but another
+        # task's bindings can never leak in.
+        #
+        # Fix requires adding a `context: ContextNodeBase` field to
+        # `CompletionData`, capturing in `registerWaitable`, restoring
+        # here before invoking `cb`. Deferred — no Windows CI available
+        # to verify. Linux epoll/kqueue path is correct.
+        # Documented in docs §Migration / compatibility.
+        let acb = internalCallback(customOverlapped.data.cb,
+                                   cast[pointer](customOverlapped))
         loop.callbacks.addLast(acb)
       else:
         hasWakeup = true
@@ -759,7 +819,7 @@ elif defined(windows):
     # not supported so we discard the return value.
     discard closeFd(SocketHandle(fd))
     if not(isNil(aftercb)):
-      loop.callbacks.addLast(AsyncCallback(function: aftercb))
+      loop.callbacks.addLast(userCallback(aftercb))
 
   proc closeHandle*(fd: AsyncFD, aftercb: CallbackFunc = nil) =
     ## Closes a (pipe/file) handle and ensures that it is unregistered.
@@ -772,7 +832,7 @@ elif defined(windows):
     discard closeFd(HANDLE(fd))
 
     if not(isNil(aftercb)):
-      loop.callbacks.addLast(AsyncCallback(function: aftercb))
+      loop.callbacks.addLast(userCallback(aftercb))
 
   proc unregisterAndCloseFd*(fd: AsyncFD): Result[void, OSErrorCode] =
     ## Unregister from system queue and close asynchronous socket.
@@ -901,8 +961,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     let loop = getThreadDispatcher()
     var newEvents = {Event.Read}
     withData(loop.selector, cint(fd), adata) do:
-      let acb = AsyncCallback(function: cb, udata: udata)
-      adata.reader = acb
+      # Assignment overwrite fires =destroy on the prior reader, which
+      # releases its captured context. Re-arming is leak-safe.
+      adata.reader = userCallback(cb, udata)
       if not(isNil(adata.writer.function)):
         newEvents.incl(Event.Write)
     do:
@@ -914,8 +975,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     let loop = getThreadDispatcher()
     var newEvents: set[Event]
     withData(loop.selector, cint(fd), adata) do:
-      # We need to clear `reader` data, because `selectors` don't do it
-      adata.reader = default(AsyncCallback)
+      # Assignment fires =destroy on the prior reader → context released.
+      adata.reader.reset()
       if not(isNil(adata.writer.function)):
         newEvents.incl(Event.Write)
     do:
@@ -929,8 +990,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     let loop = getThreadDispatcher()
     var newEvents = {Event.Write}
     withData(loop.selector, cint(fd), adata) do:
-      let acb = AsyncCallback(function: cb, udata: udata)
-      adata.writer = acb
+      adata.writer = userCallback(cb, udata)
       if not(isNil(adata.reader.function)):
         newEvents.incl(Event.Read)
     do:
@@ -942,8 +1002,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     let loop = getThreadDispatcher()
     var newEvents: set[Event]
     withData(loop.selector, cint(fd), adata) do:
-      # We need to clear `writer` data, because `selectors` don't do it
-      adata.writer = default(AsyncCallback)
+      adata.writer.reset()
       if not(isNil(adata.reader.function)):
         newEvents.incl(Event.Read)
     do:
@@ -1023,16 +1082,16 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
 
       if not(isNil(adata.reader.function)):
         loop.callbacks.addLast(adata.reader)
-        adata.reader = default(AsyncCallback)
+        adata.reader.reset()
 
       if not(isNil(adata.writer.function)):
         loop.callbacks.addLast(adata.writer)
-        adata.writer = default(AsyncCallback)
+        adata.writer.reset()
 
     # We can't unregister file descriptor from system queue here, because
     # in such case processing queue will stuck on poll() call, because there
     # can be no file descriptors registered in system queue.
-    var acb = AsyncCallback(function: continuation)
+    var acb = userCallback(continuation)
     loop.callbacks.addLast(acb)
 
   proc closeHandle*(fd: AsyncFD, aftercb: CallbackFunc = nil) =
@@ -1062,7 +1121,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       var data: SelectorData
       let sigfd = ? loop.selector.registerSignal(signal, data)
       withData(loop.selector, sigfd, adata) do:
-        adata.reader = AsyncCallback(function: cb, udata: udata)
+        adata.reader = userCallback(cb, udata)
       do:
         return err(osdefs.EBADF)
       ok(SignalHandle(sigfd))
@@ -1079,13 +1138,16 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       var data: SelectorData
       let procfd = ? loop.selector.registerProcess(pid, data)
       withData(loop.selector, procfd, adata) do:
-        adata.reader = AsyncCallback(function: cb, udata: udata)
+        adata.reader = userCallback(cb, udata)
       do:
         return err(osdefs.EBADF)
       ok(ProcessHandle(procfd))
 
     proc removeSignal2*(signalHandle: SignalHandle): Result[void, OSErrorCode] =
       ## Remove watching signal ``signal``.
+      # SelectorData drop on unregister2 cascades destruction of
+      # adata.reader's AsyncCallback, whose =destroy releases the
+      # captured context — no explicit release needed here.
       getThreadDispatcher().selector.unregister2(cint(signalHandle))
 
     proc removeProcess2*(procHandle: ProcessHandle): Result[void, OSErrorCode] =
@@ -1254,10 +1316,12 @@ proc setTimer*(at: Moment, cb: CallbackFunc,
   ## timestamp ``at``. You can also pass ``udata`` to callback.
   let loop = getThreadDispatcher()
   result = TimerCallback(finishAt: at,
-                         function: AsyncCallback(function: cb, udata: udata))
+                         function: userCallback(cb, udata))
   loop.timers.push(result)
 
 proc clearTimer*(timer: TimerCallback) {.inline.} =
+  # Struct overwrite releases the captured context ref via the same
+  # Nim MM machinery as every other `field = default(T)` site.
   timer.function = default(AsyncCallback)
 
 proc addTimer*(at: Moment, cb: CallbackFunc, udata: pointer = nil) {.
@@ -1290,6 +1354,8 @@ proc removeTimer*(at: Moment, cb: CallbackFunc, udata: pointer = nil) =
             break
         res
   if index != -1:
+    # heapqueue.del fires =destroy on the removed TimerCallback's
+    # function field, releasing its captured context.
     loop.timers.del(index)
 
 proc removeTimer*(at: int64, cb: CallbackFunc, udata: pointer = nil) {.
@@ -1309,7 +1375,7 @@ proc callSoon*(cbproc: CallbackFunc, udata: pointer = nil) =
   ## Schedule `cbproc` to be called as soon as possible.
   ## The callback is called when control returns to the event loop.
   doAssert(not isNil(cbproc))
-  callSoon(AsyncCallback(function: cbproc, udata: udata))
+  callSoon(userCallback(cbproc, udata))
 
 when hasThreadSupport:
   type DispatcherHandle* = distinct (ptr Dispatcher)
@@ -1362,8 +1428,12 @@ when hasThreadSupport:
     doAssert(not isNil(cbproc))
     let current = gDisp.handle() # Don't init a new dispatcher with getThreadDispatcher()
     if distinctBase(current) == distinctBase(disp):
-      # Same thread: add directly to the callbacks deque
-      distinctBase(current).callbacks.addLast(AsyncCallback(function: cbproc, udata: udata))
+      # Same thread: add directly to the callbacks deque. This is a
+      # user-facing scheduling site equivalent to `callSoon(cbproc, udata)`,
+      # so capture the current context. (The cross-thread branch below fires
+      # with an empty context — the caller's context is not reachable from
+      # the target thread.)
+      distinctBase(current).callbacks.addLast(userCallback(cbproc, udata))
     else:
       # Cross-thread: enqueue to shared MPSC queue
       let node = createShared(ThreadCallbackNode)
@@ -1397,24 +1467,35 @@ proc callIdle*(cbproc: CallbackFunc, data: pointer) =
   ## iteration if there no network events available, not when the loop is
   ## actually "idle".
   doAssert(not isNil(cbproc))
-  callIdle(AsyncCallback(function: cbproc, udata: data))
+  callIdle(userCallback(cbproc, data))
 
 proc callIdle*(cbproc: CallbackFunc) =
   callIdle(cbproc, nil)
 
 proc internalCallTick*(acb: AsyncCallback) =
-  ## Schedule ``cbproc`` to be called after all scheduled callbacks, but only
-  ## when OS system queue finished processing events.
+  ## Schedule ``acb`` to be called after all scheduled callbacks, but only
+  ## when OS system queue finished processing events. Caller-supplied
+  ## AsyncCallback — caller decides whether to use `userCallback` or
+  ## `internalCallback`. The convenience `CallbackFunc` overloads below
+  ## treat the schedule as internal (no context capture).
   getThreadDispatcher().ticks.addLast(acb)
 
 proc internalCallTick*(cbproc: CallbackFunc, data: pointer) =
   ## Schedule ``cbproc`` to be called after all scheduled callbacks when
-  ## OS system queue processing is done.
+  ## OS system queue processing is done. Treated as an internal trampoline
+  ## (no context capture) — `internalCallTick` is named "internal" and is
+  ## used by `checktick`, `stepsAsync` etc. `cbproc` itself doesn't read
+  ## contextVars; where it fires a downstream user-visible callback (e.g.
+  ## `checktick`'s `tryCancel` invoking `internalCancelcb`), that callback
+  ## carries its own context captured at ITS registration site and fires
+  ## through its own capture/restore, independent of `cbproc`'s (lack of)
+  ## capture here. Use `internalCallTick(userCallback(cb, data))` to opt
+  ## into capture explicitly if needed.
   doAssert(not isNil(cbproc))
-  internalCallTick(AsyncCallback(function: cbproc, udata: data))
+  internalCallTick(internalCallback(cbproc, data))
 
 proc internalCallTick*(cbproc: CallbackFunc) =
-  internalCallTick(AsyncCallback(function: cbproc, udata: nil))
+  internalCallTick(internalCallback(cbproc, nil))
 
 proc runForever*() =
   ## Begins a never ending global dispatcher poll loop.
