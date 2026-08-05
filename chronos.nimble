@@ -93,7 +93,7 @@ task test, "Run all tests":
 
   # Make sure benchmarks compile
   for f in walkDirRec("benchmarks"):
-    if f.startsWith("bench_") and f.endsWith(".nim"):
+    if f.contains("bench_") and f.endsWith(".nim"):
       build "", f[0..^5]
 
   if testSuccessMarker.len > 0:

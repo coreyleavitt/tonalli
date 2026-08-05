@@ -266,12 +266,14 @@ template fireCancelCallback(future: FutureBase) =
   # `tryCancel` succeeds synchronously, and it's nil when driven by
   # `cancelSoon`'s `checktick` retry (a context-blind internal
   # trampoline).
-  let chronosCtxPrev = currentAsyncContext
-  currentAsyncContext = future.internalCancelcb.context
-  try:
+  #
+  # RFC 0001 D2: `internalCancelcb.function` is always a plain
+  # synchronous `CallbackFunc`, never a continuation pump - exit class
+  # 3 (suspend mid-binder, see `futures.nim`'s `withRestoredContext`
+  # doc comment) is unreachable here, so the identity fast path is
+  # sound with no pin needed.
+  withRestoredContext(future.internalCancelcb.context):
     (future.internalCancelcb.function)(future.internalCancelcb.udata)
-  finally:
-    currentAsyncContext = chronosCtxPrev
 
 proc tryCancel(future: FutureBase, loc: ptr SrcLoc): bool =
   ## Perform an attempt to cancel ``future``.

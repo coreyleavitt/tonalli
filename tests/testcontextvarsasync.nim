@@ -711,6 +711,45 @@ suite "contextvars: cancelCallback capture":
     check fired
     check fut.cancelled()
 
+  test "cancelCallback fast arm fires cleanly while an unrelated task is parked mid-binder elsewhere (D2 fast-arm interleave pin)":
+    # RFC 0001 D2: `fireCancelCallback`'s fast arm (identity
+    # `withRestoredContext`) must observe exactly its own captured
+    # context, undisturbed by an unrelated task parked mid-`await`
+    # inside its own binder elsewhere on the same dispatcher - and must
+    # leave the ambient context clean for that task's eventual resume.
+    # The parked task's own suspend already restores ambient context to
+    # nil before returning here (D3's pin, independent of D2); this
+    # test pins that D2's converted fast path does not reintroduce a
+    # leak by observing or clobbering that restored nil state.
+    let parkedWaiter = newFuture[void]("d2.parked-waiter")
+    var parkedObserved = -2
+
+    proc parked(): Future[void] {.async: (raises: [Exception]).} =
+      withAsyncInt(777):
+        await parkedWaiter          # suspends INSIDE the binder
+        parkedObserved = asyncInt()
+
+    let parkedFut = parked()        # runs synchronously to the await;
+                                     # suspended mid-binder, ambient
+                                     # context already restored to nil
+                                     # on return (D3's pin)
+    check asyncInt() == 0           # confirms no leak from `parked`'s entry
+
+    var fired = false
+    let fut = newFuture[void]("d2.cancel-future")
+    fut.cancelCallback = proc(_: pointer) {.gcsafe, raises: [].} =
+      check asyncInt() == 0         # own captured (nil) context, not 777
+      fired = true
+
+    check tryCancel(fut)            # fires while `parked` sits suspended
+    check fired
+    check fut.cancelled()
+    check asyncInt() == 0           # still clean after the cancel fires
+
+    parkedWaiter.complete()
+    waitFor parkedFut
+    check parkedObserved == 777     # parked's own binding, undisturbed
+
 suite "contextvars: RFC0001 D0/D1 fast-path pins":
   # These tests pin the observable contract `withRestoredContext`/
   # `fireWithContext` must hold across both the identity fast arm (no
