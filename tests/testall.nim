@@ -16,6 +16,10 @@ import
     testasyncsemaphore, testmpsc,
   ]
 
+import
+  ./[testcontextvars, testcontextvarsasync, testcontextvarsguardrails,
+     testcontextvarssurface, testcontextvarsexport]
+
 when (chronosEventEngine in ["epoll", "kqueue"]) or defined(windows):
   # `poll` engine does not support signals and processes.
   import testsignal
