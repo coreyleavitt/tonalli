@@ -114,6 +114,19 @@ when declared(userCallback):
 when declared(internalCallback):
   {.error: "`internalCallback` must not leak through the public API.".}
 
+when declared(withRestoredContext):
+  {.error: "`withRestoredContext` must not leak through the public API. " &
+           "It lives in chronos/futures.nim (placed there because " &
+           "`asyncengine.nim` cannot name `ContextNodeBase` for its " &
+           "typed parameter), excluded from `asyncengine.nim`'s `export " &
+           "futures`, and is used by the dispatcher's fire sites only.".}
+
+when declared(pinContext):
+  {.error: "`pinContext` must not leak through the public API. It lives " &
+           "in chronos/futures.nim beside `withRestoredContext`, excluded " &
+           "from `asyncengine.nim`'s `export futures`, and is used by " &
+           "continuation-pump resume guards only.".}
+
 # `context` is `InternalAsyncCallback`'s read-only getter (declared in
 # `chronos/futures.nim`, used by the dispatcher's `fireWithContext`).
 # It has no user-facing purpose: the value it returns is `ContextNodeBase`,

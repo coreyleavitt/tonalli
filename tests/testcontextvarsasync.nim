@@ -711,3 +711,113 @@ suite "contextvars: cancelCallback capture":
     check fired
     check fut.cancelled()
 
+suite "contextvars: RFC0001 D0/D1 fast-path pins":
+  # These tests pin the observable contract `withRestoredContext`/
+  # `fireWithContext` must hold across both the identity fast arm (no
+  # writes to `currentAsyncContext`) and the slow arm (write + restore).
+  # They are regression guards, not drivers of a behavior change - the
+  # dispatcher already restored context correctly before D0/D1 (via the
+  # unconditional save/restore `fireWithContext` used to perform
+  # directly); D0/D1 only add the identity short-circuit. All three are
+  # expected green against the dispatcher both before and after the D0/D1
+  # refactor. See RFC 0001 §3 D0/D1, §6 S3.
+
+  test "interleaved fast/slow-arm callbacks in one poll batch each observe their own context":
+    # `withRestoredContext` takes the identity fast arm when the
+    # captured context already equals the ambient context at fire time
+    # (the common nil/nil case - no bindings anywhere), and the slow
+    # arm (write + restore) otherwise. Schedule several callbacks in a
+    # single batch, alternating callbacks captured with no ambient
+    # binder (fast arm) and callbacks captured from inside a binder
+    # (slow arm), so consecutive callbacks flip the branch back and
+    # forth. Each must observe exactly its own captured value
+    # regardless of which arm fired the callback immediately before it.
+    var seen: seq[int]
+
+    proc recordCb(udata: pointer) {.gcsafe, raises: [].} =
+      seen.add asyncInt()
+
+    callSoon(recordCb, nil)          # nil capture -> fast arm (nil == nil)
+    withAsyncInt(11):
+      callSoon(recordCb, nil)        # 11 capture  -> slow arm
+    callSoon(recordCb, nil)          # nil capture -> fast arm
+    withAsyncInt(22):
+      callSoon(recordCb, nil)        # 22 capture  -> slow arm
+    withAsyncInt(33):
+      callSoon(recordCb, nil)        # 33 capture  -> slow arm
+    callSoon(recordCb, nil)          # nil capture -> fast arm
+
+    poll()
+    check seen == @[0, 11, 0, 22, 33, 0]
+
+  test "bind-and-raise on the fast arm leaves the ambient context clean after the batch":
+    # Fast-arm coverage for exit class 2 (raise), RFC 0001 §3 D1. The
+    # callback below is scheduled with no ambient binder, so its
+    # captured (nil) context equals the ambient (nil) context at fire
+    # time - `withRestoredContext`'s identity fast arm, which runs
+    # `body` directly with no `try`/`finally` of its own. `CallbackFunc`
+    # is `raises: []`, so the raiser must be a `Defect` to escape the
+    # callback; `contextBindSlot`'s own `finally` still runs on that
+    # unwind (that is exit class 2's mechanism, independent of which
+    # arm fired the callback), so the binding must be gone by the time
+    # `poll()` returns even though the fast arm itself never wrote or
+    # restored `currentAsyncContext`. Verified through the public
+    # `asyncInt()` reader, not the internal `chronosDebug` batch assert
+    # - that assert is a separate, independent net (only compiled under
+    # `-d:chronosDebug`), not the oracle for this test.
+    proc raiser(udata: pointer) {.gcsafe, raises: [].} =
+      withAsyncInt(999):
+        doAssert false, "contextvars S3(b): intentional Defect to " &
+                         "exercise the fast-arm raise path"
+
+    callSoon(raiser, nil)
+    var caught = false
+    try:
+      poll()
+    except Defect:
+      caught = true
+    check caught
+    check asyncInt() == 0
+
+  test "nil-captured resume through a suspended binder leaves the ambient context clean for a later same-batch callback (D1 x D3 leak-repro pin)":
+    # RFC 0001 D3: `internalContinue`'s resume must restore
+    # `currentAsyncContext` even when the resumed slice suspends AGAIN
+    # inside a binder before returning control to the dispatcher (an
+    # iterator `yield` inside a `withName` block is a plain return -
+    # `contextBindSlot`'s `finally` does not run for it). Without that
+    # restore, D1's fast arm at the OUTER fire (identity nil == nil)
+    # would leave the threadvar pointing at the binder's node for every
+    # callback still queued behind it in the same batch.
+    # `futureContinue`'s own unconditional save/restore is the
+    # load-bearing net (present independently of D0/D1); this test pins
+    # the observable end-to-end behavior rather than the mechanism, so
+    # it stays valid across the S5 refactor onto `pinContext`.
+    let outerWaiter = newFuture[void]("s3.leak-repro.outer")
+    let innerWaiter = newFuture[void]("s3.leak-repro.inner")
+    var innerObserved = -1
+    var laterSeenBinding = -1
+    var laterFired = false
+
+    proc leaky(): Future[void] {.async: (raises: [Exception]).} =
+      await outerWaiter               # captured with nil ambient context
+      withAsyncInt(999):
+        await innerWaiter             # suspends INSIDE the binder (class 3)
+        innerObserved = asyncInt()
+
+    proc laterCb(udata: pointer) {.gcsafe, raises: [].} =
+      laterSeenBinding = asyncInt()
+      laterFired = true
+
+    let fut = leaky()                 # synchronous run to `await outerWaiter`
+    outerWaiter.complete()            # queues leaky's resume (nil-context capture)
+    callSoon(laterCb, nil)            # queued behind the resume, same batch
+    poll()
+
+    check laterFired
+    check laterSeenBinding == 0       # not leaked from leaky's still-open binder
+
+    innerWaiter.complete()
+    waitFor fut
+    check innerObserved == 999
+    check fut.finished()
+

@@ -23,12 +23,13 @@ import ./[asyncmacro, errors]
 
 export Port
 export deques, effects, errors, timer, results
-# `userCallback`/`internalCallback`/`currentAsyncContext`/`context` are
-# dispatcher-internal (see `chronos/futures.nim` §Continuation-local
-# context) — excluded here so plain `import chronos` doesn't expose
-# them. Direct `import chronos/internal/asyncengine` or `import
-# chronos/futures` still see them, which is what `contextvars_impl.nim`
-# and this module's own code rely on.
+# `userCallback`/`internalCallback`/`currentAsyncContext`/`context`/
+# `withRestoredContext`/`pinContext` are dispatcher-internal (see
+# `chronos/futures.nim` §Continuation-local context) — excluded here so
+# plain `import chronos` doesn't expose them. Direct `import
+# chronos/internal/asyncengine` or `import chronos/futures` still see
+# them, which is what `contextvars_impl.nim` and this module's own code
+# rely on.
 #
 # Contributor note: any new dispatcher-internal symbol added to
 # `chronos/futures.nim`'s §Continuation-local context section must be
@@ -36,7 +37,7 @@ export deques, effects, errors, timer, results
 # `tests/testcontextvarssurface.nim`, or it leaks through
 # plain `import chronos`.
 export futures except userCallback, internalCallback, currentAsyncContext,
-  context
+  context, withRestoredContext, pinContext
 
 export
   asyncmacro.async, asyncmacro.await, asyncmacro.awaitne
@@ -224,25 +225,21 @@ template processTicks(loop: untyped) =
     loop.callbacks.addLast(loop.ticks.popFirst())
 
 template fireWithContext(callable: untyped) =
-  # Continuation-local context: restore the bindings captured at
-  # the callback's scheduling site (via `userCallback`). After
-  # firing, revert to whatever the dispatcher had so the next
-  # callback sees its own captured value. `callable` going out of
-  # scope at loop-iteration end drops the last ref to the captured
-  # chain (if any); Nim's MM frees it.
-  let chronosCtxPrev = currentAsyncContext
-  currentAsyncContext = callable.context
-  try:
+  # Continuation-local context: restore the bindings captured at the
+  # callback's scheduling site (via `userCallback`), with an identity
+  # fast path when the ambient context already matches
+  # (`withRestoredContext`, chronos/futures.nim §Continuation-local
+  # context). `callable` going out of scope at loop-iteration end drops
+  # the last ref to the captured chain (if any); Nim's MM frees it.
+  withRestoredContext(callable.context):
     # `callable.function` and `.udata` are UFCS calls to the getters in
     # `futures.nim` (the fields are private) — `callable.function(callable.udata)`
     # would parse as a 2-arg UFCS call on the getter, not "call the
     # function value with udata". Parenthesize to force the intended
     # read-then-call.
     (callable.function)(callable.udata)
-  finally:
-    currentAsyncContext = chronosCtxPrev
 
-template processCallbacks(loop: untyped) =
+template processCallbacksBody(loop: untyped) =
   when chronosStrictReentrancy:
     # Process existing callbacks but not those that follow, to allow the network
     # to regain control regularly
@@ -257,6 +254,27 @@ template processCallbacks(loop: untyped) =
         break
       if not(isNil(callable.function)):
         fireWithContext(callable)
+
+template processCallbacks(loop: untyped) =
+  # Batch-boundary debug net (D0, RFC 0001 §3): every callback batch must
+  # exit with the same ambient context it entered with. The snapshot is a
+  # per-invocation local — never a module global — because `poll()` calls
+  # this template from more than one site, and a nested `waitFor` inside a
+  # running callback legally re-enters it with a non-nil ambient context;
+  # a global snapshot would compare against the wrong invocation's
+  # baseline. try/finally (not a trailing statement) so the assert also
+  # runs on the Defect-unwind exit path. Wraps the whole body, outside
+  # the `chronosStrictReentrancy` fork in `processCallbacksBody`, so the
+  # net is branch-agnostic.
+  when defined(chronosDebug):
+    let chronosDebugPreBatch = currentAsyncContext
+    try:
+      processCallbacksBody(loop)
+    finally:
+      doAssert currentAsyncContext == chronosDebugPreBatch,
+        "context leaked across a callback batch"
+  else:
+    processCallbacksBody(loop)
 
 proc raiseAsDefect*(exc: ref Exception, msg: string) {.noreturn, noinline.} =
   # Reraise an exception as a Defect, where it's unexpected and can't be handled

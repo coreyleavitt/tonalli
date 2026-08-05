@@ -151,8 +151,17 @@ func context*(acb: InternalAsyncCallback): ContextNodeBase {.inline.} =
 # private fields — same-module access is the only way in. `contextvars_
 # impl.nim` and `chronos/internal/asyncengine.nim`/`asyncfutures.nim`
 # use them via plain `import ../futures`; `asyncengine.nim`'s `export
-# futures` explicitly excludes these three names so they don't leak
+# futures` explicitly excludes these names so they don't leak
 # through `import chronos`. See docs/src/contextvars.md §Capture
+# discipline.
+#
+# `withRestoredContext`/`pinContext` below are placed here for a
+# different reason: `ContextNodeBase` is deliberately unnameable outside
+# modules that import `contextnode.nim` directly (a pinned security
+# property, see `testcontextvarssurface.nim`), and `asyncengine.nim`
+# reaches the type only by inference — a typed `newCtx: ContextNodeBase`
+# parameter does not compile there. They belong beside their partner
+# `currentAsyncContext` regardless; see docs/src/contextvars.md §Capture
 # discipline.
 
 var currentAsyncContext* {.threadvar.}: ContextNodeBase
@@ -218,6 +227,29 @@ template internalCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCa
   ## e.g. when this template is called as
   ## `internalCallback(sentinelImpl, nil)` from `SentinelCallback`.
   InternalAsyncCallback(function: fn, udata: ud, context: nil)
+
+template withRestoredContext*(newCtx: ContextNodeBase, body: untyped) =
+  ## Context switch with identity fast path. Sound only when `body`
+  ## cannot dangle the binder chain across a suspend — i.e. body is not
+  ## a continuation pump, or the pump's entry re-pins (`pinContext`).
+  let chronosCtxPrev = currentAsyncContext        # one TLS read
+  if newCtx == chronosCtxPrev:                    # identity ⇒ no writes,
+    body                                          # no try/finally
+    when defined(chronosDebug):
+      doAssert currentAsyncContext == newCtx,
+        "identity arm violated: a pump body went through " &
+        "withRestoredContext without its own pinContext"
+  else:
+    currentAsyncContext = newCtx
+    try: body
+    finally: currentAsyncContext = chronosCtxPrev
+
+template pinContext*(body: untyped) =
+  ## Unconditional entry/exit guard ("the pin"), no fast path ever — for
+  ## bodies that may suspend mid-binder (continuation pumps).
+  let chronosCtxPrev = currentAsyncContext
+  try: body
+  finally: currentAsyncContext = chronosCtxPrev
 
 when chronosFutureId:
   var currentID* {.threadvar.}: uint
