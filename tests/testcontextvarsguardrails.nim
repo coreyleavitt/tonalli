@@ -121,6 +121,42 @@ static:
     "access is still privacy-checked per-module, so even a cast of the " &
     "live chain head cannot mutate a link."
 
+# --- Guardrail 6: InternalCancelCallback (RFC 0001 D5) -----------------------
+#
+# `internalCancelcb` was slimmed from the shared 4-word `InternalAsyncCallback`
+# to a dedicated 3-word type: the `udata` field it carried was provably
+# redundant (every construction site stored `cast[pointer](future)`, and
+# the fire site already has `future` in scope to derive it). Same
+# structural-privacy discipline as `InternalAsyncCallback` above, so the
+# same three checks, mirrored for the new type.
+
+static:
+  doAssert not compiles(InternalCancelCallback(function: nil, context: nil)),
+    "InternalCancelCallback's fields must be private — raw construction " &
+    "outside `newCancelCallback` (or the no-capture site in " &
+    "`internalInitFutureBase`) must not compile. Use " &
+    "`newCancelCallback(fn)`. See docs/src/contextvars.md §Capture " &
+    "discipline."
+  doAssert not compiles((var c: InternalCancelCallback; c.function = nil)),
+    "InternalCancelCallback's `function` field must be private — direct " &
+    "mutation outside chronos/futures.nim must not compile."
+  doAssert not compiles((var c: InternalCancelCallback; c.context = nil)),
+    "InternalCancelCallback's `context` field must be private — direct " &
+    "mutation would let a scheduling site silently skip context capture."
+
+  doAssert InternalCancelCallback.context is ContextNodeBase,
+    "InternalCancelCallback.context must be `ContextNodeBase` (a native " &
+    "`ref` field) — same MM-delegated lifetime discipline as " &
+    "`InternalAsyncCallback.context` (guardrail 2 above)."
+
+  # CallbackFunc is a 2-word closure proc (function + env). Plus
+  # `context: ContextNodeBase` (a ref, 1 word). Total: 3 words — 8 B
+  # smaller than InternalAsyncCallback's 4 words, the whole point of D5.
+  doAssert sizeof(InternalCancelCallback) == sizeof(pointer) * 3,
+    "InternalCancelCallback expected to be 3 pointer-sized fields " &
+    "(function: 2-word closure proc, context: ref); " &
+    "actual size = " & $sizeof(InternalCancelCallback)
+
 # --- A trivial runtime assertion to keep the test file unittest-recognized ---
 
 suite "contextvars: drift guardrails":

@@ -272,8 +272,13 @@ template fireCancelCallback(future: FutureBase) =
   # 3 (suspend mid-binder, see `futures.nim`'s `withRestoredContext`
   # doc comment) is unreachable here, so the identity fast path is
   # sound with no pin needed.
+  #
+  # RFC 0001 D5: `internalCancelcb` no longer stores a `udata` pointer
+  # (dropped as provably redundant - every construction site stored
+  # exactly `cast[pointer](future)`); this fire site has `future` in
+  # scope, so it derives the pointer itself instead.
   withRestoredContext(future.internalCancelcb.context):
-    (future.internalCancelcb.function)(future.internalCancelcb.udata)
+    (future.internalCancelcb.function)(cast[pointer](future))
 
 proc tryCancel(future: FutureBase, loc: ptr SrcLoc): bool =
   ## Perform an attempt to cancel ``future``.
@@ -386,12 +391,13 @@ proc `cancelCallback=`*(future: FutureBase, cb: CallbackFunc) =
   when chronosStrictFutureAccess:
     doAssert not future.finished(),
       "cancellation callback must be set before finishing the future"
-  # `userCallback` captures the current contextVar bindings at the
+  # `newCancelCallback` captures the current contextVar bindings at the
   # point `cancelCallback=` is called (registration time) - the
   # handler must observe that context, not whatever's ambient when
-  # `tryCancel` eventually invokes it. `cast[pointer](future)` matches
-  # the argument `tryCancel` has always passed the raw `CallbackFunc`.
-  future.internalCancelcb = userCallback(cb, cast[pointer](future))
+  # `tryCancel` eventually invokes it. No pointer to store: `tryCancel`
+  # (via `fireCancelCallback`) derives `cast[pointer](future)` itself at
+  # fire time (RFC 0001 D5).
+  future.internalCancelcb = newCancelCallback(cb)
 
 {.push stackTrace: off.}
 proc futureContinue*(fut: FutureBase) {.raises: [], gcsafe.}

@@ -56,6 +56,28 @@ type
       ## must pick a constructor); see the getters and constructors
       ## further down and docs/src/contextvars.md §Capture discipline.
 
+  # RFC 0001 D5: `internalCancelcb` doesn't need `InternalAsyncCallback`'s
+  # full three-field shape. Every construction site (`newCancelCallback`
+  # below, and the no-capture site in `internalInitFutureBase`) stores
+  # exactly `cast[pointer](future)` for the future the field lives on,
+  # and the fire site (`fireCancelCallback` in `asyncfutures.nim`)
+  # already has `future` in scope to derive that pointer itself — so
+  # `udata` is provably redundant here. `InternalAsyncCallback` keeps
+  # all three fields unchanged: it's shared with `internalCallback`/
+  # `internalCallbacks`, whose `udata` is a genuinely arbitrary caller
+  # pointer.
+  InternalCancelCallback* = object
+    function: CallbackFunc
+    context: ContextNodeBase
+      ## Same capture/lifetime discipline as `InternalAsyncCallback.
+      ## context` above - a native `ref` field, MM-managed, nil for
+      ## cancel callbacks registered outside any binding.
+      ##
+      ## `function`/`context` are private to this module - only
+      ## `newCancelCallback` (below) and the no-capture construction in
+      ## `internalInitFutureBase` can build an `InternalCancelCallback`,
+      ## and no other module can mutate the fields after the fact.
+
   FutureState* {.pure.} = enum
     Pending, Completed, Cancelled, Failed
 
@@ -90,7 +112,7 @@ type
       ## a spot in each future for that first one - the seq below will stay
       ## empty until a second callback is added
     internalCallbacks*: seq[InternalAsyncCallback]
-    internalCancelcb*: InternalAsyncCallback
+    internalCancelcb*: InternalCancelCallback
     internalChild*: FutureBase
     internalState*: FutureState
     internalFlags*: FutureFlags
@@ -141,6 +163,18 @@ func udata*(acb: InternalAsyncCallback): pointer {.inline.} =
   acb.udata
 
 func context*(acb: InternalAsyncCallback): ContextNodeBase {.inline.} =
+  acb.context
+
+# --- InternalCancelCallback: read-only accessors -----------------------------
+#
+# `function`/`context` are private (see the type above, defined beside
+# `InternalAsyncCallback`). UFCS makes `callable.function` / `.context`
+# reads compile the same way as `InternalAsyncCallback`'s.
+
+func function*(acb: InternalCancelCallback): CallbackFunc {.inline.} =
+  acb.function
+
+func context*(acb: InternalCancelCallback): ContextNodeBase {.inline.} =
   acb.context
 
 # --- Continuation-local context: dispatcher-facing primitives ---------------
@@ -228,6 +262,16 @@ template internalCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCa
   ## `internalCallback(sentinelImpl, nil)` from `SentinelCallback`.
   InternalAsyncCallback(function: fn, udata: ud, context: nil)
 
+proc newCancelCallback*(fn: CallbackFunc): InternalCancelCallback {.inline, raises: [].} =
+  ## Construct the value stored in `internalCancelcb`. Captures the
+  ## current continuation-local context at construction — `userCallback`'s
+  ## discipline, sized to what cancel callbacks actually need: no `udata`
+  ## field, since the fire site (`fireCancelCallback` in
+  ## `asyncfutures.nim`) already has the owning future in scope and
+  ## derives `cast[pointer](future)` itself instead of storing a
+  ## redundant copy (RFC 0001 D5).
+  InternalCancelCallback(function: fn, context: currentAsyncContext)
+
 template withRestoredContext*(newCtx: ContextNodeBase, body: untyped) =
   ## Context switch with identity fast path. Sound only when `body`
   ## cannot dangle the binder chain across a suspend — i.e. body is not
@@ -278,7 +322,11 @@ proc internalInitFutureBase*(fut: FutureBase, loc: ptr SrcLoc,
     # cancellations
     proc raiseNonCancellable(_: pointer) =
       raiseAssert "Cancellation request for non-cancellable future"
-    fut.internalCancelcb = internalCallback(raiseNonCancellable, cast[pointer](fut))
+    # No-capture construction, same-module and direct (RFC 0001 D5):
+    # not a second named constructor next to `newCancelCallback` — a
+    # `Cancel`-infixed pair here would be the name-based-split footgun
+    # rejected for `userCallback`/`internalCallback`'s composition (D3).
+    fut.internalCancelcb = InternalCancelCallback(function: raiseNonCancellable, context: nil)
 
   if state != FutureState.Pending:
     fut.internalLocation[LocationKind.Finish] = loc

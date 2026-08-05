@@ -114,6 +114,15 @@ when declared(userCallback):
 when declared(internalCallback):
   {.error: "`internalCallback` must not leak through the public API.".}
 
+when declared(newCancelCallback):
+  {.error: "`newCancelCallback` must not leak through the public API. It " &
+           "lives in chronos/futures.nim, excluded from `asyncengine.nim`'s " &
+           "`export futures`, and is used by `cancelCallback=` only — " &
+           "otherwise plain `import chronos` code could manufacture an " &
+           "`InternalCancelCallback` and assign it directly to " &
+           "`internalCancelcb`, bypassing `cancelCallback=`'s discipline " &
+           "(RFC 0001 D5).".}
+
 when declared(withRestoredContext):
   {.error: "`withRestoredContext` must not leak through the public API. " &
            "It lives in chronos/futures.nim (placed there because " &
@@ -127,20 +136,28 @@ when declared(pinContext):
            "from `asyncengine.nim`'s `export futures`, and is used by " &
            "continuation-pump resume guards only.".}
 
-# `context` is `InternalAsyncCallback`'s read-only getter (declared in
-# `chronos/futures.nim`, used by the dispatcher's `fireWithContext`).
-# It has no user-facing purpose: the value it returns is `ContextNodeBase`,
-# which this file already establishes is unnameable here, so `.next`
-# can't be written and the C1 cycle attack stays closed even without
-# this check — but the getter itself should still not be reachable via
-# plain `import chronos`. Excluded in `chronos/internal/asyncengine.nim`'s
-# `export futures except ...`.
+# `context` is `InternalAsyncCallback`'s (and, since RFC 0001 D5,
+# `InternalCancelCallback`'s) read-only getter — both declared in
+# `chronos/futures.nim`, used by the dispatcher's `fireWithContext` and
+# `fireCancelCallback` respectively. It has no user-facing purpose: the
+# value it returns is `ContextNodeBase`, which this file already
+# establishes is unnameable here, so `.next` can't be written and the C1
+# cycle attack stays closed even without this check — but the getter
+# itself should still not be reachable via plain `import chronos`.
+# Excluding the `context` identifier in `chronos/internal/asyncengine.
+# nim`'s `export futures except ...` covers both overloads at once (the
+# exclusion is by name, not by signature) — the second assertion below
+# confirms that holds rather than assuming it.
 static:
   doAssert not compiles(default(AsyncCallback).context),
     "`context` getter must not leak through the public API. It lives " &
     "in chronos/futures.nim, excluded from `asyncengine.nim`'s " &
     "`export futures`, and is used by the dispatcher's " &
     "`fireWithContext` only."
+  doAssert not compiles(default(InternalCancelCallback).context),
+    "`InternalCancelCallback`'s `context` getter must not leak through " &
+    "the public API either — same exclusion, same reasoning, used by " &
+    "the dispatcher's `fireCancelCallback` only (RFC 0001 D5)."
 
 # --- A trivial runtime assertion to keep the test file unittest-recognized ---
 

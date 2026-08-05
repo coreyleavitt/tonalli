@@ -23,21 +23,31 @@ import ./[asyncmacro, errors]
 
 export Port
 export deques, effects, errors, timer, results
-# `userCallback`/`internalCallback`/`currentAsyncContext`/`context`/
-# `withRestoredContext`/`pinContext` are dispatcher-internal (see
-# `chronos/futures.nim` §Continuation-local context) — excluded here so
-# plain `import chronos` doesn't expose them. Direct `import
-# chronos/internal/asyncengine` or `import chronos/futures` still see
-# them, which is what `contextvars_impl.nim` and this module's own code
-# rely on.
+# `userCallback`/`internalCallback`/`newCancelCallback`/
+# `currentAsyncContext`/`context`/`withRestoredContext`/`pinContext` are
+# dispatcher-internal (see `chronos/futures.nim` §Continuation-local
+# context) — excluded here so plain `import chronos` doesn't expose
+# them. Direct `import chronos/internal/asyncengine` or `import
+# chronos/futures` still see them, which is what `contextvars_impl.nim`
+# and this module's own code rely on.
+#
+# `InternalAsyncCallback`/`InternalCancelCallback` themselves stay
+# exported: their fields are privacy-protected (see the guardrails in
+# `testcontextvarsguardrails.nim`), `InternalAsyncCallback` is already
+# publicly nameable via the `AsyncCallback` alias below, and
+# `InternalFutureBase`'s `internalCancelcb*` field forces
+# `InternalCancelCallback` to be nameable the same way. Only the
+# capturing *constructors* — the things that would let plain `import
+# chronos` code manufacture a value to poke into that field, bypassing
+# `cancelCallback=`'s discipline — need excluding.
 #
 # Contributor note: any new dispatcher-internal symbol added to
 # `chronos/futures.nim`'s §Continuation-local context section must be
 # added to this exclusion list AND to the negative assertions in
 # `tests/testcontextvarssurface.nim`, or it leaks through
 # plain `import chronos`.
-export futures except userCallback, internalCallback, currentAsyncContext,
-  context, withRestoredContext, pinContext
+export futures except userCallback, internalCallback, newCancelCallback,
+  currentAsyncContext, context, withRestoredContext, pinContext
 
 export
   asyncmacro.async, asyncmacro.await, asyncmacro.awaitne
