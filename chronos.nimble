@@ -6,7 +6,7 @@ version       = "4.4.0"
 author        = "Status Research & Development GmbH"
 description   = "Networking framework with async/await support"
 license       = "MIT or Apache License 2.0"
-skipDirs      = @["tests"]
+skipDirs      = @["tests", "verify"]
 
 requires "nim >= 1.6.16",
          "results",

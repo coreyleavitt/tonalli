@@ -1,0 +1,32 @@
+# RFC 0001 D9-V / S9 — fork-only verification harness container.
+#
+# FORK-ONLY. Never referenced by any upstream-bound file or CI workflow
+# (there is none, deliberately -- see verify/README.md). The shared chronos
+# dev image (ghcr.io/coreyleavitt/nim:2.2.10) is never modified; this is a
+# throwaway derived image, built and tagged locally.
+#
+# Build:
+#   podman build -t localhost/chronos-verify:latest -f verify/Containerfile verify
+#
+# **Deviation from the RFC's stated `libz3-4_15`-only plan (a build-time
+# finding, recorded in verify/README.md's ledger):** `libz3-4_15` alone is
+# NOT sufficient. nim-z3's `ffi.nim` declares every Z3 C function inside a
+# softlink `dynlib "z3": ...` block with `header: "z3.h"` on each proc --
+# softlink's compile-time signature verification `#include`s that header
+# while COMPILING (not just linking), regardless of how the library is
+# loaded at runtime. `libz3-4_15` ships no headers at all, so a build
+# against it fails at the C-compilation step with `fatal error: z3.h: No
+# such file or directory` (verified empirically against this exact base
+# image). `z3-devel` (566 KiB, header + pkgconfig + the bare `libz3.so` dev
+# symlink `libz3-4_15` itself omits -- also verified via `rpm -ql`) is the
+# right-sized fix: it is still NOT the `z3` CLI package (a separate,
+# unrelated rpm), so "no z3 CLI" from the RFC's D9-V spec holds; only
+# "header-only, no library" undersold what compiling against a
+# `header:`-verified dynlib block actually requires.
+FROM ghcr.io/coreyleavitt/nim:2.2.10
+
+RUN zypper --non-interactive --gpg-auto-import-keys refresh && \
+    zypper --non-interactive install -y z3-devel && \
+    zypper clean --all
+
+WORKDIR /work
