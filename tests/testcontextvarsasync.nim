@@ -872,8 +872,11 @@ suite "contextvars: RFC0001 S7 scenario pins":
     # Reentrancy x fast path. `waitFor` from inside a plain (non-async)
     # callback is legal in default builds - `chronosStrictReentrancy`
     # (which would gate reentrant draining) defaults on only under
-    # `chronosPreviewV5`, not exercised here. `outerCb` is scheduled with
-    # no ambient binder, so its capture (nil) equals ambient at fire time -
+    # `chronosPreviewV5`. Under `chronosPreviewV5` the nested `waitFor`
+    # itself is illegal (see the strict-mode pin below), so this scenario
+    # - which depends on the nested drain succeeding - only applies to
+    # default (non-strict) builds. `outerCb` is scheduled with no ambient
+    # binder, so its capture (nil) equals ambient at fire time -
     # `withRestoredContext`'s identity fast arm fires it. From inside that
     # fast-armed frame it binds its own contextVar, then calls `waitFor` on
     # a small async proc that binds the SAME var to a different value;
@@ -886,40 +889,81 @@ suite "contextvars: RFC0001 S7 scenario pins":
     # either during the nested reentrant drain or after `outerCb` returns,
     # depending on queue interleaving - observes an empty context either
     # way, undisturbed by the reentrancy.
-    var innerObserved = -1
-    var outerAfterNested = -1
-    var outerFired = false
-    var laterSeenBinding = -1
-    var laterFired = false
+    when chronosStrictReentrancy:
+      skip()
+    else:
+      var innerObserved = -1
+      var outerAfterNested = -1
+      var outerFired = false
+      var laterSeenBinding = -1
+      var laterFired = false
 
-    proc innerWork(): Future[int] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(999):
-        await sleepAsync(1.milliseconds)
-        return asyncInt()
+      proc innerWork(): Future[int] {.async: (raises: [CancelledError]).} =
+        withAsyncInt(999):
+          await sleepAsync(1.milliseconds)
+          return asyncInt()
 
-    proc laterCb(udata: pointer) {.gcsafe, raises: [].} =
-      laterSeenBinding = asyncInt()
-      laterFired = true
+      proc laterCb(udata: pointer) {.gcsafe, raises: [].} =
+        laterSeenBinding = asyncInt()
+        laterFired = true
 
-    proc outerCb(udata: pointer) {.gcsafe, raises: [].} =
-      withAsyncInt(500):
-        check asyncInt() == 500
-        try:
-          innerObserved = waitFor(innerWork())
-        except CancelledError:
-          discard
-        outerAfterNested = asyncInt()
-      outerFired = true
+      proc outerCb(udata: pointer) {.gcsafe, raises: [].} =
+        withAsyncInt(500):
+          check asyncInt() == 500
+          try:
+            innerObserved = waitFor(innerWork())
+          except CancelledError:
+            discard
+          outerAfterNested = asyncInt()
+        outerFired = true
 
-    callSoon(outerCb, nil)   # nil capture == nil ambient at fire -> fast arm
-    callSoon(laterCb, nil)   # queued behind outerCb, same top-level batch
-    poll()
+      callSoon(outerCb, nil)   # nil capture == nil ambient at fire -> fast arm
+      callSoon(laterCb, nil)   # queued behind outerCb, same top-level batch
+      poll()
 
-    check outerFired
-    check innerObserved == 999
-    check outerAfterNested == 500
-    check laterFired
-    check laterSeenBinding == 0
+      check outerFired
+      check innerObserved == 999
+      check outerAfterNested == 500
+      check laterFired
+      check laterSeenBinding == 0
+
+  test "nested waitFor inside a running callback raises under chronosStrictReentrancy, leaving the outer callback's context intact":
+    # Strict-mode counterpart to the scenario above. `chronosPreviewV5`
+    # defaults `chronosStrictReentrancy` on, and `preparePoll`
+    # (asyncengine.nim) asserts `not loop.inEventLoop` before a nested
+    # `poll`/`runForever`/`waitFor` is allowed to proceed - so the nested
+    # `waitFor` below must raise `AssertionDefect` instead of draining.
+    # This pins that the assert fires deterministically from inside a
+    # plain callback (not just the compile-time-detectable `{.async.}`
+    # case already covered by testmacro.nim), and - the contextvars-
+    # specific half of the pin - that the outer callback's ambient
+    # binding survives the raise untouched: the assert fires in
+    # `preparePoll` before any context is touched, so `withAsyncInt`'s
+    # binding for 500 must still read back exactly as bound.
+    when chronosStrictReentrancy:
+      var outerAfterRaise = -1
+      var outerFired = false
+
+      proc innerWork(): Future[int] {.async: (raises: [CancelledError]).} =
+        withAsyncInt(999):
+          await sleepAsync(1.milliseconds)
+          return asyncInt()
+
+      proc outerCb(udata: pointer) {.gcsafe, raises: [].} =
+        withAsyncInt(500):
+          check asyncInt() == 500
+          expect(Defect):
+            discard waitFor(innerWork())
+          outerAfterRaise = asyncInt()
+        outerFired = true
+
+      callSoon(outerCb, nil)   # nil capture == nil ambient at fire -> fast arm
+      poll()
+
+      check outerFired
+      check outerAfterRaise == 500
+    else:
+      skip()
 
   test "two threads with independent dispatchers never observe each other's contextVar binding":
     # `currentAsyncContext` is `{.threadvar.}` (chronos/futures.nim), and
