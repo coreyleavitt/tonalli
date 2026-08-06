@@ -136,6 +136,16 @@ when declared(pinContext):
            "from `asyncengine.nim`'s `export futures`, and is used by " &
            "continuation-pump resume guards only.".}
 
+when declared(captureContextInto):
+  {.error: "`captureContextInto` must not leak through the public API. " &
+           "It lives in chronos/futures.nim (RFC 0001 D8's shared " &
+           "construction-discipline template), excluded from " &
+           "`asyncengine.nim`'s `export futures`, and is used by " &
+           "`userCallback`/`newCancelCallback` only — a reachable capture " &
+           "primitive would let plain `import chronos` code write " &
+           "`currentAsyncContext` into arbitrary fields, bypassing the " &
+           "construction discipline entirely.".}
+
 # `context` is `InternalAsyncCallback`'s (and, since RFC 0001 D5,
 # `InternalCancelCallback`'s) read-only getter — both declared in
 # `chronos/futures.nim`, used by the dispatcher's `fireWithContext` and

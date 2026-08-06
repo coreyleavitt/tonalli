@@ -189,8 +189,14 @@ proc finish(fut: FutureBase, state: FutureState, loc: ptr SrcLoc) =
   var callbacks = move(fut.internalCallbacks)
   for item in callbacks.mitems():
     if not(isNil(item.function)):
-      callSoon(item)
-    item.reset() # release memory as early as possible
+      # RFC 0001 D8: move the item into `callSoon` rather than
+      # copy-then-reset — `move` compiles to a bitcopy plus
+      # `nimZeroMem` (zero refcount traffic under refc,
+      # codegen-verified), so the explicit `reset()` below would only
+      # re-zero an already-empty value in this arm.
+      callSoon(move(item))
+    else:
+      item.reset() # release memory as early as possible
 
   when chronosFutureTracking:
     scheduleDestructor(fut)
@@ -335,7 +341,11 @@ proc addCallback*(future: FutureBase, cb: CallbackFunc, udata: pointer) =
     # `userCallback` captures the current contextVar bindings; the
     # dispatcher restores them in `processCallbacks` before firing.
     if isNil(future.internalCallback.function):
-      future.internalCallback = userCallback(cb, udata)
+      # `let` temp (RFC 0001 D8): `future.internalCallback` is an
+      # existing heap field, not a fresh local, so the template
+      # expansion alone doesn't get refc's write-barrier elision here.
+      let acb = userCallback(cb, udata)
+      future.internalCallback = acb
     else:
       future.internalCallbacks.add userCallback(cb, udata)
 
@@ -397,7 +407,10 @@ proc `cancelCallback=`*(future: FutureBase, cb: CallbackFunc) =
   # `tryCancel` eventually invokes it. No pointer to store: `tryCancel`
   # (via `fireCancelCallback`) derives `cast[pointer](future)` itself at
   # fire time (RFC 0001 D5).
-  future.internalCancelcb = newCancelCallback(cb)
+  # `let` temp (RFC 0001 D8): `future.internalCancelcb` is an existing
+  # heap field — see `addCallback`'s mirror-image comment above.
+  let icb = newCancelCallback(cb)
+  future.internalCancelcb = icb
 
 {.push stackTrace: off.}
 proc futureContinue*(fut: FutureBase) {.raises: [], gcsafe.}

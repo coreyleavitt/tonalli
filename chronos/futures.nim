@@ -202,7 +202,18 @@ var currentAsyncContext* {.threadvar.}: ContextNodeBase
   ## Per-thread head of the binding chain. Chronos is single-thread-
   ## per-dispatcher, so this is effectively per-dispatcher.
 
-proc userCallback*(fn: CallbackFunc, udata: pointer = nil): InternalAsyncCallback {.inline, raises: [].} =
+template captureContextInto*(dest: var ContextNodeBase) =
+  ## D8's construction discipline: capture the ambient context into a
+  ## field of a FRESHLY DECLARED local — never an object literal, never
+  ## `result`. The guard costs one predicted branch; on orc it
+  ## additionally elides the ref-copy call outright when no binder is
+  ## live (cost proportional to use). Do not "simplify" callers back
+  ## to object literals: that reintroduces refc's reset-then-assign
+  ## barrier doubling that S8's abort gate caught (RFC 0001 D8).
+  if not isNil(currentAsyncContext):
+    dest = currentAsyncContext
+
+template userCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCallback =
   ## Construct an AsyncCallback that fires user-supplied code. Captures
   ## the current continuation-local context at construction so the
   ## callback fires under the same `contextVar` bindings the registrant
@@ -232,10 +243,28 @@ proc userCallback*(fn: CallbackFunc, udata: pointer = nil): InternalAsyncCallbac
   ## pattern (assignment overwrite, seq element removal, future GC'd
   ## with pending callbacks, deque popFirst) — no manual `GC_ref` /
   ## `GC_unref` or `releaseCallbackContext` calls needed.
-  InternalAsyncCallback(
-    function: fn,
-    udata: udata,
-    context: currentAsyncContext)
+  ##
+  ## Template (not proc), constructing into a fresh local in the
+  ## caller's frame — RFC 0001 D8: a `proc` returning this by value
+  ## forces refc's reset-then-assign copy-out through the hidden return
+  ## slot (four write-barrier calls per construction, two of them
+  ## provably-dead nil-over-nil work, paid on every callback whether or
+  ## not any `contextVar` is ever bound). The fresh local plus
+  ## `captureContextInto`'s guard restores refc's original zero-barrier
+  ## construction and, on orc, elides the context ref-copy call
+  ## entirely in the unbound case.
+  ##
+  ## Param is named `ud` (not `udata`) for the same reason as
+  ## `internalCallback` below: template substitution rewrites every
+  ## matching identifier in the body, including the field name after a
+  ## dot (`acb.udata`) — with a `udata` param that would try to
+  ## substitute the field access itself. See `internalCallback`'s
+  ## comment for the full explanation.
+  var acb: InternalAsyncCallback
+  acb.function = fn
+  acb.udata = ud
+  captureContextInto(acb.context)
+  acb
 
 template internalCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCallback =
   ## Construct an AsyncCallback that fires chronos-internal scaffolding
@@ -262,7 +291,7 @@ template internalCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCa
   ## `internalCallback(sentinelImpl, nil)` from `SentinelCallback`.
   InternalAsyncCallback(function: fn, udata: ud, context: nil)
 
-proc newCancelCallback*(fn: CallbackFunc): InternalCancelCallback {.inline, raises: [].} =
+template newCancelCallback*(fn: CallbackFunc): InternalCancelCallback =
   ## Construct the value stored in `internalCancelcb`. Captures the
   ## current continuation-local context at construction — `userCallback`'s
   ## discipline, sized to what cancel callbacks actually need: no `udata`
@@ -270,7 +299,17 @@ proc newCancelCallback*(fn: CallbackFunc): InternalCancelCallback {.inline, rais
   ## `asyncfutures.nim`) already has the owning future in scope and
   ## derives `cast[pointer](future)` itself instead of storing a
   ## redundant copy (RFC 0001 D5).
-  InternalCancelCallback(function: fn, context: currentAsyncContext)
+  ##
+  ## Template (not proc), same construction discipline as `userCallback`
+  ## above (RFC 0001 D8): a fresh local in the caller's frame plus
+  ## `captureContextInto`'s guard, instead of a by-value proc whose
+  ## return-slot copy-out doubles refc's write-barrier count. No `ud`
+  ## rename needed here — `InternalCancelCallback` has no `udata` field
+  ## for the substitution gotcha to collide with.
+  var cb: InternalCancelCallback
+  cb.function = fn
+  captureContextInto(cb.context)
+  cb
 
 template withRestoredContext*(newCtx: ContextNodeBase, body: untyped) =
   ## Context switch with identity fast path. Sound only when `body`
@@ -326,7 +365,12 @@ proc internalInitFutureBase*(fut: FutureBase, loc: ptr SrcLoc,
     # not a second named constructor next to `newCancelCallback` — a
     # `Cancel`-infixed pair here would be the name-based-split footgun
     # rejected for `userCallback`/`internalCallback`'s composition (D3).
-    fut.internalCancelcb = InternalCancelCallback(function: raiseNonCancellable, context: nil)
+    # RFC 0001 D8: targeted field write, not a whole-struct literal —
+    # `fut` is a just-allocated, provably-fresh `Future[T]()` at every
+    # call site (traced in round 3), so `context` is already nil from
+    # the allocator's zero-fill; writing it again would only reinstate
+    # the reset-then-assign barrier doubling D8 removes elsewhere.
+    fut.internalCancelcb.function = raiseNonCancellable
 
   if state != FutureState.Pending:
     fut.internalLocation[LocationKind.Finish] = loc

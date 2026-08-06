@@ -47,7 +47,8 @@ export deques, effects, errors, timer, results
 # `tests/testcontextvarssurface.nim`, or it leaks through
 # plain `import chronos`.
 export futures except userCallback, internalCallback, newCancelCallback,
-  currentAsyncContext, context, withRestoredContext, pinContext
+  currentAsyncContext, context, withRestoredContext, pinContext,
+  captureContextInto
 
 export
   asyncmacro.async, asyncmacro.await, asyncmacro.awaitne
@@ -991,7 +992,11 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     withData(loop.selector, cint(fd), adata) do:
       # Assignment overwrite fires =destroy on the prior reader, which
       # releases its captured context. Re-arming is leak-safe.
-      adata.reader = userCallback(cb, udata)
+      # `let` temp (RFC 0001 D8): the destination is an existing heap
+      # field, not a fresh local, so `userCallback`'s template expansion
+      # alone doesn't get refc's write-barrier elision here.
+      let acb = userCallback(cb, udata)
+      adata.reader = acb
       if not(isNil(adata.writer.function)):
         newEvents.incl(Event.Write)
     do:
@@ -1018,7 +1023,11 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     let loop = getThreadDispatcher()
     var newEvents = {Event.Write}
     withData(loop.selector, cint(fd), adata) do:
-      adata.writer = userCallback(cb, udata)
+      # `let` temp (RFC 0001 D8): see the mirror-image `addReader2` site
+      # above for why the destination being an existing heap field
+      # matters here.
+      let acb = userCallback(cb, udata)
+      adata.writer = acb
       if not(isNil(adata.reader.function)):
         newEvents.incl(Event.Read)
     do:
@@ -1149,7 +1158,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       var data: SelectorData
       let sigfd = ? loop.selector.registerSignal(signal, data)
       withData(loop.selector, sigfd, adata) do:
-        adata.reader = userCallback(cb, udata)
+        # `let` temp (RFC 0001 D8): see `addReader2`'s comment.
+        let acb = userCallback(cb, udata)
+        adata.reader = acb
       do:
         return err(osdefs.EBADF)
       ok(SignalHandle(sigfd))
@@ -1166,7 +1177,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       var data: SelectorData
       let procfd = ? loop.selector.registerProcess(pid, data)
       withData(loop.selector, procfd, adata) do:
-        adata.reader = userCallback(cb, udata)
+        # `let` temp (RFC 0001 D8): see `addReader2`'s comment.
+        let acb = userCallback(cb, udata)
+        adata.reader = acb
       do:
         return err(osdefs.EBADF)
       ok(ProcessHandle(procfd))
