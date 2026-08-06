@@ -1,6 +1,6 @@
 # Simple benchmark that bulk-streams data from one thread to another using TCP
 
-import std/strformat, ../chronos, ../chronos/threadsync
+import std/strformat, chronos, chronos/threadsync
 
 var buf: array[1024 * 1024, byte]
 

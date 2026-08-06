@@ -68,6 +68,7 @@ verification and nothing else.
 | `nim.cfg` | The three sibling `--path:` lines (`proptest`, `nim-z3`, `softlink`) + one `chronos/` path for `config.nim` and (S11) the real `chronos/internal/callbackqueue.nim`. |
 | `Containerfile` | Derived, throwaway image (`FROM ghcr.io/coreyleavitt/nim:2.2.10`); never modifies the shared base. |
 | `run.sh` | `verify/run.sh <symex\|bmc\|drift\|bisim\|fuzz\|all>` — the only supported entry point. `bisim`/`fuzz` are MM-sensitive: select via `MM=refc\|orc` (default `refc`). |
+| `bench_crosscommit.nim` | Cross-commit benchmark harness: imports plain `chronos` only, so it compiles unmodified against both a base checkout (`b71392a`) and any commit in this series (`build/base` protocol — see the file's own header for the full interleaved-trial procedure). Relocated here from `benchmarks/` because it requires a second checkout to compare against and is fork-only review methodology, not an upstream-shippable benchmark. |
 
 ## Build and run
 

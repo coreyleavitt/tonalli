@@ -69,8 +69,8 @@
 
 import std/[algorithm, macros, monotimes, strformat]
 
-import ../chronos
-import ../chronos/contextvars
+import chronos
+import chronos/contextvars
 
 {.used.}
 
