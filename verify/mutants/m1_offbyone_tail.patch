@@ -1,0 +1,13 @@
+diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
+index 542dd6d..eadc1c4 100644
+--- i/chronos/internal/callbackqueue.nim
++++ w/chronos/internal/callbackqueue.nim
+@@ -181,7 +181,7 @@ proc addLast*[T](q: var CallbackQueue[T], item: chronosSink T) =
+   # spent `sink` parameter (see `popFirst` below, and the pre-existing
+   # `futures.nim`/`asyncfutures.nim` call sites this mirrors).
+   q.data[idx] = item
+-  inc q.tail
++  q.tail += 2
+ 
+ proc addFirst*[T](q: var CallbackQueue[T], item: chronosSink T) =
+   ## Push onto the front. Sole caller: sentinel re-insertion at the front

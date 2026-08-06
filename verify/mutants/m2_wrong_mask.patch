@@ -1,0 +1,13 @@
+diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
+index 542dd6d..db191d4 100644
+--- i/chronos/internal/callbackqueue.nim
++++ w/chronos/internal/callbackqueue.nim
+@@ -89,7 +89,7 @@ type
+ proc capMask(cap: int): int {.inline.} =
+   doAssert cap > 0 and (cap and (cap - 1)) == 0,
+     "CallbackQueue: capacity must be a positive power of two"
+-  cap - 1
++  cap
+ 
+ proc slotIndex(pos, cap: int): int {.inline.} =
+   ## Fold a monotonic logical position into `[0, cap)`. `cap` being a

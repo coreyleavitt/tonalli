@@ -1,4 +1,4 @@
-# verify/ — fork-only D9 verification harness (RFC 0001 S9)
+# verify/ — fork-only D9 verification harness (RFC 0001 S9, S11)
 
 **This directory is never part of the upstream series.** It is tracked on
 `worktree-contextvars-rebase` (and its `feat/contextvars` mirror in this
@@ -45,8 +45,8 @@ with two independent techniques:
   ledger layered around it.
 
 Layers 3–5 (bisim vs `std/deques`, coverage-guided fuzz + GC stress,
-mutation scoring) are S11's job, against the real implementation once S10
-ships it.
+mutation scoring) are S11's job, against the real implementation now that
+S10 has shipped it (`db43cff`) — see the S11 sections below.
 
 **This slice made zero changes to chronos library code.** `chronos/internal/
 callbackqueue.nim` does not exist yet; everything under `verify/` is a
@@ -61,9 +61,13 @@ verification and nothing else.
 | `callbackqueue_model.nim` | The generic `CallbackQueue[T]` (all five real entry points + growth), plus `GhostItem` and a second dequeue template, `popFirstRejected`, implementing the round-4 REJECTED `copyMem`-to-stack-local shape for layer 2 to falsify against. |
 | `symex_checks.nim` | Layer 1: six `symexFind(..., tAssertionViolation())` proofs. |
 | `bmc_ghost.nim` | Layer 2: six `bmcCheck` runs (two ownership shapes × three invariants) over a ghost refcount ledger. |
-| `nim.cfg` | The three sibling `--path:` lines (`proptest`, `nim-z3`, `softlink`) + one `chronos/` path for `config.nim`. |
+| `drift_check.nim` | S11: cheap textual drift check between `primitives.nim`/`callbackqueue_model.nim` (S9's mirrors) and the real, shipped `chronos/internal/callbackqueue.nim` — see "Why layers 1-2 still use mirrors" below. |
+| `bisim_check.nim` | S11 layer 3: bisimulation (`bisimulationCheck`) of the REAL `CallbackQueue[int]` vs a `std/deques[int]` reference, both MMs. |
+| `fuzz_leak.nim` | S11 layer 4: coverage-guided (IR-mutation) fuzz over random op sequences against the REAL `CallbackQueue[LeakItem]` (`ref`-typed elements), with `GC_fullCollect`/`getOccupiedMem` leak accounting and a dedicated Defect-unwind check, both MMs. |
+| `mutants/*.patch` | S11 layer 5: one unified diff per systematic mutant applied to `chronos/internal/callbackqueue.nim` during mutation testing — applied, checked, and reverted mechanically; never left in the tree (see the Layer 5 section below for the kill matrix). |
+| `nim.cfg` | The three sibling `--path:` lines (`proptest`, `nim-z3`, `softlink`) + one `chronos/` path for `config.nim` and (S11) the real `chronos/internal/callbackqueue.nim`. |
 | `Containerfile` | Derived, throwaway image (`FROM ghcr.io/coreyleavitt/nim:2.2.10`); never modifies the shared base. |
-| `run.sh` | `verify/run.sh <symex\|bmc\|all>` — the only supported entry point. |
+| `run.sh` | `verify/run.sh <symex\|bmc\|drift\|bisim\|fuzz\|all>` — the only supported entry point. `bisim`/`fuzz` are MM-sensitive: select via `MM=refc\|orc` (default `refc`). |
 
 ## Build and run
 
@@ -91,11 +95,41 @@ podman run --rm --userns=keep-id \
   sh -c './run.sh all'
 ```
 
-Or run one layer at a time (`./run.sh symex`, `./run.sh bmc`). Each is a
-plain Nim program: `doAssert`-driven, non-zero exit on any unexpected
-verdict, human-readable progress to stdout. Total runtime for both layers
-is a few seconds — well inside the RFC's "minutes, harness container only"
-budget.
+Or run one layer at a time (`./run.sh symex`, `./run.sh bmc`, `./run.sh
+drift`). Each is a plain Nim program: `doAssert`-driven, non-zero exit on
+any unexpected verdict, human-readable progress to stdout. Total runtime
+for layers 1-2 plus the drift check is a few seconds — well inside the
+RFC's "minutes, harness container only" budget.
+
+**S11 layers 3-4** (`bisim`, `fuzz`) are MM-sensitive — run once per MM by
+setting `MM` before the `podman run` (or inside the container before
+`./run.sh`):
+
+```sh
+podman run --rm --userns=keep-id \
+  -v /home/corey/projects/nim/libs:/home/corey/projects/nim/libs:z \
+  --env HOME=/home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase/verify/.container-home \
+  --env USER=corey \
+  --env MM=refc \
+  --workdir /home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase/verify \
+  localhost/chronos-verify:latest \
+  sh -c './run.sh bisim'   # then MM=orc, then ./run.sh fuzz for each MM
+```
+
+Layers 3-4 import the REAL `chronos/internal/callbackqueue.nim` directly
+(no more mirroring — see "Why layers 1-2 still use mirrors, but 3-4 don't"
+below), so no rebuild of `verify/`'s own files is needed when
+`chronos/internal/callbackqueue.nim` changes; the next `./run.sh` picks it
+up through the bind mount. Runtime: layer 3 (bisim) is a few hundred
+milliseconds per MM (a small, exhaustively-dedup'd BFS); layer 4 (fuzz) is
+single-digit-to-twenties of seconds per MM at its configured iteration
+count (see the Layer 4 section below).
+
+**S11 layer 5** (mutation testing) has no `run.sh` case — it mutates the
+tracked `chronos/internal/callbackqueue.nim` directly, which `run.sh`
+deliberately never does on its own. See the Layer 5 section below for the
+methodology, the patches under `verify/mutants/`, and how to reproduce a
+single mutant's check.
 
 ## Proof ledger
 
@@ -256,6 +290,187 @@ silently avoided.
    (should chronos ever run in some multi-decade, trillions-of-callbacks
    process — not a realistic target) knows where the edge is.
 
+## S11 — harness build-out against the real queue
+
+RFC 0001 §6 S11: layers 3-5, run against the REAL, shipped
+`chronos/internal/callbackqueue.nim` (S10, `db43cff`) rather than S9's
+throwaway mirrors — bisimulation vs `std/deques`, coverage-guided fuzz with
+GC stress + occupied-memory leak accounting, and mutation scoring. Both
+MMs for layers 3-4; mutation testing (layer 5) runs primarily under refc,
+where the mutant classes tested here (write-barrier/relocation-adjacent
+bugs) manifest most sharply — see the Layer 5 section for the exact legs
+each mutant was checked against.
+
+### Why layers 1-2 still use mirrors, but 3-4 don't
+
+S9's `primitives.nim`/`callbackqueue_model.nim` were built before
+`chronos/internal/callbackqueue.nim` existed, so they had nothing to
+import. Now that S10 has shipped the real module, S11 was asked to point
+layers 3-5 at it directly wherever practical, and to consider whether the
+S9 mirrors are now redundant.
+
+**Layers 3-4 (this slice): refactored to import the real module directly.**
+`bisim_check.nim` and `fuzz_leak.nim` both `import ../chronos/internal/
+callbackqueue` and exercise it through its five public entry points —
+no duplication needed, because bisimulation and fuzzing only ever touch
+the public interface.
+
+**Layers 1-2 (S9, unchanged): still walk the mirrors, deliberately.**
+Symex needs direct `proc`-level access to the five index primitives
+(`capMask`, `slotIndex`, `queueLen`, `isFull`, `growTargetCap`) to state
+and prove their pre/postconditions — but the real module keeps them
+**private** (D9's own stated interface-narrowing rationale: "every
+[external] touch goes through the five [public] procs/templates"), and
+RFC 0001's non-goals explicitly freeze the public surface ("No API
+changes: public surface is frozen post-review-round-4"). Exporting the
+primitives just to satisfy a fork-only verification tool would be exactly
+the kind of surface change that rule exists to prevent, so the mirrors
+were kept rather than refactored away.
+
+**The tradeoff needs a check, and now has one: `drift_check.nim`.** A
+plain, dependency-free textual comparison (`nim c -r --mm:orc
+drift_check.nim`, no proptest/z3) that re-reads both files and confirms
+ten load-bearing substrings — each primitive's exact `doAssert` message,
+plus the arithmetic/threshold expressions that survive S9's documented
+symex-walker hoist unchanged (`cap - 1`, `tail - head`, `queueLen(head,
+tail) >= cap`, the `growTargetCap` doubling rule) — appear verbatim in
+both the real module and the mirrors. It deliberately does NOT diff whole
+proc bodies (that would false-positive on the known, documented hoist
+divergence in `capMask`/`slotIndex`/`isFull` — see Finding 2 above); a
+change to `slotIndex`'s masking expression that preserves the checked
+substrings could in principle slip past it, but layers 3 and 5 exercise
+the real module's actual masking behavior at runtime regardless, so a
+regression there is still caught, just not by this specific text check.
+Ran clean: all ten checks matched.
+
+### Layer 3 — bisimulation (`bisim_check.nim`)
+
+Proptest's `bisimulationCheck` (#115): deterministic lock-step BFS over
+`(realState, refState)` product pairs, comparing observations and
+enabled-rule-name sets at every reached pair. Three shared rules —
+`addLast`, `addFirst`, `popFirst` — against a real `CallbackQueue[int]`
+on one side and a `std/deques.Deque[int]` reference on the other.
+`addFirst`'s enabled-set (the real queue never grows on `addFirst` — D9's
+stated scope) is computed via an independently-tracked shadow `cap` field
+on both sides, updated by the same `growTargetCap` arithmetic
+`drift_check.nim` confirms matches the real module — proved to stay in
+lockstep inductively (equal at the initial state; only ever updated by the
+one shared rule, `addLast`, identically on both sides). FIFO order is
+proved per reached state by draining a VALUE COPY of the state (both
+`CallbackQueue[T]` and `Deque[T]` have default deep-copy semantics), since
+D9's interface has no peek/iteration by design.
+
+`initialCap=2` (mirrors S9's `bmc_ghost.nim`), `maxDepth=12`,
+`maxStates=20000`, structural `stateHash` (by `len`+shadow-`cap`) for
+dedup.
+
+| MM | outcome | pairs explored |
+|---|---|---|
+| refc | **EQUIVALENT** | 22 |
+| orc | **EQUIVALENT** | 22 |
+
+Both MMs: the real `CallbackQueue[int]` and the `std/deques` reference
+agree on FIFO order, `len`, and enabled-op sets over every reachable plan
+to depth 12 — growth and physical wraparound are reached on essentially
+every branch given `initialCap=2` (the state space is small by
+construction: reachable `(len, cap)` pairs at depth 12 number in the
+dozens, so the low explored-state count reflects genuine exhaustiveness
+under the dedup, not premature termination — confirmed by the mutation
+matrix below, where every structural mutant this layer is capable of
+seeing is caught at shallow depth, not missed).
+
+### Layer 4 — coverage-guided fuzz + GC stress + leak accounting (`fuzz_leak.nim`)
+
+Against a real `CallbackQueue[LeakItem]` (`LeakItem = ref object`, heap
+allocated, GC-traced) — the only layer exercising the real allocator under
+a real MM. `proptest/fuzz`'s `fuzzWith` (IR-mutation mode): random
+op-sequence generation (`addLast`/`addFirst`/`popFirst`, `lists` +
+`frequency` strategies, up to 300 ops/sequence) refined by the mutator
+kernel's perturb-integer/kind-boundary/span-splice/delete/duplicate
+transforms.
+
+**Honestly scoped as "coverage-guided."** `fuzzWith` is edge-coverage
+directed only when the SUT carries `{.cover.}` instrumentation.
+`chronos/internal/callbackqueue.nim` is upstream-bound and must not carry
+any fork-only pragma (the segregation mandate), so it is never
+instrumented; per `proptest/fuzz.nim`'s own module doc, this degrades
+gracefully to structural (uninstrumented) IR-mutation fuzzing. Still real
+signal: the IR mutators explore op-sequence shape more effectively than
+independent-draw random generation, and every finding is genuine either
+way.
+
+**Leak accounting.** Each `prop` call: replay a generated op sequence
+against a FRESH queue, force a full drain regardless of how the sequence
+ended, `GC_fullCollect()`, then assert `getOccupiedMem()` is within
+`toleranceBytes` (1 MB) of a baseline captured once at program start
+(after a warm-up round — both MMs show a one-time bump on the first
+GC-traced allocations, then plateau; warming up before sampling avoids
+mistaking that bump for drift).
+
+**Calibration (real finding, confirms the check has teeth):** a temporary
+one-line change (`chronosCalibrationLeakSink.add leaked` instead of
+`discard` in the drain loop — applied, run, and reverted for this
+calibration only, never committed) reliably tripped the assertion almost
+immediately: the very first `prop()` call already exceeded baseline +
+tolerance (`occ=1062752` vs. threshold `1062512`, refc). Confirms a
+genuine per-op leak is caught within the first handful of iterations, not
+after the whole budget is spent.
+
+**Iteration budget.** 50,000 iterations, up to 300 ops each (up to 15M
+queue operations per MM run). Chosen by scaling up from an initial 4,000
+iterations (~1-2s/MM) — comfortable headroom under the "minutes, not
+hours" budget:
+
+| MM | iterations | wall clock | crashes | leak-accounting failures |
+|---|---|---|---|---|
+| refc | 50,000 | 19-21s | 0 | 0 |
+| orc | 50,000 | 9-10s | 0 | 0 |
+
+**Defect-unwind sequences.** `runDefectUnwindChecks` (run once, before the
+fuzz loop): `popFirst()` on an empty queue and `addFirst()` on a full
+queue both `doAssert`; under this fork's standing `panics:off` assumption,
+both raise a catchable `Defect`, confirmed directly — and in both cases
+the queue remains fully usable for subsequent ops afterward. Both PASS,
+both MMs.
+
+### Layer 5 — mutation scoring
+
+Systematic mutants applied directly to the tracked
+`chronos/internal/callbackqueue.nim` (mechanical apply → check → revert,
+via `git checkout`), one unified diff per mutant saved under
+`verify/mutants/*.patch` for reproducibility. Each mutant was checked
+against three legs: (A) `tests/testcallbackqueue.nim`, plain
+(`-d:release --mm:refc`); (B) the same file under the standard matrix's
+debug leg (`-d:debug -d:chronosDebug -d:useSysAssert -d:useGcAssert
+--mm:refc`); (C) `bisim_check.nim` (`--mm:refc`). A mutant surviving all
+three escalates to (D) `fuzz_leak.nim` (`--mm:refc`).
+
+Reproduce a single mutant, e.g. M3:
+
+```sh
+cd /home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase
+git apply verify/mutants/m3_dropped_zeromem.patch
+# ... run legs A/B/C/D as below ...
+git checkout -- chronos/internal/callbackqueue.nim   # ALWAYS revert
+```
+
+| # | mutant | class | killed by | notes |
+|---|---|---|---|---|
+| M1 | `addLast`: `inc q.tail` → `q.tail += 2` | off-by-one head/tail | A, B, C (depth 1) | 8/10 plain tests fail; bisim distinguishes on the first `addLast` |
+| M2 | `capMask`: return `cap` instead of `cap - 1` | wrong mask | A, B, C (depth 1) | 8/10 plain tests fail; bisim distinguishes on the first `addFirst` |
+| M3 | `grow()`: drop the first segment's `zeroMem` | dropped zeroMem | **D only** (A/B/C survive) | Silent double-decref (real module's own doc comment predicts this exactly); SIGSEGV in `fuzz_leak.nim` after ~8500 iterations under refc. **Distilled**: new pin added to `tests/testcallbackqueue.nim` ("repeated growth cycles preserve ref-field values under memory pressure") — 200 growth cycles + allocator noise, now reliably reproduces the SIGSEGV under plain leg A too. Re-verified: real (unmutated) code passes the new pin cleanly on both MMs. |
+| M4 | `grow()`: swap the two `copyMem` destinations (`newData[0]` ↔ `newData[firstSeg]`) | swapped copyMem segments | A, B, C (depth 3) | SIGSEGV in both plain and debug legs; bisim distinguishes after 3 `addLast`s |
+| M5 | `popFirst`: drop `chronosMoveSink`, both branches | dropped sink/move | **B only** (A, C survive) | Plain leg A passes (refc's normal seq-destructor at `prop()`'s scope exit still decrefs the stale slot — no *observable* corruption at this scale); leg B's existing `chronosDebug` guardrail canary (already shipped, RFC 0001 D9) fails 10/11 tests immediately. No new pin needed: the standard 6-leg matrix's debug leg already exercises this canary on every `nimble test` run. |
+| M6 | canary: `==` → `!=` in the vacated-slot-zeroed `doAssert` | wrong sentinel/zero compare | **B only** (A, C survive) | Same shape as M5: leg B fails immediately (10/11) on the very first `popFirst()`; leg A/C don't reach the `chronosDebug`-gated canary at all. No new pin needed, same reasoning as M5. |
+
+**All six mutants killed.** Zero survivors. M3 is the slice's one genuine
+finding — see "S11 findings" appended to RFC 0001 §1 — and is now closed
+by a distilled, plain-`unittest2` regression pin; M5/M6 confirm the
+existing `chronosDebug` guardrail canary (shipped at S10) is load-bearing
+and already covered by the standing matrix, not merely decorative; M1/M2/M4
+confirm layers 3-4 (and the pre-existing test suite) have real teeth
+against the more overt structural bug classes without needing escalation.
+
 ## Re-running
 
 ```sh
@@ -268,4 +483,22 @@ podman run --rm --userns=keep-id \
   --workdir /home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase/verify \
   localhost/chronos-verify:latest \
   sh -c './run.sh all'
+```
+
+S11 layers 3-4, both MMs (run from the same container/mount, `.docker-home`
+as `HOME` instead if you also want `tests/testcallbackqueue.nim` runnable
+in the same session — it needs `unittest2` off the nimble path, which
+`.container-home` does not carry):
+
+```sh
+cd /home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase
+for mm in refc orc; do
+  podman run --rm --userns=keep-id \
+    -v /home/corey/projects/nim/libs:/home/corey/projects/nim/libs:z \
+    --env HOME=/home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase/verify/.container-home \
+    --env USER=corey --env MM=$mm \
+    --workdir /home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase/verify \
+    localhost/chronos-verify:latest \
+    sh -c './run.sh bisim && ./run.sh fuzz'
+done
 ```

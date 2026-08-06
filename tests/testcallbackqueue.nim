@@ -162,6 +162,52 @@ suite "CallbackQueue: growth":
     let popped = drain(q)
     check popped == @[3, 4, 5, 6, 7, 8]
 
+  test "repeated growth cycles preserve ref-field values under memory pressure":
+    # RFC 0001 S11 (mutation-testing layer): `grow()`'s two `zeroMem` calls
+    # are not cosmetic -- dropping either one leaves a stale, un-zeroed slot
+    # in the OLD backing array; when that old seq's destructor later runs,
+    # it decrefs the (already-relocated) `ref` field a SECOND time (the
+    # real `grow()`'s own doc comment states this explicitly). A single
+    # growth event, as in the tests above, does not reliably surface this
+    # -- the corruption depends on the freed memory being reused before the
+    # stale reference is read again. Repeated growth cycles interleaved
+    # with unrelated heap allocations (to encourage prompt reuse of
+    # whatever `grow()` just freed) give the corruption many more chances
+    # to manifest, so this closes a real gap: it is the only test in this
+    # upstream-bound suite that reliably catches a dropped-`zeroMem`-class
+    # regression in `grow()`. (RFC 0001 S11's fork-only fuzz+leak harness,
+    # `verify/fuzz_leak.nim`, also catches this mutant class -- with a
+    # SIGSEGV after tens of thousands of growth cycles under refc -- but
+    # this pin makes the same regression visible to a plain `nimble test`
+    # run with no proptest/z3 dependency.)
+    var q = initCallbackQueue[TestItem](2)
+    var expected: seq[int]
+    var popped: seq[int]
+    for cycle in 0 ..< 200:
+      # Push enough to force a grow() most cycles; pop most of them back
+      # off, but leave a couple alive across the boundary so grow()
+      # relocates a genuinely live, ref-bearing region every time.
+      for i in 0 ..< 6:
+        let tag = cycle * 10 + i
+        q.addLast(newItem(tag))
+        expected.add tag
+      for i in 0 ..< 4:
+        let item = q.popFirst()
+        popped.add item.tag
+        check item.payload.value == item.tag
+      # Unrelated heap noise: encourages the allocator to reuse whatever
+      # `grow()` just freed, so a stale un-zeroed slot's double-decref (if
+      # present) corrupts something observable instead of sitting inert.
+      discard newSeq[int](64)
+      discard newString(64)
+
+    while q.len > 0:
+      let item = q.popFirst()
+      popped.add item.tag
+      check item.payload.value == item.tag
+
+    check popped == expected
+
   test "growth during reentrant drain across capacity boundaries (top pin)":
     # The exact shape `asyncengine.nim`'s default drain protocol allows:
     # a callback fires (via popFirst, `head` already advanced past the

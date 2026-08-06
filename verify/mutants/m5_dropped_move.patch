@@ -1,0 +1,17 @@
+diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
+index 542dd6d..f25548f 100644
+--- i/chronos/internal/callbackqueue.nim
++++ w/chronos/internal/callbackqueue.nim
+@@ -231,10 +231,10 @@ template popFirst*[T](q: var CallbackQueue[T]): T =
+     # builds and never perturbs the tier-1/tier-2 measurements: the `when`
+     # is fully elided when undefined, leaving the exact single-expression
+     # form the barrier-count analysis above describes.
+-    let chronosPopped = chronosMoveSink(q.data[chronosQueueIdx])
++    let chronosPopped = q.data[chronosQueueIdx]
+     doAssert q.data[chronosQueueIdx] == default(T),
+       "CallbackQueue: a vacated slot retained a non-nil ghost value after " &
+       "popFirst() — a slot-vacating path bypassed the fused-move discipline"
+     chronosPopped
+   else:
+-    chronosMoveSink(q.data[chronosQueueIdx])
++    q.data[chronosQueueIdx]
