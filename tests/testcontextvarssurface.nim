@@ -146,6 +146,36 @@ when declared(captureContextInto):
            "`currentAsyncContext` into arbitrary fields, bypassing the " &
            "construction discipline entirely.".}
 
+# --- RFC 0001 D9: dispatcher queue fields and their backing type -------------
+#
+# `DispatcherBase.callbacks`/`idlers`/`ticks` were privatized when their
+# type swapped from `std/deques.Deque` to the move-based `CallbackQueue`
+# (`chronos/internal/callbackqueue.nim`) — the type swap grazed all three
+# fields either way, so D9 closes off external access at the same time
+# (all touch sites live inside `chronos/internal/asyncengine.nim` and
+# `chronos/internal/asyncfutures.nim`'s `callSoon`-routed call).
+# `getThreadDispatcher()` (this module's only way to reach a live
+# `PDispatcher`) stays public — only the three fields themselves and the
+# queue type backing them are excluded.
+
+static:
+  doAssert not compiles(getThreadDispatcher().callbacks),
+    "`DispatcherBase.callbacks` must not be readable via `import chronos` " &
+    "— it is private to chronos/internal/asyncengine.nim (RFC 0001 D9)."
+  doAssert not compiles(getThreadDispatcher().idlers),
+    "`DispatcherBase.idlers` must not be readable via `import chronos` " &
+    "— it is private to chronos/internal/asyncengine.nim (RFC 0001 D9)."
+  doAssert not compiles(getThreadDispatcher().ticks),
+    "`DispatcherBase.ticks` must not be readable via `import chronos` " &
+    "— it is private to chronos/internal/asyncengine.nim (RFC 0001 D9)."
+
+when declared(CallbackQueue):
+  {.error: "`CallbackQueue` (RFC 0001 D9) must not leak through the " &
+           "public API. It backs the privatized `callbacks`/`idlers`/" &
+           "`ticks` dispatcher fields and has no public-facing purpose " &
+           "— unlike `std/deques.Deque` before it, which stayed exported " &
+           "only because the fields it backed were themselves public.".}
+
 # `context` is `InternalAsyncCallback`'s (and, since RFC 0001 D5,
 # `InternalCancelCallback`'s) read-only getter — both declared in
 # `chronos/futures.nim`, used by the dispatcher's `fireWithContext` and

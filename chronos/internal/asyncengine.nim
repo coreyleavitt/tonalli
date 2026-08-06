@@ -19,10 +19,16 @@ import std/[atomics, deques, heapqueue, tables, typetraits]
 import results
 import ../[config, effects, futures, osdefs, oserrno, osutils, timer]
 
-import ./[asyncmacro, errors]
+import ./[asyncmacro, callbackqueue, errors]
 
 export Port
 export deques, effects, errors, timer, results
+# `CallbackQueue` (RFC 0001 D9) backs the three privatized dispatcher
+# queues below (`callbacks`/`idlers`/`ticks`) and is not itself part of
+# the public surface — no exported proc or field returns or accepts one,
+# mirroring `./mpsc`'s `MpscQueue` just below (also imported, never
+# exported: `threadCallbacks` is private for the same reason). Pinned by
+# `tests/testcontextvarssurface.nim`.
 # `userCallback`/`internalCallback`/`newCancelCallback`/
 # `currentAsyncContext`/`context`/`withRestoredContext`/`pinContext` are
 # dispatcher-internal (see `chronos/futures.nim` §Continuation-local
@@ -102,9 +108,17 @@ type
 
   DispatcherBase = object of RootRef
     timers*: HeapQueue[TimerCallback]
-    callbacks*: Deque[AsyncCallback]
-    idlers*: Deque[AsyncCallback]
-    ticks*: Deque[AsyncCallback]
+    # RFC 0001 D9: `CallbackQueue` (`./callbackqueue`), not `std/deques` —
+    # `std/deques.popFirst` pays refc's hidden-return-slot lowering on
+    # every dequeue (see `callbackqueue.nim`'s module doc). Privatized
+    # (no `*`): every touch site lives in this module (inventory-verified;
+    # `chronos/internal/asyncfutures.nim`'s one out-of-module site was
+    # rerouted through the public `callSoon` proc as part of this change),
+    # so there is nothing for external code to reach here. Pinned by
+    # `tests/testcontextvarssurface.nim`.
+    callbacks: CallbackQueue[AsyncCallback]
+    idlers: CallbackQueue[AsyncCallback]
+    ticks: CallbackQueue[AsyncCallback]
     trackers*: Table[string, TrackerBase]
     counters*: Table[string, TrackerCounter]
     inEventLoop: bool
@@ -465,9 +479,9 @@ elif defined(windows):
       ioPort: port,
       handles: initHashSet[AsyncFD](),
       timers: initHeapQueue[TimerCallback](),
-      callbacks: initDeque[AsyncCallback](64),
-      idlers: initDeque[AsyncCallback](),
-      ticks: initDeque[AsyncCallback](),
+      callbacks: initCallbackQueue[AsyncCallback](64),
+      idlers: initCallbackQueue[AsyncCallback](),
+      ticks: initCallbackQueue[AsyncCallback](),
       trackers: initTable[string, TrackerBase](),
       counters: initTable[string, TrackerCounter](),
     )
@@ -919,8 +933,14 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     var res = PDispatcher(
       selector: selector,
       timers: initHeapQueue[TimerCallback](),
-      callbacks: initDeque[AsyncCallback](chronosInitialSize),
-      idlers: initDeque[AsyncCallback](),
+      callbacks: initCallbackQueue[AsyncCallback](chronosInitialSize),
+      idlers: initCallbackQueue[AsyncCallback](),
+      # `ticks` is deliberately left at its zero value here, not
+      # explicitly constructed — see `CallbackQueue`'s module doc: the
+      # zero value is a valid, empty queue with lazy first-grow, exactly
+      # the property `std/deques` provided before RFC 0001 D9. Preserved
+      # rather than "fixed", and pinned by a test
+      # (`tests/testcallbackqueue.nim`).
       keys: newSeq[ReadyKey](chronosInitialSize),
       trackers: initTable[string, TrackerBase](),
       counters: initTable[string, TrackerCounter](),

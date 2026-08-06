@@ -891,8 +891,12 @@ proc cancelSoon(future: FutureBase, aftercb: CallbackFunc, udata: pointer,
     # We could not schedule callback directly otherwise we could fall into
     # recursion problem.
     if not(isNil(aftercb)):
-      let loop = getThreadDispatcher()
-      loop.callbacks.addLast(userCallback(aftercb, udata))
+      # RFC 0001 D9: routed through the public `callSoon` (equivalent to
+      # the prior `getThreadDispatcher().callbacks.addLast(...)`) now that
+      # `DispatcherBase.callbacks` is private to `asyncengine.nim` — this
+      # was the one touch site RFC 0001's D9 inventory missed (it lives
+      # here, not in `asyncengine.nim`).
+      callSoon(userCallback(aftercb, udata))
     return
 
   future.addCallback(continuation)
