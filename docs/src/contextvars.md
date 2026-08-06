@@ -139,9 +139,17 @@ propagates it by value through every scheduling site:
   snapshots the current chain head into the callback's `context` field (a
   native `ref` — Nim's memory management owns the lifecycle; there are no
   manual `GC_ref`/`GC_unref` operations to forget at drop sites).
-- **Restore at fire**: the dispatcher's callback loop sets the current chain
-  to the callback's captured value around the invocation and reverts
-  afterwards, so consecutive callbacks each see their own captured context.
+- **Restore at fire**: the dispatcher's callback loop compares the
+  callback's captured chain against the chain already installed (an
+  identity check on the head pointer). If they already match — the
+  common case whenever a program never binds a context variable at
+  all, and often the case between consecutive callbacks of the same
+  binder — nothing is written: no assignment, no `try/finally`. If
+  they differ, the dispatcher installs the callback's captured chain
+  for the duration of the invocation and reverts to the prior chain
+  afterwards, including on an exception exit, so consecutive callbacks
+  each see their own captured context regardless of what the callback
+  before them left behind.
 
 Binding is O(1) (push a node); reading is O(chain length), where the chain
 only contains the bindings currently in dynamic scope. Code that never binds
@@ -209,6 +217,49 @@ created it has exited.
   but another task's bindings can never leak in. `CompletionData` does
   not yet carry a context field. The epoll/kqueue paths propagate
   correctly. See the TODO in `chronos/internal/asyncengine.nim`.
+
+## Performance
+
+The design goal is cost proportional to use: a program that never
+declares a context variable should pay a cost indistinguishable, on
+every hot path, from a build without the feature at all. This is
+measured, not assumed.
+
+**refc** (chronos's most latency-sensitive consumers pin `--mm:refc`
+unconditionally) is the headline: `callSoon` schedule+fire — the
+hottest path a contextvars-free program pays on every scheduled
+callback — measured against a pre-contextvars baseline under an
+interleaved cross-commit protocol, lands at 1.01x-1.11x, inside
+ordinary run-to-run noise. **orc** was within noise from the first
+measurement and stays there (~1.10x).
+
+Per-call-class cost, both memory managers, confirmed by inspecting the
+generated C at each site rather than inferred from throughput alone:
+
+- leaf callback fire: one thread-local load + one predicted branch.
+- continuation resume: the above plus one unconditional save/restore
+  pair, required for correctness — a suspended continuation must not
+  leak a stale binding into whatever fires next.
+- user-callback construction: one thread-local load + one predicted
+  branch; barrier-free on refc, and on orc the context copy is skipped
+  entirely when no binder is live.
+- registering a callback on a heap-allocated future (e.g. a cancel
+  callback): one write-barrier call per `ref` field under refc, paid
+  once, at the point ownership transfers into the heap field.
+
+Struct cost: `sizeof(AsyncCallback)` grows by one pointer field (8 B);
+a pending future's two embedded callbacks add 16 B combined.
+
+A related, separately-motivated fix ships alongside this feature: the
+dispatcher's internal callback queues previously used `std/deques`,
+whose `popFirst` returns its element by value — a pre-existing cost
+(present before contextvars, on the queue's original single `ref`
+field) that contextvars' second `ref` field doubled. The dispatcher
+now uses a small purpose-built queue (`chronos/internal/callbackqueue.nim`)
+whose dequeue is barrier-free on the copy-out; this restores
+queue-transport cost per hop to parity with what the pre-contextvars
+codebase already paid on its one field, and accounts for the majority
+of the improvement in the refc headline number above.
 
 ## Test plan
 
