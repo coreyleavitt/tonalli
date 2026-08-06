@@ -18,7 +18,7 @@
 ## stdlib proc API cannot become one. `--mm:orc` is unaffected either way.
 ##
 ## Interface is exactly five entry points: `initCallbackQueue`, `addLast`
-## (sink), `addFirst` (sink; sole caller is sentinel re-insertion in
+## (sink), `prependNoGrow` (sink; sole caller is sentinel re-insertion in
 ## `asyncengine.nim`'s `poll()`), `popFirst` (a `template` — see below),
 ## `len`.
 
@@ -53,7 +53,7 @@ proc capMask(cap: int): int {.inline.} =
 proc slotIndex(pos, cap: int): int {.inline.} =
   ## Fold a monotonic logical position into `[0, cap)`. `cap` being a
   ## power of two makes this correct for negative `pos` too (two's
-  ## complement `and` is congruent mod `cap`), which `addFirst`'s
+  ## complement `and` is congruent mod `cap`), which `prependNoGrow`'s
   ## `dec head` relies on.
   pos and capMask(cap)
 
@@ -122,13 +122,15 @@ proc addLast*[T](q: var CallbackQueue[T], item: chronosSink T) =
   q.data[idx] = item
   inc q.tail
 
-proc addFirst*[T](q: var CallbackQueue[T], item: chronosSink T) =
-  ## Push onto the front. Sole caller is sentinel re-insertion at the
-  ## front of an already-fully-drained batch (`asyncengine.nim`'s
-  ## `poll()`). Never a general push-front, so there is no growth path
-  ## here: the caller must never call this on a full queue.
+proc prependNoGrow*[T](q: var CallbackQueue[T], item: chronosSink T) =
+  ## Push onto the front. Precondition: `q` must not be full — unlike
+  ## `addLast`, there is no growth path here, so the caller must never
+  ## invoke this on a full queue. Not a general push-front primitive;
+  ## intended for re-inserting an item into a queue known to have
+  ## spare capacity (e.g. re-inserting a sentinel at the front of an
+  ## already-fully-drained batch).
   doAssert not isFull(q.head, q.tail, q.data.len),
-    "CallbackQueue.addFirst(): queue unexpectedly full"
+    "CallbackQueue.prependNoGrow(): queue unexpectedly full"
   dec q.head
   let idx = slotIndex(q.head, q.data.len)
   q.data[idx] = item
@@ -141,7 +143,7 @@ template popFirst*[T](q: var CallbackQueue[T]): T =
   ## a fresh caller-frame local rather than through an intermediate hop.
   ##
   ## The vacated slot is cleared via `chronosMoveSink`, an lvalue read of
-  ## a live queue slot — unlike `addLast`/`addFirst` above, which assign
+  ## a live queue slot — unlike `addLast`/`prependNoGrow` above, which assign
   ## already-spent `sink` parameters directly.
   doAssert q.tail > q.head, "CallbackQueue.popFirst(): queue is empty"
   let chronosQueueIdx = slotIndex(q.head, q.data.len)

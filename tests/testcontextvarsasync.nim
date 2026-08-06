@@ -1,3 +1,11 @@
+#                Chronos Test Suite
+#            (c) Copyright 2018-Present
+#         Status Research & Development GmbH
+#
+#              Licensed under either of
+#  Apache License, version 2.0, (LICENSE-APACHEv2)
+#              MIT license (LICENSE-MIT)
+
 ## Async propagation tests for chronos contextvars.
 ## These exercise the dispatcher integration (capture-at-scheduling +
 ## restore-at-fire). The sync semantics test (testcontextvars.nim) is
@@ -278,7 +286,7 @@ suite "contextvars: scheduling-site capture coverage":
     # `internalCallTick` is the dispatcher's internal "after OS queue
     # processing" hook (used by `checktick`, `stepsAsync` etc. — never
     # by user code that reads contextVars). Per the two-constructor
-    # discipline, internal scheduling sites use `internalCallback` (no
+    # discipline, internal scheduling sites use `bareCallback` (no
     # context capture). A callback scheduled via `internalCallTick(cb)`
     # from inside `withAsyncInt(123)` must NOT see asyncInt() == 123 —
     # it sees the default (0), because no context was captured.
@@ -583,7 +591,7 @@ suite "contextvars: scheduling-site capture coverage":
     # `closeSocket(fd, aftercb)` schedules `aftercb` after the close.
     # The scheduling site uses `userCallback` so the callback fires
     # under the context bound at close-call time. Regression guard
-    # against drift to `internalCallback` (which would drop the
+    # against drift to `bareCallback` (which would drop the
     # caller's context).
     var seenBinding = -1
     var fired = false
@@ -667,7 +675,7 @@ suite "contextvars: cancelCallback capture":
     # second invocation, so the first call (synchronous, from
     # `cancelSoon`'s initial `tryCancel`) reports "not yet cancelled",
     # forcing `internalCallTick(checktick)`. `checktick` is a
-    # context-blind internal trampoline (`internalCallback`, no
+    # context-blind internal trampoline (`bareCallback`, no
     # capture) - so its downstream `tryCancel` call runs with no
     # ambient context. The registrant's captured "owner" binding must
     # still be what the callback observes on both invocations.
@@ -812,6 +820,71 @@ suite "contextvars: fast-path pins":
     check caught
     check asyncInt() == 0
 
+  test "bind-and-raise on the slow arm restores the prior ambient context after the batch (fireWithContext)":
+    # Slow-arm counterpart to the fast-arm test above. Capture the
+    # callback's context under one binding (111), then fire it while a
+    # DIFFERENT binding (222) is ambient - the captured and ambient
+    # contexts differ, so `withRestoredContext` must take the slow arm
+    # (write the captured context in, `try`/`finally` restore the prior
+    # one back out) rather than the identity fast arm. The callback body
+    # itself asserts `asyncInt() == 111` before raising - reaching that
+    # check is proof the slow arm's write actually ran, not just an
+    # assumption about which branch fired. `CallbackFunc` is
+    # `raises: []`, so the raiser must escape as a `Defect`; the
+    # `except` sits INSIDE the `withAsyncInt(222)` block (rather than
+    # outside it) so the assertion below observes the state immediately
+    # after `withRestoredContext`'s own `finally` runs, before the
+    # outer `withAsyncInt(222)` binder's own `finally` unwinds further.
+    proc raiser(udata: pointer) {.gcsafe, raises: [].} =
+      check asyncInt() == 111       # proves the slow arm's write executed
+      doAssert false, "contextvars: intentional Defect to " &
+                       "exercise the slow-arm restore path (fireWithContext)"
+
+    withAsyncInt(111):
+      callSoon(raiser, nil)         # captured context = 111
+
+    withAsyncInt(222):               # ambient at fire time = 222 != 111
+      var caught = false
+      try:
+        poll()
+      except Defect:
+        caught = true
+      check caught
+      # `withRestoredContext`'s `finally` must restore the ambient
+      # context to what it was before the slow arm's write (222), not
+      # leave it at the callback's captured value (111).
+      check asyncInt() == 222
+    check asyncInt() == 0
+
+  test "bind-and-raise on the slow arm restores the prior ambient context after cancellation (fireCancelCallback)":
+    # Same slow-arm restore contract as above, through the cancel-
+    # callback fire site (`fireCancelCallback` in
+    # `chronos/internal/asyncfutures.nim`) rather than the regular
+    # callback fire site (`fireWithContext`). A `cancelCallback`
+    # registered under one binding (333), fired via `tryCancel` while a
+    # DIFFERENT binding (444) is ambient, forces the same
+    # write+try/finally slow arm in `withRestoredContext`.
+    let fut = newFuture[void]("slow-arm-cancel")
+    proc raiserCancel(_: pointer) {.gcsafe, raises: [].} =
+      check asyncInt() == 333       # proves the slow arm's write executed
+      doAssert false, "contextvars: intentional Defect to " &
+                       "exercise the slow-arm restore path (fireCancelCallback)"
+
+    withAsyncInt(333):
+      fut.cancelCallback = raiserCancel   # captured context = 333
+
+    withAsyncInt(444):               # ambient at fire time = 444 != 333
+      var caught = false
+      try:
+        discard tryCancel(fut)
+      except Defect:
+        caught = true
+      check caught
+      # Same restore contract as the fireWithContext test above, pinned
+      # through the cancel-callback fire site instead.
+      check asyncInt() == 444
+    check asyncInt() == 0
+
   test "nil-captured resume through a suspended binder leaves the ambient context clean for a later same-batch callback":
     # `internalContinue`'s resume must restore `currentAsyncContext`
     # even when the resumed slice suspends AGAIN inside a binder before
@@ -850,6 +923,50 @@ suite "contextvars: fast-path pins":
     innerWaiter.complete()
     waitFor fut
     check innerObserved == 999
+    check fut.finished()
+
+  test "await inside withContext survives suspension and leaves ambient restored for a later same-batch callback":
+    # Same suspend-hazard as the `withName` pin above, but through the
+    # PUBLIC `currentContext()`/`withContext()` bridge instead of the
+    # macro-generated binder. `withContext`'s body can itself suspend
+    # mid-block (an `await` inside it is a plain iterator return, same
+    # as a `yield` inside `withName` - `withContext`'s own `finally`
+    # does not run for it), so the same class of hazard applies:
+    # without `futureContinue`'s unconditional save/restore on resume,
+    # the OUTER fire's fast arm would leave the threadvar pointing at
+    # `withContext`'s installed chain for every callback still queued
+    # behind it in the same batch.
+    var boundCtx: AsyncContext
+    withAsyncInt(999):
+      boundCtx = currentContext()
+
+    let outerWaiter = newFuture[void]("wc-leak-repro.outer")
+    let innerWaiter = newFuture[void]("wc-leak-repro.inner")
+    var innerObserved = -1
+    var laterSeenBinding = -1
+    var laterFired = false
+
+    proc leaky(): Future[void] {.async: (raises: [Exception]).} =
+      await outerWaiter               # captured with nil ambient context
+      withContext(boundCtx):
+        await innerWaiter             # suspends INSIDE withContext's body
+        innerObserved = asyncInt()
+
+    proc laterCb(udata: pointer) {.gcsafe, raises: [].} =
+      laterSeenBinding = asyncInt()
+      laterFired = true
+
+    let fut = leaky()                 # synchronous run to `await outerWaiter`
+    outerWaiter.complete()            # queues leaky's resume (nil-context capture)
+    callSoon(laterCb, nil)            # queued behind the resume, same batch
+    poll()
+
+    check laterFired
+    check laterSeenBinding == 0       # not leaked from leaky's still-open withContext
+
+    innerWaiter.complete()
+    waitFor fut
+    check innerObserved == 999        # the withContext binding survived the suspend
     check fut.finished()
 
 suite "contextvars: scheduling scenario pins":
@@ -995,6 +1112,50 @@ suite "contextvars: scheduling scenario pins":
     check readyB
     check resultA == 111
     check resultB == 222
+
+  test "cross-thread callSoon() fires with an empty context and leaves the origin thread's own binding undisturbed":
+    # `DispatcherHandle.callSoon` (`chronos/internal/asyncengine.nim`,
+    # exercised cross-thread by testsoon.nim's "cross-thread callSoon()
+    # test") posts through a shared MPSC queue when the poster is not
+    # the target dispatcher's own thread, and is drained on the
+    # ORIGIN thread via `bareCallback` (`processThreadCallbacks`) - no
+    # context capture, since the posting thread's binding chain is
+    # thread-local, garbage-collected memory that cannot cross threads.
+    # Bind a contextVar on the origin thread (whose dispatcher receives
+    # the post and whose `poll()` fires it), spawn a second thread that
+    # posts a callback back through that dispatcher's `DispatcherHandle`,
+    # and confirm two things once the origin thread's `poll()` fires it:
+    # the callback observes the DEFAULT (unbound) value, not the origin
+    # thread's own ambient binding; and the origin thread's own binding
+    # is unchanged afterward - the empty-context fire must not disturb
+    # the ambient state it fired into.
+    type CrossThreadResult = object
+      seenBinding: int
+      fired: bool
+
+    proc crossThreadCb(udata: pointer) {.nimcall, gcsafe, raises: [].} =
+      let r = cast[ptr CrossThreadResult](udata)
+      r.seenBinding = asyncInt()
+      r.fired = true
+
+    type ThreadArg = (DispatcherHandle, ptr CrossThreadResult)
+    proc threadProc(arg: ThreadArg) {.thread, nimcall.} =
+      callSoon(arg[0], crossThreadCb, cast[pointer](arg[1]))
+
+    var res: CrossThreadResult
+    let disp = getThreadDispatcher()
+
+    withAsyncInt(555):
+      var thread: Thread[ThreadArg]
+      createThread(thread, threadProc, (disp.handle(), addr res))
+      poll()
+
+      check res.fired
+      check res.seenBinding == 0     # DEFAULT - not leaked from the origin's 555
+      check asyncInt() == 555        # origin thread's own binding undisturbed
+      joinThreads(thread)
+
+    check asyncInt() == 0
 
   test "addCallback on an already-finished future captures the caller's binding, not the completer's":
     # `addCallback` on a future that is already finished takes the

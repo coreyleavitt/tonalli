@@ -1,3 +1,12 @@
+#
+#                     Chronos
+#
+#  (c) Copyright 2026-Present Status Research & Development GmbH
+#
+#                Licensed under either of
+#    Apache License, version 2.0, (LICENSE-APACHEv2)
+#                MIT license (LICENSE-MIT)
+
 ## Continuation-local storage — per-slot lookup/bind primitives.
 ##
 ## Not part of chronos's public API: users interact via

@@ -1,3 +1,11 @@
+#                Chronos Test Suite
+#            (c) Copyright 2018-Present
+#         Status Research & Development GmbH
+#
+#              Licensed under either of
+#  Apache License, version 2.0, (LICENSE-APACHEv2)
+#              MIT license (LICENSE-MIT)
+
 ## Public-surface guardrail for continuation-local storage.
 ##
 ## Verifies that `import chronos` plus `import chronos/contextvars` —
@@ -109,8 +117,8 @@ when declared(userCallback):
            "in chronos/futures.nim, excluded from `asyncengine.nim`'s " &
            "`export futures`, and is used by dispatcher code only.".}
 
-when declared(internalCallback):
-  {.error: "`internalCallback` must not leak through the public API.".}
+when declared(bareCallback):
+  {.error: "`bareCallback` must not leak through the public API.".}
 
 when declared(newCancelCallback):
   {.error: "`newCancelCallback` must not leak through the public API. It " &

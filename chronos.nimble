@@ -6,7 +6,7 @@ version       = "4.4.0"
 author        = "Status Research & Development GmbH"
 description   = "Networking framework with async/await support"
 license       = "MIT or Apache License 2.0"
-skipDirs      = @["tests", "verify"]
+skipDirs      = @["tests"]
 
 requires "nim >= 1.6.16",
          "results",
@@ -34,6 +34,7 @@ let testArguments =
     [
       "-d:debug -d:chronosDebug -d:useSysAssert -d:useGcAssert",
       "-d:debug -d:chronosDebug -d:chronosEventEngine=poll -d:useSysAssert -d:useGcAssert",
+      "-d:debug -d:chronosDebug -d:chronosPreviewV5 -d:useSysAssert -d:useGcAssert",
       "-d:release -d:chronosPreviewV5",
     ]
 

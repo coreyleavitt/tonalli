@@ -1,3 +1,11 @@
+#                Chronos Test Suite
+#            (c) Copyright 2018-Present
+#         Status Research & Development GmbH
+#
+#              Licensed under either of
+#  Apache License, version 2.0, (LICENSE-APACHEv2)
+#              MIT license (LICENSE-MIT)
+
 ## Freestanding test suite for `chronos/internal/callbackqueue.nim`.
 ## Deliberately independent of the contextvars feature and its test
 ## files: `CallbackQueue[T]` is a general-purpose dispatcher substrate
@@ -74,7 +82,7 @@ suite "CallbackQueue: basic semantics":
     for i in 0 ..< 5:
       check q.popFirst().tag == i
 
-  test "addFirst ordering: sentinel re-insertion at the front":
+  test "prependNoGrow ordering: sentinel re-insertion at the front":
     # Mirrors the sole real caller (asyncengine.nim's poll(): re-inserting
     # a sentinel at the front of an already-fully-drained batch).
     var q = initCallbackQueue[TestItem]()
@@ -82,7 +90,7 @@ suite "CallbackQueue: basic semantics":
     discard q.popFirst() # drain to empty, as the real caller always does
     check q.len == 0
 
-    q.addFirst(newItem(999))
+    q.prependNoGrow(newItem(999))
     q.addLast(newItem(1))
     q.addLast(newItem(2))
     check q.len == 3

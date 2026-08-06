@@ -45,6 +45,15 @@ binder's extent. Two additional primitives, `currentContext()` and
 `withContext(ctx, body)`, snapshot and restore the full binding chain for
 synchronous-callback boundaries that don't go through `await`.
 
+**Naming caution**: a generated `withName` binder shares ordinary
+module scope with everything else chronos exports, and the two can
+collide. An arm named `timeout`, for instance, generates `withTimeout`
+— the same name as chronos's own `withTimeout` combinator
+(`Future[T].withTimeout(Duration): Future[bool]`) — leading to
+confusing ambiguity or overload-resolution errors at call sites that
+use either one. Choose arm names that don't shadow existing chronos
+API, particularly common words.
+
 ## Semantics notes
 
 The reader re-evaluates the arm's default expression on every unbound
@@ -54,6 +63,31 @@ declaration time. This differs from Python's PEP 567, where a
 `ContextVar`'s default is fixed at construction. Keep default
 expressions cheap and side-effect-free; anything expensive belongs
 behind an explicit `withName` binding instead.
+
+## Binding multiple variables
+
+There is no combined "bind several at once" form — binding multiple
+context variables together is ordinary nested `withName` blocks, one
+per variable:
+
+```nim
+contextVar:
+  var currentUser: User = anonymous
+  var requestId: string = ""
+
+proc handleRequest(user: User, reqId: string) {.async.} =
+  withCurrentUser(user):
+    withRequestId(reqId):
+      await sleepAsync(10.milliseconds)
+      audit("query")   # sees both currentUser() and requestId()
+```
+
+Each `withName` layer adds one `try`/`finally` frame, so the cost scales
+with the number of variables bound at a given point, not with the number
+of `contextVar` declarations in scope elsewhere. Independent variables
+don't interact with each other, so the nesting order between them is
+arbitrary — binding `requestId` inside `currentUser` or the other way
+around produces the same observable bindings either way.
 
 ## Bridging independent callbacks
 
@@ -165,7 +199,7 @@ constructors defined in `chronos/futures.nim`:
   (`addCallback`, `callSoon`, `setTimer`, `addReader`/`addWriter`,
   `addSignal`/`addProcess`, `callIdle`, `closeSocket`/`closeHandle`
   after-callbacks). Captures the current context.
-- `internalCallback(fn, udata)` — for chronos-internal trampolines (IOCP
+- `bareCallback(fn, udata)` — for chronos-internal trampolines (IOCP
   completion repackaging, sentinels, cross-thread queue draining,
   `internalCallTick`'s `CallbackFunc` overloads) where no meaningful
   registration-time context exists. Fires with an empty context.
@@ -173,19 +207,29 @@ constructors defined in `chronos/futures.nim`:
 `internalCallTick` also has an `AsyncCallback`-taking overload
 (`internalCallTick(acb: AsyncCallback)`) that simply schedules whatever
 `AsyncCallback` the caller already built — the caller picks `userCallback`
-or `internalCallback` when constructing that value. Only the convenience
+or `bareCallback` when constructing that value. Only the convenience
 `CallbackFunc` overloads (`internalCallTick(cbproc, data)`) default to
-`internalCallback` and are therefore context-blind by design.
+`bareCallback` and are therefore context-blind by design.
 
-This is enforced by the type system, not convention: `InternalAsyncCallback`'s
-`function`/`udata`/`context` fields are private to `chronos/futures.nim`, so
-only `userCallback`/`internalCallback` can construct a value, and no other
-module can read-modify a field after construction (existing readers go
-through exported `function()`/`udata()`/`context()` getters). A raw
-`AsyncCallback(function: ..., udata: ...)` literal, or a direct field
-assignment, anywhere outside `chronos/futures.nim` simply fails to compile —
-`tests/testcontextvarsguardrails.nim` asserts this with `not compiles(...)`
-checks, so drift is a compile error, not something a grep sweep has to catch.
+Unauthorized *construction* of an `InternalAsyncCallback` is a compile
+error, not a convention: `function`/`udata`/`context` are private to
+`chronos/futures.nim`, so only `userCallback`/`bareCallback` can build a
+value, and no other module can read-modify a field after construction
+(existing readers go through exported `function()`/`udata()`/`context()`
+getters). A raw `AsyncCallback(function: ..., udata: ...)` literal, or a
+direct field assignment, anywhere outside `chronos/futures.nim` simply
+fails to compile — `tests/testcontextvarsguardrails.nim` asserts this
+with `not compiles(...)` checks.
+
+*Which* constructor a given scheduling site calls, however, is not
+something the type system can check — `userCallback` and `bareCallback`
+have the same signature, so picking the wrong one compiles fine. That
+discipline rests on an enumerate-and-pin approach instead:
+`tests/testcontextvarssurface.nim` and `tests/testcontextvarsguardrails.nim`
+enumerate every known construction/capture site and pin its expected
+behavior, so a *changed* site shows up as a failing assertion — but a
+genuinely *new* scheduling site added without updating those pins would
+not be caught by them. Extending the pins is part of adding one.
 
 ## Spawn-time inheritance
 
@@ -279,7 +323,7 @@ of the improvement in the refc headline number above.
   plus `import chronos/contextvars` expose only the intended public API
   (`contextVar`, `AsyncContext`, `currentContext`, `withContext`) and
   none of the dispatcher internals (`ContextNodeBase`,
-  `currentAsyncContext`, `userCallback`/`internalCallback`, `context`,
+  `currentAsyncContext`, `userCallback`/`bareCallback`, `context`,
   `contextLookup`/`contextBindSlot`); also pins the deliberate absence
   of an imperative token API (`AsyncContextToken`).
 - `tests/testcontextvarsexport.nim` + `tests/contextvarshelper.nim`

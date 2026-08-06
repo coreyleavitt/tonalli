@@ -1,3 +1,12 @@
+#
+#                     Chronos
+#
+#  (c) Copyright 2026-Present Status Research & Development GmbH
+#
+#                Licensed under either of
+#    Apache License, version 2.0, (LICENSE-APACHEv2)
+#                MIT license (LICENSE-MIT)
+
 ## Continuation-local storage for chronos.
 ##
 ## A `contextVar` declaration introduces a dynamically-scoped binding

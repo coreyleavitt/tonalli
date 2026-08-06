@@ -1,3 +1,11 @@
+#                Chronos Test Suite
+#            (c) Copyright 2018-Present
+#         Status Research & Development GmbH
+#
+#              Licensed under either of
+#  Apache License, version 2.0, (LICENSE-APACHEv2)
+#              MIT license (LICENSE-MIT)
+
 ## Drift-detection guardrails for chronos's context-variable feature.
 ##
 ## These tests catch regressions that would silently break the
@@ -21,19 +29,19 @@ import ../chronos/contextvars
 
 # --- Guardrail 1: capture coverage is structural -----------------------------
 #
-# The two-constructor split (userCallback / internalCallback) forces
+# The two-constructor split (userCallback / bareCallback) forces
 # every AsyncCallback construction site to pick a deliberate side.
 # `InternalAsyncCallback`'s `function`/`udata`/`context` fields are
 # private to `chronos/futures.nim` — only `userCallback`/
-# `internalCallback` can construct one, and no other module can
+# `bareCallback` can construct one, and no other module can
 # read-modify the fields after the fact.
 
 static:
   doAssert not compiles(InternalAsyncCallback(function: nil, udata: nil)),
     "InternalAsyncCallback's fields must be private — raw construction " &
-    "outside `userCallback`/`internalCallback` must not compile. Use " &
+    "outside `userCallback`/`bareCallback` must not compile. Use " &
     "`userCallback(fn, udata)` for user-facing scheduling sites or " &
-    "`internalCallback(fn, udata)` for chronos-internal trampolines. " &
+    "`bareCallback(fn, udata)` for chronos-internal trampolines. " &
     "See docs/src/contextvars.md, 'Capture discipline'."
   doAssert not compiles((var a: AsyncCallback; a.function = nil)),
     "AsyncCallback's `function` field must be private — direct mutation " &

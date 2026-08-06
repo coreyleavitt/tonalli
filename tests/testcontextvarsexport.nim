@@ -1,3 +1,11 @@
+#                Chronos Test Suite
+#            (c) Copyright 2018-Present
+#         Status Research & Development GmbH
+#
+#              Licensed under either of
+#  Apache License, version 2.0, (LICENSE-APACHEv2)
+#              MIT license (LICENSE-MIT)
+
 ## Cross-module test for the `contextVar` macro's export-marker
 ## semantics: `var name*: T = v` must produce an exported reader/binder
 ## pair, while `var name: T = v` (no star) must produce a module-private

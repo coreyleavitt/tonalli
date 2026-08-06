@@ -44,7 +44,7 @@ type
       ## from `poll`.
       ##
       ## `function`/`udata`/`context` are private to this module -
-      ## only `userCallback`/`internalCallback` below can construct an
+      ## only `userCallback`/`bareCallback` below can construct an
       ## `InternalAsyncCallback`.
 
   InternalCancelCallback* = object
@@ -188,12 +188,12 @@ template userCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCallba
   ## `callSoon(cb, data)`, `setTimer`, `addReader`/`addWriter`/
   ## `addSignal`/`addProcess`, `callIdle`,
   ## `closeSocket(fd, aftercb)`/`closeHandle(fd, aftercb)`. Use
-  ## `internalCallback` instead for chronos-internal trampolines that
+  ## `bareCallback` instead for chronos-internal trampolines that
   ## don't read contextVars.
   ##
   ## `internalContinue` (the iterator-pump resume trampoline scheduled
   ## by `futureContinue`) also goes through this constructor rather
-  ## than `internalCallback` - the capture is load-bearing, carrying
+  ## than `bareCallback` - the capture is load-bearing, carrying
   ## the iterator's per-yield context across suspension.
   ##
   ## Must be a template, not a proc returning by value: constructs
@@ -210,7 +210,7 @@ template userCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCallba
   captureContextInto(acb.context)
   acb
 
-template internalCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCallback =
+template bareCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCallback =
   ## Construct an AsyncCallback that fires chronos-internal scaffolding
   ## (IOCP completion repackaging, idle-loop sentinels, fd-readiness
   ## trampolines that just complete user futures). No context capture

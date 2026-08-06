@@ -1361,9 +1361,9 @@ proc idleAsync*(): Future[void] {.
 
   retFuture.cancelCallback = cancellation
   # `continuation` is an internal trampoline that doesn't read
-  # contextVars, so schedule it via `internalCallback` rather than
+  # contextVars, so schedule it via `bareCallback` rather than
   # `userCallback` to avoid needlessly capturing the caller's context.
-  callIdle(internalCallback(continuation, nil))
+  callIdle(bareCallback(continuation, nil))
   retFuture
 
 proc withTimeout*[T](fut: Future[T], timeout: Duration): Future[bool] {.

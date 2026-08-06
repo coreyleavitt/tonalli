@@ -27,7 +27,7 @@ export deques, effects, errors, timer, results
 # (`callbacks`/`idlers`/`ticks`) and is not itself part of the public
 # surface, mirroring `./mpsc`'s `MpscQueue` just below.
 #
-# `userCallback`/`internalCallback`/`newCancelCallback`/
+# `userCallback`/`bareCallback`/`newCancelCallback`/
 # `currentAsyncContext`/`context`/`withRestoredContext`/`pinContext`/
 # `captureContextInto` are dispatcher-internal and excluded here so
 # plain `import chronos` doesn't expose them; `import
@@ -36,7 +36,7 @@ export deques, effects, errors, timer, results
 # since they're already publicly nameable via the `AsyncCallback` alias
 # and `InternalFutureBase.internalCancelcb*`; only the capturing
 # constructors need excluding.
-export futures except userCallback, internalCallback, newCancelCallback,
+export futures except userCallback, bareCallback, newCancelCallback,
   currentAsyncContext, context, withRestoredContext, pinContext,
   captureContextInto
 
@@ -117,7 +117,7 @@ template SentinelCallback(): AsyncCallback =
   ## is a `ref` field: Nim 2.x rejects `const` of an object containing
   ## a `ref` field, and a module-level `let` is gcsafe-inaccessible
   ## from dispatcher procs like `poll`.
-  internalCallback(sentinelCallbackImpl, nil)
+  bareCallback(sentinelCallbackImpl, nil)
 
 proc isSentinel(acb: AsyncCallback): bool =
   acb == SentinelCallback
@@ -153,11 +153,11 @@ template processThreadCallbacks(loop) =
       # starve the rest of the pipeline if the callbacks themselves keep adding
       # stuff
       #
-      # `internalCallback`: the scheduling site was on another thread whose
+      # `bareCallback`: the scheduling site was on another thread whose
       # context (thread-local GC memory) cannot be captured here — the
       # callback fires with an empty context.
       loop.callbacks.addLast(
-        internalCallback(node.callback, node.udata)
+        bareCallback(node.callback, node.udata)
       )
       deallocShared(node)
 
@@ -775,7 +775,7 @@ elif defined(windows):
         # empty context: CompletionData.cb is registered without capture.
         # Fail-closed - bindings from other tasks can never leak in. See
         # docs/src/contextvars.md.
-        let acb = internalCallback(customOverlapped.data.cb,
+        let acb = bareCallback(customOverlapped.data.cb,
                                    cast[pointer](customOverlapped))
         loop.callbacks.addLast(acb)
       else:
@@ -806,7 +806,7 @@ elif defined(windows):
 
     when not chronosStrictReentrancy:
       # All callbacks done, skip `processCallbacks` at start.
-      loop.callbacks.addFirst(SentinelCallback)
+      loop.callbacks.prependNoGrow(SentinelCallback)
 
   proc closeSocket*(fd: AsyncFD, aftercb: CallbackFunc = nil) =
     ## Closes a socket and ensures that it is unregistered.
@@ -1296,7 +1296,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
 
     when not chronosStrictReentrancy:
       # All callbacks done, skip `processCallbacks` at start.
-      loop.callbacks.addFirst(SentinelCallback)
+      loop.callbacks.prependNoGrow(SentinelCallback)
 
 else:
   proc initAPI() = discard
@@ -1486,7 +1486,7 @@ proc internalCallTick*(acb: AsyncCallback) =
   ## Schedule ``acb`` to be called after all scheduled callbacks, but only
   ## when OS system queue finished processing events. Caller-supplied
   ## AsyncCallback - caller decides whether to use `userCallback` or
-  ## `internalCallback`.
+  ## `bareCallback`.
   getThreadDispatcher().ticks.addLast(acb)
 
 proc internalCallTick*(cbproc: CallbackFunc, data: pointer) =
@@ -1495,10 +1495,10 @@ proc internalCallTick*(cbproc: CallbackFunc, data: pointer) =
   ## is treated as an internal trampoline. Use
   ## `internalCallTick(userCallback(cb, data))` to opt into capture.
   doAssert(not isNil(cbproc))
-  internalCallTick(internalCallback(cbproc, data))
+  internalCallTick(bareCallback(cbproc, data))
 
 proc internalCallTick*(cbproc: CallbackFunc) =
-  internalCallTick(internalCallback(cbproc, nil))
+  internalCallTick(bareCallback(cbproc, nil))
 
 proc runForever*() =
   ## Begins a never ending global dispatcher poll loop.

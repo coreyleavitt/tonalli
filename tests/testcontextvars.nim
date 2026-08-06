@@ -1,3 +1,11 @@
+#                Chronos Test Suite
+#            (c) Copyright 2018-Present
+#         Status Research & Development GmbH
+#
+#              Licensed under either of
+#  Apache License, version 2.0, (LICENSE-APACHEv2)
+#              MIT license (LICENSE-MIT)
+
 ## Behavior tests for chronos's continuation-local storage primitive.
 ## See docs at chronos/contextvars.nim and docs/src/contextvars.md.
 
