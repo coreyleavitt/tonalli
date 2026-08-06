@@ -8,17 +8,16 @@
 
 ## Continuation-local storage (contextvars) cost benchmark.
 ##
-## Self-certifying, both-worlds design (RFC 0001 D6): every metric below
-## runs twice in the *same* compiled binary, in the *same* process --
-## once with the feature unused (no binder ever pushed, so the
-## dispatcher's context guard always observes a nil ambient context) and
-## once with a `contextVar` bound around the hot loop (a live binding
-## chain the guard must save and restore). Each metric prints both
-## numbers and the delta directly. A reviewer runs one command and sees
-## both worlds in a single log; there is no cross-checkout diffing and
-## no risk of unrelated inter-commit drift contaminating the comparison.
+## Self-certifying, both-worlds design: every metric below runs twice in
+## the *same* compiled binary, in the *same* process -- once with the
+## feature unused (no binder ever pushed, so the dispatcher's context
+## guard always observes a nil ambient context) and once with a
+## `contextVar` bound around the hot loop (a live binding chain the
+## guard must save and restore). Each metric prints both numbers and
+## the delta directly, so a single run shows both worlds with no
+## cross-checkout diffing needed.
 ##
-## Bias controls (RFC 0001 D6):
+## Bias controls:
 ## - median-of-`Trials` per phase, computed automatically (sort the
 ##   sample array, take the middle element) -- never a manual best-of-3;
 ## - `GC_fullCollect()` runs before and after every phase, including the
@@ -29,45 +28,39 @@
 ##   carryover masquerade as signal.
 ##
 ## Chain-depth ladder: `contextVar` arms are compile-time macro
-## emissions -- there is no runtime-parametrized "chain of depth N", and
-## the chain-link privacy guardrail (see testcontextvarsguardrails.nim)
-## forecloses hand-building chain nodes outside the macro. The ladder is
-## therefore a fixed, hand-declared set of arms (`chain1` .. `chain16`)
-## composed by a small compile-time unrolling macro (`withChainDepth`)
-## rather than a parametrized sweep. Reading `chain1` at depth D walks D
-## nodes: `chain1`'s binder is the outermost (and therefore oldest, and
-## therefore furthest-from-head) of the nested `with` blocks, so it is
-## the worst-case lookup for that depth.
+## emissions -- there is no runtime-parametrized "chain of depth N", so
+## the ladder is a fixed, hand-declared set of arms (`chain1` ..
+## `chain16`) composed by a small compile-time unrolling macro
+## (`withChainDepth`) rather than a parametrized sweep. Reading `chain1`
+## at depth D walks D nodes: `chain1`'s binder is the outermost (and
+## therefore oldest, furthest-from-head) of the nested `with` blocks, so
+## it is the worst-case lookup for that depth.
 ##
 ## Timing method: `getMonoTime().ticks` differences are used directly as
-## nanoseconds rather than going through `Duration`. This is the
-## round-1 prototype's approach, valid because Nim's `std/monotimes` on
-## POSIX is backed by `clock_gettime(CLOCK_MONOTONIC)`, whose `ticks`
-## field is already nanoseconds -- true for every platform this
-## benchmark runs on (container, Linux). It also sidesteps a name clash
-## between chronos's own `Duration`/`milliseconds` (chronos/timer.nim,
-## needed for `sleepAsync`) and `std/times`'s identically-named symbols.
+## nanoseconds rather than going through `Duration`. This is valid
+## because Nim's `std/monotimes` on POSIX is backed by
+## `clock_gettime(CLOCK_MONOTONIC)`, whose `ticks` field is already
+## nanoseconds. It also sidesteps a name clash between chronos's own
+## `Duration`/`milliseconds` (chronos/timer.nim, needed for
+## `sleepAsync`) and `std/times`'s identically-named symbols.
 ##
-## Cross-commit protocol (base-vs-series comparison; PR-description
-## material, not reproduced by a single run of this file):
+## Cross-commit protocol (base-vs-series comparison; not reproduced by
+## a single run of this file):
 ##   1. Check out base commit b71392a into a second worktree, e.g.
 ##      `build/base` (`build/` is gitignored, so this file header is the
-##      durable record of the procedure -- nothing under `build/`
-##      persists across a clean checkout).
+##      durable record of the procedure).
 ##   2. Build and run this same bench file identically in both
 ##      checkouts, once per memory manager:
 ##      `nim c -d:release --mm:<orc|refc> --skipParentCfg --skipUserCfg
 ##      --outdir:build --nimcache:build/nimcache/$projectName
 ##      benchmarks/bench_contextvars.nim`.
 ##   3. Diff the two logs by hand. This file's own "unused" arm is the
-##      series' intra-commit before/after datapoint; the base checkout's
+##      intra-commit before/after datapoint; the base checkout's
 ##      (single-world, no contextvars code present) numbers are the
 ##      pre-substrate datapoint. Together they give the full
-##      base -> series-unused -> series-bound progression that RFC 0001
-##      S1 records in §1.
+##      base -> series-unused -> series-bound progression.
 ## This file performs step 2 for a single checkout only; steps 1 and 3
-## are manual, repeated once per slice that touches the dispatcher
-## (S3-S6 per RFC 0001 §6).
+## are manual.
 ##
 ## Run via `nimble benchmarks` (release, both benchmarks/bench_*.nim) or
 ## directly:
@@ -145,9 +138,9 @@ proc medianInt(samples: var seq[int]): int =
 
 proc benchMedian(trials: int, fn: proc(): float {.closure.}): float =
   ## Run `fn` `trials` times, `GC_fullCollect`ing before and after every
-  ## trial (not only around the memory metrics -- RFC 0001 D6), and
-  ## return the median. `fn` is expected to return its own ns/op figure
-  ## already normalized by iteration count.
+  ## trial (not only around the memory metrics), and return the median.
+  ## `fn` is expected to return its own ns/op figure already normalized
+  ## by iteration count.
   var samples = newSeq[float](trials)
   for i in 0 ..< trials:
     GC_fullCollect()
@@ -166,7 +159,7 @@ proc benchMedianInt(trials: int, fn: proc(): int {.closure.}): int =
 var worldOrderBoundFirst = false
   ## Toggled by every `runBothWorlds`/`runBothWorldsInt` call so a fixed
   ## unused-then-bound order cannot make warm-allocator/branch-predictor
-  ## carryover systematic across metrics (RFC 0001 D6).
+  ## carryover systematic across metrics.
 
 proc reportFloat(name: string, unused, bound: float) =
   let delta = if unused == 0.0: 0.0 else: (bound - unused) / unused * 100.0
@@ -309,20 +302,16 @@ proc benchMemPendingFutureBound(n: int): int =
 # `callSoon` always schedules onto the *one* per-thread dispatcher's
 # `Deque[AsyncCallback]` (chronos/internal/asyncengine.nim) -- there is
 # no public constructor for a standalone `AsyncCallback` seq to measure
-# in isolation (deliberate: only `userCallback`/`internalCallback` can
-# build one, per D0's capture-discipline guardrails). A deque's backing
-# buffer capacity only grows, never shrinks, so measuring this metric
-# repeatedly (median-of-N) or back-to-back for both worlds on the same
-# thread collapses to ~0 bytes/op after the first measurement warms the
-# capacity -- an artifact of amortized growth, not signal (confirmed:
-# an earlier draft of this file measured 0 B/op for both worlds here,
-# for exactly this reason). Both worlds instead each get a freshly
-# spawned OS thread, which chronos gives its own per-thread dispatcher
-# (`{.threadvar.}`-rooted, same mechanism the cross-thread work in
-# #694 relies on) starting from the same pristine initial capacity, so
-# the two measurements are apples-to-apples. Single-shot per world (no
-# median-of-N) is therefore the correct, not merely convenient, method
-# for this one metric.
+# in isolation. A deque's backing buffer capacity only grows, never
+# shrinks, so measuring this metric repeatedly (median-of-N) or
+# back-to-back for both worlds on the same thread collapses to ~0
+# bytes/op after the first measurement warms the capacity -- an
+# artifact of amortized growth, not signal. Both worlds instead each
+# get a freshly spawned OS thread, which chronos gives its own
+# per-thread dispatcher (`{.threadvar.}`-rooted) starting from the same
+# pristine initial capacity, so the two measurements are apples-to-
+# apples. Single-shot per world (no median-of-N) is therefore the
+# correct, not merely convenient, method for this one metric.
 
 var queuedCallbackMemResult: int
   ## Written by `queuedCallbackMemThread` on its own thread, read on the
@@ -408,7 +397,7 @@ proc runReport() =
   echo &"chronos contextvars benchmark -- mm={mmName} release={defined(release)}"
   echo ""
 
-  echo "-- struct sizes (reconciles RFC 0001 Sec.1 struct math) --"
+  echo "-- struct sizes --"
   echo &"sizeof(AsyncCallback):        {sizeof(AsyncCallback)} bytes"
   block:
     let sizeofProbe = newFuture[void]("sizeof-probe")

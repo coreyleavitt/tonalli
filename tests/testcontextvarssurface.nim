@@ -9,8 +9,6 @@
 ## modules directly (it needs them for white-box checks), which would
 ## make every `declared()` check below trivially true. This module
 ## imports ONLY the public paths so the checks mean what they say.
-##
-## See docs/src/contextvars.md §Capture discipline.
 
 import unittest2
 import ../chronos
@@ -62,8 +60,8 @@ when declared(AsyncContextToken):
 # futures` (asyncengine -> asyncloop -> chronos) does not forward it.
 when declared(ContextNodeBase):
   {.error: "`ContextNodeBase` must not be reachable via `import chronos` " &
-           "or `import chronos/contextvars`. See docs/src/contextvars.md " &
-           "§Capture discipline.".}
+           "or `import chronos/contextvars`. See docs/src/contextvars.md, " &
+           "'Capture discipline'.".}
 
 when declared(nextNode):
   {.error: "`nextNode` (chain traversal getter) must not leak through " &
@@ -120,8 +118,7 @@ when declared(newCancelCallback):
            "`export futures`, and is used by `cancelCallback=` only — " &
            "otherwise plain `import chronos` code could manufacture an " &
            "`InternalCancelCallback` and assign it directly to " &
-           "`internalCancelcb`, bypassing `cancelCallback=`'s discipline " &
-           "(RFC 0001 D5).".}
+           "`internalCancelcb`, bypassing `cancelCallback=`'s discipline.".}
 
 when declared(withRestoredContext):
   {.error: "`withRestoredContext` must not leak through the public API. " &
@@ -138,7 +135,7 @@ when declared(pinContext):
 
 when declared(captureContextInto):
   {.error: "`captureContextInto` must not leak through the public API. " &
-           "It lives in chronos/futures.nim (RFC 0001 D8's shared " &
+           "It lives in chronos/futures.nim (the shared " &
            "construction-discipline template), excluded from " &
            "`asyncengine.nim`'s `export futures`, and is used by " &
            "`userCallback`/`newCancelCallback` only — a reachable capture " &
@@ -146,12 +143,12 @@ when declared(captureContextInto):
            "`currentAsyncContext` into arbitrary fields, bypassing the " &
            "construction discipline entirely.".}
 
-# --- RFC 0001 D9: dispatcher queue fields and their backing type -------------
+# --- Dispatcher queue fields and their backing type ---------------------------
 #
 # `DispatcherBase.callbacks`/`idlers`/`ticks` were privatized when their
 # type swapped from `std/deques.Deque` to the move-based `CallbackQueue`
 # (`chronos/internal/callbackqueue.nim`) — the type swap grazed all three
-# fields either way, so D9 closes off external access at the same time
+# fields either way, so external access is closed off at the same time
 # (all touch sites live inside `chronos/internal/asyncengine.nim` and
 # `chronos/internal/asyncfutures.nim`'s `callSoon`-routed call).
 # `getThreadDispatcher()` (this module's only way to reach a live
@@ -161,23 +158,23 @@ when declared(captureContextInto):
 static:
   doAssert not compiles(getThreadDispatcher().callbacks),
     "`DispatcherBase.callbacks` must not be readable via `import chronos` " &
-    "— it is private to chronos/internal/asyncengine.nim (RFC 0001 D9)."
+    "— it is private to chronos/internal/asyncengine.nim."
   doAssert not compiles(getThreadDispatcher().idlers),
     "`DispatcherBase.idlers` must not be readable via `import chronos` " &
-    "— it is private to chronos/internal/asyncengine.nim (RFC 0001 D9)."
+    "— it is private to chronos/internal/asyncengine.nim."
   doAssert not compiles(getThreadDispatcher().ticks),
     "`DispatcherBase.ticks` must not be readable via `import chronos` " &
-    "— it is private to chronos/internal/asyncengine.nim (RFC 0001 D9)."
+    "— it is private to chronos/internal/asyncengine.nim."
 
 when declared(CallbackQueue):
-  {.error: "`CallbackQueue` (RFC 0001 D9) must not leak through the " &
+  {.error: "`CallbackQueue` must not leak through the " &
            "public API. It backs the privatized `callbacks`/`idlers`/" &
            "`ticks` dispatcher fields and has no public-facing purpose " &
            "— unlike `std/deques.Deque` before it, which stayed exported " &
            "only because the fields it backed were themselves public.".}
 
-# `context` is `InternalAsyncCallback`'s (and, since RFC 0001 D5,
-# `InternalCancelCallback`'s) read-only getter — both declared in
+# `context` is `InternalAsyncCallback`'s (and `InternalCancelCallback`'s)
+# read-only getter — both declared in
 # `chronos/futures.nim`, used by the dispatcher's `fireWithContext` and
 # `fireCancelCallback` respectively. It has no user-facing purpose: the
 # value it returns is `ContextNodeBase`, which this file already
@@ -197,7 +194,7 @@ static:
   doAssert not compiles(default(InternalCancelCallback).context),
     "`InternalCancelCallback`'s `context` getter must not leak through " &
     "the public API either — same exclusion, same reasoning, used by " &
-    "the dispatcher's `fireCancelCallback` only (RFC 0001 D5)."
+    "the dispatcher's `fireCancelCallback` only."
 
 # --- A trivial runtime assertion to keep the test file unittest-recognized ---
 

@@ -33,39 +33,20 @@ type
     udata: pointer
     context: ContextNodeBase
       ## Continuation-local context captured at scheduling time. A
-      ## native `ref` field: Nim's MM (refc/orc/arc) refcounts capture
-      ## at construction and release on every drop pattern (assignment
-      ## overwrite, seq element removal, future GC'd with pending
-      ## callbacks, deque popFirst) without manual `GC_ref`/`GC_unref`.
-      ## Nil for callbacks scheduled outside any binding, and for
-      ## chronos-internal trampolines that don't fire user code.
+      ## native `ref` field: Nim's MM refcounts it at construction and
+      ## releases it on every drop, no manual `GC_ref`/`GC_unref`
+      ## needed. Nil for callbacks scheduled outside any binding, and
+      ## for chronos-internal trampolines that don't fire user code.
       ##
-      ## `SentinelCallback` is a zero-arg `template` (not `const` —
-      ## Nim 2.x rejects `const` of an object containing a `ref` field,
-      ## and a module-level `let` is gcsafe-inaccessible from `poll`).
-      ## `isSentinel` uses full struct equality; the comparison is
-      ## unambiguous because `sentinelCallbackImpl` is a private,
-      ## unexported proc that no legitimate caller can place in an
-      ## AsyncCallback.
+      ## `SentinelCallback` (asyncengine.nim) must be a `template`, not
+      ## `const`: Nim 2.x rejects `const` of an object containing a
+      ## `ref` field, and a module-level `let` is gcsafe-inaccessible
+      ## from `poll`.
       ##
-      ## `function`/`udata`/`context` are private to this module —
+      ## `function`/`udata`/`context` are private to this module -
       ## only `userCallback`/`internalCallback` below can construct an
-      ## `InternalAsyncCallback`, and no other module can mutate the
-      ## fields after the fact. This is the compile-time replacement
-      ## for the capture-coverage discipline (every scheduling site
-      ## must pick a constructor); see the getters and constructors
-      ## further down and docs/src/contextvars.md §Capture discipline.
+      ## `InternalAsyncCallback`.
 
-  # RFC 0001 D5: `internalCancelcb` doesn't need `InternalAsyncCallback`'s
-  # full three-field shape. Every construction site (`newCancelCallback`
-  # below, and the no-capture site in `internalInitFutureBase`) stores
-  # exactly `cast[pointer](future)` for the future the field lives on,
-  # and the fire site (`fireCancelCallback` in `asyncfutures.nim`)
-  # already has `future` in scope to derive that pointer itself — so
-  # `udata` is provably redundant here. `InternalAsyncCallback` keeps
-  # all three fields unchanged: it's shared with `internalCallback`/
-  # `internalCallbacks`, whose `udata` is a genuinely arbitrary caller
-  # pointer.
   InternalCancelCallback* = object
     function: CallbackFunc
     context: ContextNodeBase
@@ -179,37 +160,21 @@ func context*(acb: InternalCancelCallback): ContextNodeBase {.inline.} =
 
 # --- Continuation-local context: dispatcher-facing primitives ---------------
 #
-# `currentAsyncContext` and the two-constructor split live here (rather
-# than `chronos/internal/contextvars_impl.nim`) because they construct
-# `InternalAsyncCallback` values directly and need access to its
-# private fields — same-module access is the only way in. `contextvars_
-# impl.nim` and `chronos/internal/asyncengine.nim`/`asyncfutures.nim`
-# use them via plain `import ../futures`; `asyncengine.nim`'s `export
-# futures` explicitly excludes these names so they don't leak
-# through `import chronos`. See docs/src/contextvars.md §Capture
-# discipline.
-#
-# `withRestoredContext`/`pinContext` below are placed here for a
-# different reason: `ContextNodeBase` is deliberately unnameable outside
-# modules that import `contextnode.nim` directly (a pinned security
-# property, see `testcontextvarssurface.nim`), and `asyncengine.nim`
-# reaches the type only by inference — a typed `newCtx: ContextNodeBase`
-# parameter does not compile there. They belong beside their partner
-# `currentAsyncContext` regardless; see docs/src/contextvars.md §Capture
-# discipline.
+# `ContextNodeBase` is deliberately unnameable outside modules that
+# import `contextnode.nim` directly; `asyncengine.nim` reaches it only
+# by inference, so `currentAsyncContext`, the constructors below, and
+# `withRestoredContext`/`pinContext` all live here rather than in
+# `chronos/internal/contextvars_impl.nim`.
 
 var currentAsyncContext* {.threadvar.}: ContextNodeBase
   ## Per-thread head of the binding chain. Chronos is single-thread-
   ## per-dispatcher, so this is effectively per-dispatcher.
 
 template captureContextInto*(dest: var ContextNodeBase) =
-  ## D8's construction discipline: capture the ambient context into a
-  ## field of a FRESHLY DECLARED local — never an object literal, never
-  ## `result`. The guard costs one predicted branch; on orc it
-  ## additionally elides the ref-copy call outright when no binder is
-  ## live (cost proportional to use). Do not "simplify" callers back
-  ## to object literals: that reintroduces refc's reset-then-assign
-  ## barrier doubling that S8's abort gate caught (RFC 0001 D8).
+  ## Capture the ambient context into `dest`. Call only on a freshly
+  ## declared local, never an object literal field or `result` -
+  ## otherwise refc's reset-then-assign copy-out doubles the
+  ## write-barrier cost of every callback construction.
   if not isNil(currentAsyncContext):
     dest = currentAsyncContext
 
@@ -222,44 +187,23 @@ template userCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCallba
   ## Use at every site that schedules user code: `addCallback`,
   ## `callSoon(cb, data)`, `setTimer`, `addReader`/`addWriter`/
   ## `addSignal`/`addProcess`, `callIdle`,
-  ## `closeSocket(fd, aftercb)`/`closeHandle(fd, aftercb)`.
+  ## `closeSocket(fd, aftercb)`/`closeHandle(fd, aftercb)`. Use
+  ## `internalCallback` instead for chronos-internal trampolines that
+  ## don't read contextVars.
   ##
-  ## NOT for `internalCallTick`'s `CallbackFunc` overloads or other
-  ## chronos-internal trampolines (sentinel handlers, `idleAsync`'s
-  ## completion stub, IOCP completion repackaging) — those use
-  ## `internalCallback` to avoid needlessly capturing the caller's
-  ## context. The downstream user-visible callbacks (awaiters on the
-  ## future the trampoline completes) carry their own captured context
-  ## via their original `addCallback` site.
+  ## `internalContinue` (the iterator-pump resume trampoline scheduled
+  ## by `futureContinue`) also goes through this constructor rather
+  ## than `internalCallback` - the capture is load-bearing, carrying
+  ## the iterator's per-yield context across suspension.
   ##
-  ## Deliberate exception: `internalContinue` (the iterator-pump
-  ## resume trampoline scheduled by `futureContinue`) goes through
-  ## `addCallback` and therefore `userCallback`. The capture is
-  ## load-bearing — it's what carries the iterator's per-yield
-  ## context across suspension. See docs §Spawn-time inheritance.
+  ## Must be a template, not a proc returning by value: constructs
+  ## into a fresh local in the caller's frame via `captureContextInto`
+  ## (see its doc comment for why).
   ##
-  ## Lifetime: `context` is a native `ref` field. Nim's MM refcounts
-  ## the captured chain at assignment and releases it on every drop
-  ## pattern (assignment overwrite, seq element removal, future GC'd
-  ## with pending callbacks, deque popFirst) — no manual `GC_ref` /
-  ## `GC_unref` or `releaseCallbackContext` calls needed.
-  ##
-  ## Template (not proc), constructing into a fresh local in the
-  ## caller's frame — RFC 0001 D8: a `proc` returning this by value
-  ## forces refc's reset-then-assign copy-out through the hidden return
-  ## slot (four write-barrier calls per construction, two of them
-  ## provably-dead nil-over-nil work, paid on every callback whether or
-  ## not any `contextVar` is ever bound). The fresh local plus
-  ## `captureContextInto`'s guard restores refc's original zero-barrier
-  ## construction and, on orc, elides the context ref-copy call
-  ## entirely in the unbound case.
-  ##
-  ## Param is named `ud` (not `udata`) for the same reason as
-  ## `internalCallback` below: template substitution rewrites every
-  ## matching identifier in the body, including the field name after a
-  ## dot (`acb.udata`) — with a `udata` param that would try to
-  ## substitute the field access itself. See `internalCallback`'s
-  ## comment for the full explanation.
+  ## Param is named `ud`, not `udata`: template substitution rewrites
+  ## every matching identifier in the body, including the field name
+  ## after a dot (`acb.udata`) - a `udata` param would try to
+  ## substitute the field access itself.
   var acb: InternalAsyncCallback
   acb.function = fn
   acb.udata = ud
@@ -276,36 +220,26 @@ template internalCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCa
   ## own captured context via `userCallback` at their original
   ## `addCallback`/`callSoon` site.
   ##
-  ## Template (not proc) so it composes into other templates
-  ## without a gcsafe issue — chiefly `SentinelCallback` in
-  ## `asyncengine.nim`, which has to be a template itself (Nim 2.x
+  ## Must be a template so it composes into `SentinelCallback` in
+  ## `asyncengine.nim`, which also has to be a template (Nim 2.x
   ## rejects `const` of an object containing a `ref` field, and a
   ## module-level `let` is gcsafe-inaccessible from `poll`).
   ##
-  ## Param is named `ud` (not `udata`) because Nim's template
-  ## substitution applies to identifiers anywhere in the body — including
-  ## the LHS of `field: value` in object constructors. With a `udata`
-  ## param, the body's `udata: ud` would expand to `<value>: <value>`
-  ## (both sides substituted), failing with "identifier expected" —
-  ## e.g. when this template is called as
-  ## `internalCallback(sentinelImpl, nil)` from `SentinelCallback`.
+  ## Param is named `ud`, not `udata`: template substitution applies to
+  ## identifiers anywhere in the body, including the LHS of
+  ## `field: value` in the object constructor below - a `udata` param
+  ## would expand `udata: ud` to `<value>: <value>` and fail to
+  ## compile.
   InternalAsyncCallback(function: fn, udata: ud, context: nil)
 
 template newCancelCallback*(fn: CallbackFunc): InternalCancelCallback =
   ## Construct the value stored in `internalCancelcb`. Captures the
-  ## current continuation-local context at construction — `userCallback`'s
-  ## discipline, sized to what cancel callbacks actually need: no `udata`
-  ## field, since the fire site (`fireCancelCallback` in
-  ## `asyncfutures.nim`) already has the owning future in scope and
-  ## derives `cast[pointer](future)` itself instead of storing a
-  ## redundant copy (RFC 0001 D5).
-  ##
-  ## Template (not proc), same construction discipline as `userCallback`
-  ## above (RFC 0001 D8): a fresh local in the caller's frame plus
-  ## `captureContextInto`'s guard, instead of a by-value proc whose
-  ## return-slot copy-out doubles refc's write-barrier count. No `ud`
-  ## rename needed here — `InternalCancelCallback` has no `udata` field
-  ## for the substitution gotcha to collide with.
+  ## current continuation-local context at construction, same
+  ## discipline as `userCallback` - the handler must observe the
+  ## context bound when `cancelCallback=` was called, not whatever's
+  ## ambient when it fires. No `udata` field: the fire site
+  ## (`fireCancelCallback` in `asyncfutures.nim`) already has the
+  ## owning future in scope and derives `cast[pointer](future)` itself.
   var cb: InternalCancelCallback
   cb.function = fn
   captureContextInto(cb.context)
@@ -361,15 +295,9 @@ proc internalInitFutureBase*(fut: FutureBase, loc: ptr SrcLoc,
     # cancellations
     proc raiseNonCancellable(_: pointer) =
       raiseAssert "Cancellation request for non-cancellable future"
-    # No-capture construction, same-module and direct (RFC 0001 D5):
-    # not a second named constructor next to `newCancelCallback` — a
-    # `Cancel`-infixed pair here would be the name-based-split footgun
-    # rejected for `userCallback`/`internalCallback`'s composition (D3).
-    # RFC 0001 D8: targeted field write, not a whole-struct literal —
-    # `fut` is a just-allocated, provably-fresh `Future[T]()` at every
-    # call site (traced in round 3), so `context` is already nil from
-    # the allocator's zero-fill; writing it again would only reinstate
-    # the reset-then-assign barrier doubling D8 removes elsewhere.
+    # `fut` is freshly allocated, so `internalCancelcb.context` is
+    # already nil from the allocator's zero-fill - write only the
+    # `function` field rather than a whole-struct literal.
     fut.internalCancelcb.function = raiseNonCancellable
 
   if state != FutureState.Pending:

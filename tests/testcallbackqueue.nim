@@ -1,15 +1,15 @@
-## Freestanding test suite for `chronos/internal/callbackqueue.nim` (RFC
-## 0001 D9). Deliberately independent of the contextvars feature and its
-## test files: `CallbackQueue[T]` is a general-purpose dispatcher
-## substrate (it backs `callbacks`/`idlers`/`ticks`, none of which are
+## Freestanding test suite for `chronos/internal/callbackqueue.nim`.
+## Deliberately independent of the contextvars feature and its test
+## files: `CallbackQueue[T]` is a general-purpose dispatcher substrate
+## (it backs `callbacks`/`idlers`/`ticks`, none of which are
 ## contextvars-specific), so its coverage must not require the
 ## contextvars suite either to build or to make sense standing alone.
 ##
-## Top pin (currently zero coverage anywhere): growth triggered
-## mid-drain, by a callback reentrantly scheduling more work while the
-## pop cursor (`head`) has already advanced past the queue's start —
-## exactly the shape `asyncengine.nim`'s default (non-strict-reentrancy)
-## drain protocol allows (`callSoon` from inside a firing callback).
+## Includes coverage for growth triggered mid-drain, by a callback
+## reentrantly scheduling more work while the pop cursor (`head`) has
+## already advanced past the queue's start — exactly the shape
+## `asyncengine.nim`'s default (non-strict-reentrancy) drain protocol
+## allows (`callSoon` from inside a firing callback).
 
 import unittest2
 import ../chronos/internal/callbackqueue
@@ -37,7 +37,7 @@ proc drain(q: var CallbackQueue[TestItem]): seq[int] =
 
 suite "CallbackQueue: basic semantics":
   test "zero-value queue is valid and empty":
-    # RFC 0001 D9: the zero value must be a usable, empty queue with no
+    # The zero value must be a usable, empty queue with no
     # `initCallbackQueue` call — `asyncengine.nim`'s POSIX `ticks` field
     # relies on exactly this (never explicitly constructed).
     var q: CallbackQueue[TestItem]
@@ -63,7 +63,7 @@ suite "CallbackQueue: basic semantics":
 
   test "initCallbackQueue rounds capacity up to a power of two":
     # Not directly observable through the public interface (no `cap`
-    # accessor — by design, D9's interface is exactly five entry points),
+    # accessor — by design the interface is exactly five entry points),
     # so this exercises the rounding indirectly: a queue requested with a
     # non-power-of-two initial capacity must still accept at least that
     # many items without growing prematurely in a way that corrupts order.
@@ -91,7 +91,7 @@ suite "CallbackQueue: basic semantics":
     check q.popFirst().tag == 2
 
   test "sentinel field fidelity through moves (full-struct value, not identity)":
-    # RFC 0001 D9: the sentinel is compared by full-struct VALUE
+    # The sentinel is compared by full-struct VALUE
     # (`isSentinel` in asyncengine.nim), so a move-based queue owes field
     # fidelity, not pointer identity of the AsyncCallback struct itself —
     # but the `ref` field it carries (`context`, mirrored here by
@@ -163,23 +163,17 @@ suite "CallbackQueue: growth":
     check popped == @[3, 4, 5, 6, 7, 8]
 
   test "repeated growth cycles preserve ref-field values under memory pressure":
-    # RFC 0001 S11 (mutation-testing layer): `grow()`'s two `zeroMem` calls
-    # are not cosmetic -- dropping either one leaves a stale, un-zeroed slot
-    # in the OLD backing array; when that old seq's destructor later runs,
-    # it decrefs the (already-relocated) `ref` field a SECOND time (the
-    # real `grow()`'s own doc comment states this explicitly). A single
-    # growth event, as in the tests above, does not reliably surface this
-    # -- the corruption depends on the freed memory being reused before the
+    # `grow()`'s two `zeroMem` calls are not cosmetic -- dropping either
+    # one leaves a stale, un-zeroed slot in the OLD backing array; when
+    # that old seq's destructor later runs, it decrefs the
+    # (already-relocated) `ref` field a SECOND time (the real `grow()`'s
+    # own doc comment states this explicitly). A single growth event, as
+    # in the tests above, does not reliably surface this -- the
+    # corruption depends on the freed memory being reused before the
     # stale reference is read again. Repeated growth cycles interleaved
     # with unrelated heap allocations (to encourage prompt reuse of
     # whatever `grow()` just freed) give the corruption many more chances
-    # to manifest, so this closes a real gap: it is the only test in this
-    # upstream-bound suite that reliably catches a dropped-`zeroMem`-class
-    # regression in `grow()`. (RFC 0001 S11's fork-only fuzz+leak harness,
-    # `verify/fuzz_leak.nim`, also catches this mutant class -- with a
-    # SIGSEGV after tens of thousands of growth cycles under refc -- but
-    # this pin makes the same regression visible to a plain `nimble test`
-    # run with no proptest/z3 dependency.)
+    # to manifest.
     var q = initCallbackQueue[TestItem](2)
     var expected: seq[int]
     var popped: seq[int]
@@ -208,7 +202,7 @@ suite "CallbackQueue: growth":
 
     check popped == expected
 
-  test "growth during reentrant drain across capacity boundaries (top pin)":
+  test "growth during reentrant drain across capacity boundaries":
     # The exact shape `asyncengine.nim`'s default drain protocol allows:
     # a callback fires (via popFirst, `head` already advanced past the
     # queue's start) and, before the batch finishes, reentrantly
@@ -288,8 +282,8 @@ suite "CallbackQueue: integrity under unwind":
 
 suite "CallbackQueue: raw-access guardrail":
   test "private fields do not compile from outside the module":
-    # RFC 0001 D9 guardrail: `data`/`head`/`tail` are private; every touch
-    # must go through the five public entry points.
+    # `data`/`head`/`tail` are private; every touch must go through the
+    # five public entry points.
     check(not compiles(block:
       var q: CallbackQueue[TestItem]
       discard q.data))

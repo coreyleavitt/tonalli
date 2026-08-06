@@ -88,10 +88,9 @@ suite "contextvars: declaration + scoped binding":
     check tracerInt() == 0
 
   test "sequential repeated binding of the same var":
-    # docs §Test plan: bind X, exit, bind X again. Distinct from the
-    # nested-binding test (which proves LIFO restore for overlapping
-    # binds) — this proves that the binder is re-entrant cleanly
-    # after a full unwind.
+    # Bind X, exit, bind X again. Distinct from the nested-binding test
+    # (which proves LIFO restore for overlapping binds) — this proves
+    # that the binder is re-entrant cleanly after a full unwind.
     withTracerInt(1):
       check tracerInt() == 1
     check tracerInt() == 0

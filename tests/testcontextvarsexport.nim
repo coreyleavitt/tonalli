@@ -1,12 +1,11 @@
 ## Cross-module test for the `contextVar` macro's export-marker
-## semantics (H2): `var name*: T = v` must produce an exported
-## reader/binder pair, while `var name: T = v` (no star) must produce
-## a module-private pair that is unreachable from an importing module.
+## semantics: `var name*: T = v` must produce an exported reader/binder
+## pair, while `var name: T = v` (no star) must produce a module-private
+## pair that is unreachable from an importing module.
 ##
-## Uses a real second module (`contextvarshelper.nim`) rather
-## than same-module `declared()` checks, because the defect only
-## manifests across module boundaries — same-module code can always
-## see both public and private symbols.
+## Uses a real second module (`contextvarshelper.nim`) rather than
+## same-module `declared()` checks, since visibility only differs
+## across module boundaries.
 
 import unittest2
 import ./contextvarshelper

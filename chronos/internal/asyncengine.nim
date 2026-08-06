@@ -23,35 +23,19 @@ import ./[asyncmacro, callbackqueue, errors]
 
 export Port
 export deques, effects, errors, timer, results
-# `CallbackQueue` (RFC 0001 D9) backs the three privatized dispatcher
-# queues below (`callbacks`/`idlers`/`ticks`) and is not itself part of
-# the public surface — no exported proc or field returns or accepts one,
-# mirroring `./mpsc`'s `MpscQueue` just below (also imported, never
-# exported: `threadCallbacks` is private for the same reason). Pinned by
-# `tests/testcontextvarssurface.nim`.
+# `CallbackQueue` backs the three privatized dispatcher queues below
+# (`callbacks`/`idlers`/`ticks`) and is not itself part of the public
+# surface, mirroring `./mpsc`'s `MpscQueue` just below.
+#
 # `userCallback`/`internalCallback`/`newCancelCallback`/
-# `currentAsyncContext`/`context`/`withRestoredContext`/`pinContext` are
-# dispatcher-internal (see `chronos/futures.nim` §Continuation-local
-# context) — excluded here so plain `import chronos` doesn't expose
-# them. Direct `import chronos/internal/asyncengine` or `import
-# chronos/futures` still see them, which is what `contextvars_impl.nim`
-# and this module's own code rely on.
-#
-# `InternalAsyncCallback`/`InternalCancelCallback` themselves stay
-# exported: their fields are privacy-protected (see the guardrails in
-# `testcontextvarsguardrails.nim`), `InternalAsyncCallback` is already
-# publicly nameable via the `AsyncCallback` alias below, and
-# `InternalFutureBase`'s `internalCancelcb*` field forces
-# `InternalCancelCallback` to be nameable the same way. Only the
-# capturing *constructors* — the things that would let plain `import
-# chronos` code manufacture a value to poke into that field, bypassing
-# `cancelCallback=`'s discipline — need excluding.
-#
-# Contributor note: any new dispatcher-internal symbol added to
-# `chronos/futures.nim`'s §Continuation-local context section must be
-# added to this exclusion list AND to the negative assertions in
-# `tests/testcontextvarssurface.nim`, or it leaks through
-# plain `import chronos`.
+# `currentAsyncContext`/`context`/`withRestoredContext`/`pinContext`/
+# `captureContextInto` are dispatcher-internal and excluded here so
+# plain `import chronos` doesn't expose them; `import
+# chronos/internal/asyncengine` or `import chronos/futures` still see
+# them. `InternalAsyncCallback`/`InternalCancelCallback` stay exported
+# since they're already publicly nameable via the `AsyncCallback` alias
+# and `InternalFutureBase.internalCancelcb*`; only the capturing
+# constructors need excluding.
 export futures except userCallback, internalCallback, newCancelCallback,
   currentAsyncContext, context, withRestoredContext, pinContext,
   captureContextInto
@@ -108,14 +92,9 @@ type
 
   DispatcherBase = object of RootRef
     timers*: HeapQueue[TimerCallback]
-    # RFC 0001 D9: `CallbackQueue` (`./callbackqueue`), not `std/deques` —
-    # `std/deques.popFirst` pays refc's hidden-return-slot lowering on
-    # every dequeue (see `callbackqueue.nim`'s module doc). Privatized
-    # (no `*`): every touch site lives in this module (inventory-verified;
-    # `chronos/internal/asyncfutures.nim`'s one out-of-module site was
-    # rerouted through the public `callSoon` proc as part of this change),
-    # so there is nothing for external code to reach here. Pinned by
-    # `tests/testcontextvarssurface.nim`.
+    # `CallbackQueue` (./callbackqueue), not `std/deques`: avoids the
+    # refc hidden-return-slot cost `std/deques.popFirst` pays on every
+    # dequeue. Privatized - every touch site lives in this module.
     callbacks: CallbackQueue[AsyncCallback]
     idlers: CallbackQueue[AsyncCallback]
     ticks: CallbackQueue[AsyncCallback]
@@ -134,14 +113,10 @@ proc sentinelCallbackImpl(arg: pointer) {.gcsafe, noreturn.} =
 
 template SentinelCallback(): AsyncCallback =
   ## Sentinel value placed in the callbacks deque to delimit a batch.
-  ## A `template` (not `const` or `let`) because `AsyncCallback.context`
-  ## is now a `ref` field. Two Nim constraints rule out the alternatives:
-  ## (1) Nim 2.x rejects `const` of an object containing a `ref` field;
-  ## (2) a `let` with a `ref` field is gcsafe-inaccessible from
-  ## dispatcher procs like `poll`. The template emits a fresh rvalue
-  ## at each call site with `context: nil` — no global GC'd state to
-  ## read, gcsafe-clean. Struct-equality `isSentinel` below remains
-  ## valid because nil-ref comparison is pointer equality.
+  ## A `template`, not `const` or `let`, because `AsyncCallback.context`
+  ## is a `ref` field: Nim 2.x rejects `const` of an object containing
+  ## a `ref` field, and a module-level `let` is gcsafe-inaccessible
+  ## from dispatcher procs like `poll`.
   internalCallback(sentinelCallbackImpl, nil)
 
 proc isSentinel(acb: AsyncCallback): bool =
@@ -250,18 +225,14 @@ template processTicks(loop: untyped) =
     loop.callbacks.addLast(loop.ticks.popFirst())
 
 template fireWithContext(callable: untyped) =
-  # Continuation-local context: restore the bindings captured at the
-  # callback's scheduling site (via `userCallback`), with an identity
-  # fast path when the ambient context already matches
-  # (`withRestoredContext`, chronos/futures.nim §Continuation-local
-  # context). `callable` going out of scope at loop-iteration end drops
-  # the last ref to the captured chain (if any); Nim's MM frees it.
+  # Restore the context captured at the callback's scheduling site
+  # (via `userCallback`), with an identity fast path when the ambient
+  # context already matches.
   withRestoredContext(callable.context):
-    # `callable.function` and `.udata` are UFCS calls to the getters in
-    # `futures.nim` (the fields are private) — `callable.function(callable.udata)`
-    # would parse as a 2-arg UFCS call on the getter, not "call the
-    # function value with udata". Parenthesize to force the intended
-    # read-then-call.
+    # `callable.function`/`.udata` are UFCS calls to private-field
+    # getters in `futures.nim` - parenthesize `callable.function` so it
+    # parses as "call the function value with udata", not a 2-arg UFCS
+    # call on the getter.
     (callable.function)(callable.udata)
 
 template processCallbacksBody(loop: untyped) =
@@ -281,16 +252,11 @@ template processCallbacksBody(loop: untyped) =
         fireWithContext(callable)
 
 template processCallbacks(loop: untyped) =
-  # Batch-boundary debug net (D0, RFC 0001 §3): every callback batch must
-  # exit with the same ambient context it entered with. The snapshot is a
-  # per-invocation local — never a module global — because `poll()` calls
-  # this template from more than one site, and a nested `waitFor` inside a
-  # running callback legally re-enters it with a non-nil ambient context;
-  # a global snapshot would compare against the wrong invocation's
-  # baseline. try/finally (not a trailing statement) so the assert also
-  # runs on the Defect-unwind exit path. Wraps the whole body, outside
-  # the `chronosStrictReentrancy` fork in `processCallbacksBody`, so the
-  # net is branch-agnostic.
+  # Debug-only net: every callback batch must exit with the same
+  # ambient context it entered with. The snapshot is a per-invocation
+  # local, not a module global, because a nested `waitFor` inside a
+  # running callback can legally re-enter this template with a
+  # different ambient context.
   when defined(chronosDebug):
     let chronosDebugPreBatch = currentAsyncContext
     try:
@@ -805,21 +771,10 @@ elif defined(windows):
             else:
               OSErrorCode(rtlNtStatusToDosError(res))
         customOverlapped.data.bytesCount = events[i].dwNumberOfBytesTransferred
-        # TODO(contextvars): IOCP completion path loses registration-time
-        # context. `CompletionData.cb` is stored as a bare `CallbackFunc`
-        # (no context captured at `registerWaitable` time), then wrapped
-        # here via `internalCallback`, which stores an empty context that
-        # `fireWithContext` installs around the invocation. User
-        # callbacks scheduled via `addProcess2`/`addSignal2` on Windows
-        # therefore fire with an EMPTY context rather than the
-        # registrant's — fail-closed: propagation is missing, but another
-        # task's bindings can never leak in.
-        #
-        # Fix requires adding a `context: ContextNodeBase` field to
-        # `CompletionData`, capturing in `registerWaitable`, restoring
-        # here before invoking `cb`. Deferred — no Windows CI available
-        # to verify. Linux epoll/kqueue path is correct.
-        # Documented in docs §Migration / compatibility.
+        # Windows waitable callbacks (addProcess2/addSignal2) fire with an
+        # empty context: CompletionData.cb is registered without capture.
+        # Fail-closed - bindings from other tasks can never leak in. See
+        # docs/src/contextvars.md.
         let acb = internalCallback(customOverlapped.data.cb,
                                    cast[pointer](customOverlapped))
         loop.callbacks.addLast(acb)
@@ -935,12 +890,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       timers: initHeapQueue[TimerCallback](),
       callbacks: initCallbackQueue[AsyncCallback](chronosInitialSize),
       idlers: initCallbackQueue[AsyncCallback](),
-      # `ticks` is deliberately left at its zero value here, not
-      # explicitly constructed — see `CallbackQueue`'s module doc: the
-      # zero value is a valid, empty queue with lazy first-grow, exactly
-      # the property `std/deques` provided before RFC 0001 D9. Preserved
-      # rather than "fixed", and pinned by a test
-      # (`tests/testcallbackqueue.nim`).
+      # `ticks` is deliberately left at its zero value - `CallbackQueue`'s
+      # zero value is already a valid, empty queue that grows lazily.
       keys: newSeq[ReadyKey](chronosInitialSize),
       trackers: initTable[string, TrackerBase](),
       counters: initTable[string, TrackerCounter](),
@@ -1010,11 +961,11 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     let loop = getThreadDispatcher()
     var newEvents = {Event.Read}
     withData(loop.selector, cint(fd), adata) do:
-      # Assignment overwrite fires =destroy on the prior reader, which
-      # releases its captured context. Re-arming is leak-safe.
-      # `let` temp (RFC 0001 D8): the destination is an existing heap
-      # field, not a fresh local, so `userCallback`'s template expansion
-      # alone doesn't get refc's write-barrier elision here.
+      # Assignment overwrite fires =destroy on the prior reader,
+      # releasing its captured context - re-arming is leak-safe.
+      # Assign via a temp: the destination is an existing heap field,
+      # not a fresh local, so direct assignment misses the
+      # write-barrier elision `userCallback` relies on.
       let acb = userCallback(cb, udata)
       adata.reader = acb
       if not(isNil(adata.writer.function)):
@@ -1043,9 +994,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     let loop = getThreadDispatcher()
     var newEvents = {Event.Write}
     withData(loop.selector, cint(fd), adata) do:
-      # `let` temp (RFC 0001 D8): see the mirror-image `addReader2` site
-      # above for why the destination being an existing heap field
-      # matters here.
+      # Assign via a temp: same write-barrier-elision reason as
+      # `addReader2` above.
       let acb = userCallback(cb, udata)
       adata.writer = acb
       if not(isNil(adata.reader.function)):
@@ -1178,7 +1128,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       var data: SelectorData
       let sigfd = ? loop.selector.registerSignal(signal, data)
       withData(loop.selector, sigfd, adata) do:
-        # `let` temp (RFC 0001 D8): see `addReader2`'s comment.
+        # Assign via a temp: same write-barrier-elision reason as
+        # `addReader2` above.
         let acb = userCallback(cb, udata)
         adata.reader = acb
       do:
@@ -1197,7 +1148,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       var data: SelectorData
       let procfd = ? loop.selector.registerProcess(pid, data)
       withData(loop.selector, procfd, adata) do:
-        # `let` temp (RFC 0001 D8): see `addReader2`'s comment.
+        # Assign via a temp: same write-barrier-elision reason as
+        # `addReader2` above.
         let acb = userCallback(cb, udata)
         adata.reader = acb
       do:
@@ -1206,9 +1158,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
 
     proc removeSignal2*(signalHandle: SignalHandle): Result[void, OSErrorCode] =
       ## Remove watching signal ``signal``.
-      # SelectorData drop on unregister2 cascades destruction of
-      # adata.reader's AsyncCallback, whose =destroy releases the
-      # captured context — no explicit release needed here.
+      # SelectorData drop on unregister2 cascades =destroy onto
+      # adata.reader's AsyncCallback, releasing its captured context.
       getThreadDispatcher().selector.unregister2(cint(signalHandle))
 
     proc removeProcess2*(procHandle: ProcessHandle): Result[void, OSErrorCode] =
@@ -1381,8 +1332,8 @@ proc setTimer*(at: Moment, cb: CallbackFunc,
   loop.timers.push(result)
 
 proc clearTimer*(timer: TimerCallback) {.inline.} =
-  # Struct overwrite releases the captured context ref via the same
-  # Nim MM machinery as every other `field = default(T)` site.
+  # Overwrite releases the captured context ref, same as any other
+  # `field = default(T)` site.
   timer.function = default(AsyncCallback)
 
 proc addTimer*(at: Moment, cb: CallbackFunc, udata: pointer = nil) {.
@@ -1489,11 +1440,9 @@ when hasThreadSupport:
     doAssert(not isNil(cbproc))
     let current = gDisp.handle() # Don't init a new dispatcher with getThreadDispatcher()
     if distinctBase(current) == distinctBase(disp):
-      # Same thread: add directly to the callbacks deque. This is a
-      # user-facing scheduling site equivalent to `callSoon(cbproc, udata)`,
-      # so capture the current context. (The cross-thread branch below fires
-      # with an empty context — the caller's context is not reachable from
-      # the target thread.)
+      # Same thread: add directly to the callbacks deque, capturing
+      # context like `callSoon`. The cross-thread branch below fires
+      # with an empty context - unreachable from the target thread.
       distinctBase(current).callbacks.addLast(userCallback(cbproc, udata))
     else:
       # Cross-thread: enqueue to shared MPSC queue
@@ -1536,22 +1485,15 @@ proc callIdle*(cbproc: CallbackFunc) =
 proc internalCallTick*(acb: AsyncCallback) =
   ## Schedule ``acb`` to be called after all scheduled callbacks, but only
   ## when OS system queue finished processing events. Caller-supplied
-  ## AsyncCallback — caller decides whether to use `userCallback` or
-  ## `internalCallback`. The convenience `CallbackFunc` overloads below
-  ## treat the schedule as internal (no context capture).
+  ## AsyncCallback - caller decides whether to use `userCallback` or
+  ## `internalCallback`.
   getThreadDispatcher().ticks.addLast(acb)
 
 proc internalCallTick*(cbproc: CallbackFunc, data: pointer) =
   ## Schedule ``cbproc`` to be called after all scheduled callbacks when
-  ## OS system queue processing is done. Treated as an internal trampoline
-  ## (no context capture) — `internalCallTick` is named "internal" and is
-  ## used by `checktick`, `stepsAsync` etc. `cbproc` itself doesn't read
-  ## contextVars; where it fires a downstream user-visible callback (e.g.
-  ## `checktick`'s `tryCancel` invoking `internalCancelcb`), that callback
-  ## carries its own context captured at ITS registration site and fires
-  ## through its own capture/restore, independent of `cbproc`'s (lack of)
-  ## capture here. Use `internalCallTick(userCallback(cb, data))` to opt
-  ## into capture explicitly if needed.
+  ## OS system queue processing is done. No context capture - `cbproc`
+  ## is treated as an internal trampoline. Use
+  ## `internalCallTick(userCallback(cb, data))` to opt into capture.
   doAssert(not isNil(cbproc))
   internalCallTick(internalCallback(cbproc, data))
 

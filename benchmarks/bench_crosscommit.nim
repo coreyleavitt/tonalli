@@ -6,37 +6,33 @@
 #  Apache License, version 2.0, (LICENSE-APACHEv2)
 #              MIT license (LICENSE-MIT)
 
-## Cross-commit comparison harness (RFC 0001 D6, promoted at S8 from the
-## round-1 prototype that lived at `build/bench.nim`).
+## Cross-commit comparison harness.
 ##
 ## **Base-compatibility requirement.** This file imports plain `chronos`
 ## only -- nothing from `chronos/contextvars` -- so it compiles and runs
 ## *unmodified* against both the pinned pre-substrate base (b71392a) and
 ## any commit in this series. That property is deliberate, not
 ## incidental: the intra-commit harness (`bench_contextvars.nim`) can
-## only measure a delta *within* one checkout (RFC 0001 D6's "structural
-## blind spot" -- any cost paid identically by both its unused/bound
-## arms cancels out of that comparison, no matter how large). Only a
-## true cross-commit run, same file, same flags, two checkouts, catches
-## that class of regression -- it is what caught S8's original refc
-## construction-shape regression after five prior slices' intra-commit
-## benches read flat. Do not add a `chronos/contextvars` import here;
-## that would silently break comparability against the base checkout.
+## only measure a delta *within* one checkout -- any cost paid
+## identically by both its unused/bound arms cancels out of that
+## comparison, no matter how large. Only a true cross-commit run, same
+## file, same flags, two checkouts, catches that class of regression.
+## Do not add a `chronos/contextvars` import here; that would silently
+## break comparability against the base checkout.
 ##
 ## Each metric is a single-process, single-pass average over many
 ## iterations (no internal trial loop, no median-of-N) -- one run of
-## the compiled binary is one *trial*. The standing protocol (RFC 0001
-## D6) generates a distribution by running the binary itself multiple
-## times, alternating checkouts, not by looping inside the program:
+## the compiled binary is one *trial*. The standing protocol generates
+## a distribution by running the binary itself multiple times,
+## alternating checkouts, not by looping inside the program:
 ##
 ##   1. Check out base commit b71392a into a second worktree, e.g.
 ##      `build/base` (`build/` is gitignored, so this file's header is
-##      the durable record of the procedure -- nothing under `build/`
-##      persists across a clean checkout). Caution: plain `git` commands
-##      run *inside* `build/base` report the outer worktree's HEAD (the
-##      checkout has no `.git` of its own) -- verify the snapshot by
-##      diffing files against `git show b71392a:<path>`, never by
-##      `git log` from within it.
+##      the durable record of the procedure). Caution: plain `git`
+##      commands run *inside* `build/base` report the outer worktree's
+##      HEAD (the checkout has no `.git` of its own) -- verify the
+##      snapshot by diffing files against `git show b71392a:<path>`,
+##      never by `git log` from within it.
 ##   2. Build this file identically in both checkouts, once per memory
 ##      manager, with the base-compat rule (import plain `chronos` only)
 ##      guaranteeing it compiles unmodified in `build/base`:
@@ -56,13 +52,11 @@
 ##      head/base ratio are reported for trend only and never gate by
 ##      themselves (this container's documented ~30% same-code swings
 ##      make a bare ratio threshold fragile at these sample sizes).
-##      Struct-size and memory rows are context, pinned independently by
-##      guardrails, never part of the distributional test.
+##      Struct-size and memory rows are context, never part of the
+##      distributional test.
 ##
 ## This file performs one trial for a single checkout/MM combination;
-## steps 1 and 3's repetition and interleaving are external to it, done
-## once per slice that touches the dispatcher's construction or fire
-## sites (S3-S6, S8 per RFC 0001 §6) and reported in RFC §1.
+## steps 1 and 3's repetition and interleaving are external to it.
 ##
 ## Run via `nimble benchmarks` (release, both benchmarks/bench_*.nim) or
 ## directly:

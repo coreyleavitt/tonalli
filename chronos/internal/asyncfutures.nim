@@ -189,11 +189,6 @@ proc finish(fut: FutureBase, state: FutureState, loc: ptr SrcLoc) =
   var callbacks = move(fut.internalCallbacks)
   for item in callbacks.mitems():
     if not(isNil(item.function)):
-      # RFC 0001 D8: move the item into `callSoon` rather than
-      # copy-then-reset — `move` compiles to a bitcopy plus
-      # `nimZeroMem` (zero refcount traffic under refc,
-      # codegen-verified), so the explicit `reset()` below would only
-      # re-zero an already-empty value in this arm.
       callSoon(move(item))
     else:
       item.reset() # release memory as early as possible
@@ -263,26 +258,8 @@ template cancelAndSchedule*(future: FutureBase) =
   cancelAndSchedule(future, getSrcLocation())
 
 template fireCancelCallback(future: FutureBase) =
-  # `internalCancelcb` fires through the same capture/restore
-  # discipline as every other user-facing callback (see
-  # `fireWithContext` in asyncengine.nim) - the handler must observe
-  # the context that was current when `cancelCallback=` was set, not
-  # whatever happens to be ambient when `tryCancel` runs. That ambient
-  # context varies by call site: it's the canceller's own context when
-  # `tryCancel` succeeds synchronously, and it's nil when driven by
-  # `cancelSoon`'s `checktick` retry (a context-blind internal
-  # trampoline).
-  #
-  # RFC 0001 D2: `internalCancelcb.function` is always a plain
-  # synchronous `CallbackFunc`, never a continuation pump - exit class
-  # 3 (suspend mid-binder, see `futures.nim`'s `withRestoredContext`
-  # doc comment) is unreachable here, so the identity fast path is
-  # sound with no pin needed.
-  #
-  # RFC 0001 D5: `internalCancelcb` no longer stores a `udata` pointer
-  # (dropped as provably redundant - every construction site stored
-  # exactly `cast[pointer](future)`); this fire site has `future` in
-  # scope, so it derives the pointer itself instead.
+  # Fire with the context captured when `cancelCallback=` was set, not
+  # whatever context happens to be ambient when `tryCancel` runs.
   withRestoredContext(future.internalCancelcb.context):
     (future.internalCancelcb.function)(cast[pointer](future))
 
@@ -341,9 +318,9 @@ proc addCallback*(future: FutureBase, cb: CallbackFunc, udata: pointer) =
     # `userCallback` captures the current contextVar bindings; the
     # dispatcher restores them in `processCallbacks` before firing.
     if isNil(future.internalCallback.function):
-      # `let` temp (RFC 0001 D8): `future.internalCallback` is an
-      # existing heap field, not a fresh local, so the template
-      # expansion alone doesn't get refc's write-barrier elision here.
+      # Assign via a temp: `internalCallback` is an existing heap
+      # field, not a fresh local, so direct assignment misses refc's
+      # write-barrier elision.
       let acb = userCallback(cb, udata)
       future.internalCallback = acb
     else:
@@ -401,14 +378,9 @@ proc `cancelCallback=`*(future: FutureBase, cb: CallbackFunc) =
   when chronosStrictFutureAccess:
     doAssert not future.finished(),
       "cancellation callback must be set before finishing the future"
-  # `newCancelCallback` captures the current contextVar bindings at the
-  # point `cancelCallback=` is called (registration time) - the
-  # handler must observe that context, not whatever's ambient when
-  # `tryCancel` eventually invokes it. No pointer to store: `tryCancel`
-  # (via `fireCancelCallback`) derives `cast[pointer](future)` itself at
-  # fire time (RFC 0001 D5).
-  # `let` temp (RFC 0001 D8): `future.internalCancelcb` is an existing
-  # heap field — see `addCallback`'s mirror-image comment above.
+  # `newCancelCallback` captures the current contextVar bindings at
+  # registration time - the handler must observe that context, not
+  # whatever's ambient when `tryCancel` eventually invokes it.
   let icb = newCancelCallback(cb)
   future.internalCancelcb = icb
 
@@ -422,14 +394,7 @@ proc internalContinue(fut: pointer) {.raises: [], gcsafe.} =
 
 template scheduleContinuation(fut, next: FutureBase) =
   ## Registers `internalContinue` to resume `futureContinue`'s pump over
-  ## `fut.internalClosure` once `next` completes. This is the only site
-  ## in the tree permitted to register a resume that may suspend again
-  ## mid-binder (RFC 0001 D3): the iterator can `yield` inside a
-  ## contextVar binder without running the binder's `finally` (a
-  ## suspend is a plain `return`, not an unwind), and `futureContinue`'s
-  ## `pinContext` wrap is what makes that safe. A future second pump
-  ## either reuses this helper or visibly inherits the caller-table
-  ## audit obligation D3 describes.
+  ## `fut.internalClosure` once `next` completes.
   GC_ref(fut)
   next.addCallback(CallbackFunc(internalContinue), cast[pointer](fut))
 
@@ -440,31 +405,13 @@ proc futureContinue*(fut: FutureBase) {.raises: [], gcsafe.} =
   # Every call to an `{.async.}` proc is redirected to call this function
   # instead with its original body captured in `fut.closure`.
 
-  # Continuation-local context save/restore (RFC 0001 D3): the iterator
-  # may bind contextVars internally (via macro-generated `withName`
-  # templates). When the iterator suspends mid-`withName`, its
-  # `finally` cannot run (suspension is a `return`, not an unwind), so
-  # `currentAsyncContext` is left pointing at the partially-pushed
-  # chain. `pinContext` (chronos/futures.nim) is the unconditional
-  # entry/exit guard for exactly this "body may suspend mid-binder"
-  # case — no identity fast path, ever; a raw/unguarded variant does
-  # not exist and must not be added (see D3's exit-class analysis).
-  #
-  # Coverage: this pin is load-bearing on BOTH call sites, and neither
-  # is redundant. On the INITIAL synchronous call (the async macro
-  # emits `futureContinue(retFuture)` directly in the outer proc body),
-  # there is no `processCallbacks` frame above it to restore anything.
-  # On the RESUME path (`internalContinue`, fired via `fireWithContext`
-  # from `processCallbacks`), the fire site's own guard
-  # (`withRestoredContext`) takes the identity fast arm whenever the
-  # resume's captured context already matches ambient — most commonly
-  # nil/nil, the no-bindings-anywhere case — and the fast arm performs
-  # no restore at all. Without this pin, that fast arm would leave
-  # `currentAsyncContext` pointing at whatever binder the resumed
-  # iterator suspended into, corrupting every callback still queued
-  # behind it in the same batch (the D1×D3 leak class; see the
-  # regression pin in testcontextvarsasync.nim, suite "contextvars:
-  # RFC0001 D0/D1 fast-path pins").
+  # The iterator may bind contextVars internally (via macro-generated
+  # `withName` templates). If it suspends mid-binder, the binder's
+  # `finally` doesn't run (suspension is a plain `return`, not an
+  # unwind), leaving `currentAsyncContext` pointing at a partially
+  # pushed chain unless restored. `pinContext` unconditionally saves
+  # and restores `currentAsyncContext` around this call on every entry,
+  # including resumes - there is no safe fast path to skip it.
   {.cast(gcsafe).}:
     pinContext:
       while true:
@@ -891,11 +838,6 @@ proc cancelSoon(future: FutureBase, aftercb: CallbackFunc, udata: pointer,
     # We could not schedule callback directly otherwise we could fall into
     # recursion problem.
     if not(isNil(aftercb)):
-      # RFC 0001 D9: routed through the public `callSoon` (equivalent to
-      # the prior `getThreadDispatcher().callbacks.addLast(...)`) now that
-      # `DispatcherBase.callbacks` is private to `asyncengine.nim` — this
-      # was the one touch site RFC 0001's D9 inventory missed (it lives
-      # here, not in `asyncengine.nim`).
       callSoon(userCallback(aftercb, udata))
     return
 
@@ -1418,11 +1360,9 @@ proc idleAsync*(): Future[void] {.
     discard
 
   retFuture.cancelCallback = cancellation
-  # `continuation` is an internal trampoline — it just completes the
-  # returned future, doesn't read contextVars. Schedule via
-  # `internalCallback` so we don't needlessly capture the caller's
-  # context. The downstream awaiters on `retFuture` carry their own
-  # captured context via their `addCallback` calls.
+  # `continuation` is an internal trampoline that doesn't read
+  # contextVars, so schedule it via `internalCallback` rather than
+  # `userCallback` to avoid needlessly capturing the caller's context.
   callIdle(internalCallback(continuation, nil))
   retFuture
 

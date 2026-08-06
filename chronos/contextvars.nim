@@ -22,17 +22,13 @@
 ##   `value: T` field), a reader `name()`, and a scoped binder
 ##   `withName(v): body` per arm.
 ## - `currentContext()` / `withContext(ctx, body)`: snapshot/restore for
-##   callback-style code that needs to run under a context captured
-##   earlier (synchronous-callback boundaries that don't go through
-##   `await`) — the tool for independently-fired enter/exit hooks; see
-##   docs/src/contextvars.md §Bridging independent callbacks.
+##   callback-style code that runs under a context captured earlier —
+##   e.g. independently-fired enter/exit hooks that don't go through
+##   `await`. See docs/src/contextvars.md for details.
 ##
-## Internals are NOT part of chronos's public API: `ContextNodeBase`
-## and the per-slot `contextLookup`/`contextBindSlot` primitives live
-## in `chronos/internal/contextvars_impl.nim`; the `currentAsyncContext`
-## threadvar and the dispatcher hooks `userCallback`/`internalCallback`
-## live in `chronos/futures.nim`, excluded from `asyncengine.nim`'s
-## re-export of that module so they don't leak through `import chronos`.
+## `ContextNodeBase` and the per-slot `contextLookup`/`contextBindSlot`
+## primitives are internal, living in
+## `chronos/internal/contextvars_impl.nim`.
 
 import std/[macros, strutils]
 import ./internal/contextvars_impl
@@ -43,23 +39,17 @@ type AsyncContext* = distinct ContextNodeBase
 
 proc currentContext*(): AsyncContext {.gcsafe, raises: [].} =
   ## Capture the current task's binding chain as an opaque snapshot.
-  ## Pair with `withContext(ctx, body)` to run code under that snapshot
-  ## later — used by callback-style code that fires from the dispatcher
-  ## with whatever context happens to be current and wants to restore
-  ## the context that was current at registration.
+  ## Pair with `withContext(ctx, body)` to run code later under the
+  ## context that was current at capture time — useful for
+  ## callback-style code that fires from the dispatcher outside of
+  ## `await` and needs to restore the context from registration time.
   ##
-  ## The snapshot keeps the chain alive via Nim's normal refcounting;
-  ## it remains sound after the originating binder exits, because each
-  ## slot owns its value inline (the value isn't stored at a
-  ## pointer-to-stack-local that would dangle).
+  ## The snapshot remains valid after the originating binder exits. It
+  ## is thread-affine: do not send it to, or restore it on, another
+  ## thread.
   ##
-  ## The snapshot is thread-affine: the chain is thread-local,
-  ## garbage-collected memory — do not send it to, or restore it on,
-  ## another thread. See docs/src/contextvars.md §Bridging independent
-  ## callbacks.
-  ##
-  ## Async procs awaiting futures do NOT need this — chronos's dispatcher
-  ## propagates context through `await` automatically.
+  ## Async procs awaiting futures do not need this — chronos's
+  ## dispatcher propagates context through `await` automatically.
   {.cast(gcsafe).}:
     AsyncContext(currentAsyncContext)
 
@@ -68,12 +58,10 @@ template withContext*(ctx: AsyncContext, body: untyped) =
   ## prior context on every exit path (normal, exception, including
   ## `CancelledError`).
   ##
-  ## Param names `ctx`/`body` are unprefixed (unlike the macro-emitted
-  ## `withName(chronosCtxV, chronosCtxBody)` which uses the prefix to
-  ## avoid collision with user-declared contextVar names). Nim's
-  ## template hygiene preserves identifiers inside the substituted
-  ## `body` — a user `let ctx = x; withContext(s): echo ctx` resolves
-  ## the inner `ctx` against the caller's scope, not the param.
+  ## Unlike the macro-generated `withName` (which prefixes its params
+  ## to avoid colliding with contextVar names), `ctx`/`body` use plain
+  ## names here — template hygiene still resolves identifiers inside
+  ## `body` against the caller's scope, not the param.
   let chronosCtxPrev = currentAsyncContext
   currentAsyncContext = ContextNodeBase(ctx)
   try:
@@ -90,37 +78,26 @@ macro contextVar*(body: untyped): untyped =
   ##     var currentUser: User = anonymous
   ##     var requestId: string = ""
   ##
-  ## Each arm is a `var name: T = default` declaration. (The `var`
-  ## keyword is required for parse-stability — without it, Nim's
-  ## command-with-do-block parser claims the colon and `name: T = v`
-  ## doesn't reach the macro as `nnkExprColonExpr`.)
+  ## Each arm is a `var name: T = default` declaration. The `var`
+  ## keyword is required for parse-stability: without it, Nim's
+  ## command-with-do-block parser claims the colon before the macro
+  ## sees `name: T = v` as `nnkExprColonExpr`.
   ##
   ## The arm name's `*` export marker controls the visibility of
   ## everything the arm generates: `var name*: T = default` produces
-  ## an exported reader/binder/slot type, reachable from importing
-  ## modules; `var name: T = default` (no star) produces a
-  ## module-private trio, invisible outside the declaring module. Each
-  ## arm's marker is independent — a single block may mix starred and
-  ## non-starred arms.
+  ## an exported reader/binder/slot type; `var name: T = default` (no
+  ## star) produces a module-private trio. A single block may mix
+  ## starred and non-starred arms.
   ##
   ## For each arm, generates at module scope:
   ##
   ## 1. `type NameSlot = ref object of ContextNodeBase` with `value: T`
-  ##    — fresh ref-object subtype per declaration, so distinct
-  ##    declarations can never alias each other's storage. Two modules
-  ##    each declaring identically-named context vars produce
-  ##    same-named slot types; importing both into a third module is
-  ##    legal on its own — the collision only surfaces as Nim's
-  ##    ordinary ambiguous-identifier error where the unqualified
-  ##    reader or binder is actually used, and qualified access still
-  ##    resolves each side to its own, genuinely distinct slot type.
-  ##    Leave an arm unstarred to keep it module-private and out of
-  ##    this concern entirely.
+  ##    — a fresh subtype per declaration, so distinct declarations
+  ##    never alias each other's storage.
   ## 2. `template name(): T` — reader; returns the current binding for
   ##    this task, or `default` if no binding is in scope. `default`
-  ##    is spliced into the reader and re-evaluated on every unbound
-  ##    call rather than computed once at declaration time — keep it
-  ##    cheap and side-effect-free.
+  ##    is re-evaluated on every unbound call rather than computed once
+  ##    at declaration time — keep it cheap and side-effect-free.
   ## 3. `template withName(v: T, body: untyped)` — scoped binder;
   ##    binds `v` for the dynamic extent of `body`, restores on every
   ##    exit path. The slot owns `v` inline, so a `currentContext()`
@@ -147,28 +124,10 @@ macro contextVar*(body: untyped): untyped =
       let defaultVal = identDefs[2]
       # Accept `nnkSym` alongside `nnkIdent`/`nnkPostfix` so this macro
       # composes from other macros — e.g., a wrapper that builds the
-      # arm name via `genSym` or processes typed AST. `$node`
-      # stringifies both forms; downstream `ident(...)` calls produce
-      # fresh `nnkIdent`s for the generated slot type and `withName`,
-      # so the emitted public surface uses regular identifiers
+      # arm name via `genSym`. `$node` stringifies all forms; the
+      # emitted slot type, reader, and binder always get fresh
+      # `nnkIdent`s, so the public surface is regular identifiers
       # regardless of how the arm name arrived.
-      #
-      # Caveat: when arm name arrives as a gensym'd `nnkSym` (e.g.,
-      # `genSym(nskVar, "foo")`), `$node` returns the base name
-      # ("foo"), and the emitted slot type / reader / binder all get
-      # valid Nim identifier names. However, the reader template
-      # (which uses `bareName = ident(name)` per the normalization
-      # below) is then declared into the macro-call-site scope using
-      # the same name as the gensym'd source symbol. Whether that
-      # template is reachable from external code depends on whether
-      # the gensym leaks out — which it normally doesn't, because
-      # gensym'd symbols are scoped to the producing macro. The
-      # `withName` binder is always reachable because it's named via
-      # `ident("with" & name)` which produces a fresh, exportable
-      # identifier independent of the arm-name's syntactic kind.
-      # This is by design: the nnkSym path is for advanced macro
-      # composition where the caller manages reader access via its
-      # own emission.
       if nameIdent.kind notin {nnkIdent, nnkSym, nnkPostfix}:
         error("contextVar: arm name must be an identifier (pragmas not " &
               "supported)", nameIdent)

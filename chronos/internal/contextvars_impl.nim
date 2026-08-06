@@ -1,35 +1,28 @@
 ## Continuation-local storage — per-slot lookup/bind primitives.
 ##
-## This module is NOT part of chronos's public API. Users interact via
-## `chronos/contextvars.nim` which exports only the `contextVar` macro,
-## `AsyncContext` opaque type, `currentContext()`, and `withContext()`.
-## The primitives here are imported by the macro's generated code
-## only — the dispatcher-facing pieces (`currentAsyncContext`, the
-## `userCallback`/`internalCallback` constructor split) live in
-## `chronos/futures.nim` alongside the `InternalAsyncCallback` type
-## they construct; see that module's §Continuation-local context.
+## Not part of chronos's public API: users interact via
+## `chronos/contextvars.nim`, which exports only the `contextVar`
+## macro, `AsyncContext`, `currentContext()`, and `withContext()`. The
+## primitives here are used by the macro's generated code only.
 ##
-## See `docs/src/contextvars.md` for the design rationale.
+## See `docs/src/contextvars.md` for the full design.
 ##
 ## ## Slot-typed subtype hierarchy
 ##
 ## Each `contextVar` declaration emits a fresh `ref object of
 ## ContextNodeBase` subtype with a `value: T` field. The chain is a
 ## linked list of `ContextNodeBase`; the macro-generated reader walks
-## the chain with `if node of FooSlot: return FooSlot(node).value`.
-## The slot owns the value inline — no pointer-to-stack-local, so
+## it with `if node of FooSlot: return FooSlot(node).value`. The slot
+## owns the value inline — no pointer-to-stack-local — so
 ## `currentContext()` snapshots remain sound after the originating
 ## binder exits.
 
 import ../futures
 import ./contextnode
 export ContextNodeBase
-# `currentAsyncContext` itself is declared in `chronos/futures.nim`;
-# re-exported (not re-declared) here so `chronos/contextvars.nim` can
-# reach it via this module alone, same as `ContextNodeBase` above.
-# `futures` itself is never `export`ed onward from here — only this
-# one symbol is forwarded — so this does not widen what's reachable
-# via `import chronos/contextvars`.
+# `currentAsyncContext` is declared in `chronos/futures.nim`; only
+# this one symbol is re-exported here (not all of `futures`), so this
+# does not widen `chronos/contextvars`'s public surface.
 export currentAsyncContext
 
 when defined(chronosDebug):
@@ -81,21 +74,16 @@ template contextBindSlot*[N: ContextNodeBase; T](v: T, body: untyped) =
   ##
   ## INTERNAL — invoked by macro-generated binders.
   ##
-  ## Hygiene: the local `chronosCtxPrev` `let` binding is auto-
-  ## gensym'd by Nim's standard template hygiene (no `{.dirty.}`),
-  ## so nesting this template inside `withContext` (which uses the
-  ## same name) is safe — each expansion gets a unique binding.
-  ## The macro-emitted `withName` template's PARAMETERS
-  ## (`chronosCtxV`, `chronosCtxBody`) are NOT gensym'd — those
-  ## use the `chronosCtx` prefix to minimize collision risk with
-  ## user-code identifiers inside the body.
+  ## Hygiene: `chronosCtxPrev` is gensym'd by Nim's standard template
+  ## hygiene, so nesting this inside `withContext` (same local name) is
+  ## safe. The macro-emitted `withName`'s parameters (`chronosCtxV`,
+  ## `chronosCtxBody`) are NOT gensym'd — they use the `chronosCtx`
+  ## prefix instead to avoid colliding with user code in `body`.
   let chronosCtxPrev = currentAsyncContext
-  # Construction and linking are split: `value` is private to the slot
-  # type's declaring module (settable here because this template expands
-  # under that module's macro-emitted binder), while `next` is private
-  # to `contextnode.nim` and writable only through `linkNode`. The node
-  # is allocated before any global state changes, so an allocation
-  # failure cannot leave a half-pushed chain.
+  # `value` is settable here (this template expands under the slot
+  # type's declaring module); `next` is only settable via `linkNode`.
+  # Allocating before mutating global state means an allocation
+  # failure can't leave a half-pushed chain.
   let chronosCtxNode = N(value: v)
   linkNode(chronosCtxNode, chronosCtxPrev)
   currentAsyncContext = chronosCtxNode

@@ -75,10 +75,10 @@ suite "contextvars: async propagation":
     check b == 200
 
   test "multiple value types coexist on same context chain across await":
-    # docs §Test plan. Two distinct contextVars of different value
-    # types bound on the same chain; both must remain visible after
-    # an await (proving the slot-typed subtype lookup correctly
-    # picks each one by type, not by position in the chain).
+    # Two distinct contextVars of different value types bound on the
+    # same chain; both must remain visible after an await (proving the
+    # slot-typed subtype lookup correctly picks each one by type, not
+    # by position in the chain).
     proc work(): Future[(int, string)] {.async: (raises: [Exception]).} =
       check asyncInt() == 42
       check asyncStr() == "tracer"
@@ -210,7 +210,7 @@ suite "contextvars: async propagation":
     check waitFor(driver()) == 0
 
   test "CancelledError caught inside withName sees the binding":
-    # docs §Test plan: `withCurrentUser(authed): try: await work()
+    # `withCurrentUser(authed): try: await work()
     # except CancelledError: check currentUser() == authed`. Unlike the
     # test above (where `try/except` is OUTSIDE the binder and the
     # binding has reverted by the time the handler runs), here the
@@ -299,7 +299,6 @@ suite "contextvars: scheduling-site capture coverage":
     check seenBinding == 0
 
   test "callIdle callback fires with the registrant's binding":
-    # docs §Test plan: each user-facing scheduler captures correctly.
     # `callIdle(cbproc, data)` wraps via `userCallback`; the idle
     # callback fires under the registrant's context.
     var seenBinding = -1
@@ -322,14 +321,12 @@ suite "contextvars: scheduling-site capture coverage":
     # `addReader`/`addWriter`/`addSignal2`/`addProcess2` on arbitrary
     # fds/pids are POSIX-selector APIs; on Windows the equivalents go
     # through IOCP paths with different registration surfaces (and the
-    # signal/process waitable path is the documented empty-context gap,
-    # docs §Migration / compatibility).
+    # signal/process waitable path is the documented empty-context gap).
 
     test "addReader callback fires with the registrant's binding":
-      # Realistic use case (docs §Test plan): register an fd-readiness
-      # callback inside a `withName` block, fire it via write, verify the
-      # callback sees the binding. Exercises `addReader2`'s `userCallback`
-      # wiring end-to-end.
+      # Register an fd-readiness callback inside a `withName` block, fire
+      # it via write, verify the callback sees the binding. Exercises
+      # `addReader2`'s `userCallback` wiring end-to-end.
       var seenBinding = -1
       var fired = false
       let (rfd, wfd) = createAsyncPipe()
@@ -439,9 +436,9 @@ suite "contextvars: scheduling-site capture coverage":
         check seenBinding == 789
 
   test "race() resolver fires with the awaiter's binding":
-    # docs §Test plan: combinators propagate context to their
-    # continuations. `race(fa, fb)` installs callbacks on each future;
-    # the resolver fires when the first completes, then the awaiter
+    # Combinators propagate context to their continuations.
+    # `race(fa, fb)` installs callbacks on each future; the resolver
+    # fires when the first completes, then the awaiter
     # of `race()`'s returned future resumes — under the awaiter's
     # context, not whichever child task completed first.
     proc child(value: int, delayMs: int): Future[int] {.async: (raises: [Exception]).} =
@@ -465,9 +462,9 @@ suite "contextvars: scheduling-site capture coverage":
     check waitFor(driver()) == 111
 
   test "allFutures() continuation fires with the awaiter's binding":
-    # docs §Test plan: `allFutures(fa, fb)` waits for both; the awaiter's
-    # binding must be visible after the combinator resolves, not one
-    # of the child task's bindings.
+    # `allFutures(fa, fb)` waits for both; the awaiter's binding must
+    # be visible after the combinator resolves, not one of the child
+    # task's bindings.
     proc child(value: int): Future[int] {.async: (raises: [Exception]).} =
       withAsyncInt(value):
         await sleepAsync(1.milliseconds)
@@ -563,10 +560,10 @@ suite "contextvars: scheduling-site capture coverage":
     check waitFor(driver()) == 61
 
   test "closeHandle aftercb fires with the registrant's binding":
-    # docs §Test plan. On Linux, `closeHandle` forwards to
-    # `closeSocket`; on Windows it has its own IOCP path. Pinned
-    # separately from `closeSocket` so a future divergence between
-    # the two doesn't silently lose context propagation on either.
+    # On Linux, `closeHandle` forwards to `closeSocket`; on Windows it
+    # has its own IOCP path. Tested separately from `closeSocket` so a
+    # future divergence between the two doesn't silently lose context
+    # propagation on either.
     var seenBinding = -1
     var fired = false
     let (rfd, wfd) = createAsyncPipe()
@@ -584,10 +581,10 @@ suite "contextvars: scheduling-site capture coverage":
 
   test "closeSocket aftercb fires with the registrant's binding":
     # `closeSocket(fd, aftercb)` schedules `aftercb` after the close.
-    # Per docs §Capture discipline, the scheduling site uses `userCallback`
-    # so the callback fires under the context bound at close-call time.
-    # Regression guard against drift to `internalCallback` (which would
-    # drop the caller's context).
+    # The scheduling site uses `userCallback` so the callback fires
+    # under the context bound at close-call time. Regression guard
+    # against drift to `internalCallback` (which would drop the
+    # caller's context).
     var seenBinding = -1
     var fired = false
     let (rfd, wfd) = createAsyncPipe()
@@ -606,9 +603,9 @@ suite "contextvars: scheduling-site capture coverage":
 suite "contextvars: bridging independent callbacks":
 
   test "currentContext()/withContext() bridges independent callbacks":
-    # docs §Bridging independent callbacks: an enter hook and a
-    # separately-fired exit hook (no await or shared call stack between
-    # them) are not a single logical task, so no binder can span them -
+    # An enter hook and a separately-fired exit hook (no await or
+    # shared call stack between them) are not a single logical task,
+    # so no binder can span them -
     # the dispatcher restores the context it captured at each
     # callback's own scheduling time around every invocation
     # (`fireWithContext` in chronos/internal/asyncengine.nim). The
@@ -711,17 +708,16 @@ suite "contextvars: cancelCallback capture":
     check fired
     check fut.cancelled()
 
-  test "cancelCallback fast arm fires cleanly while an unrelated task is parked mid-binder elsewhere (D2 fast-arm interleave pin)":
-    # RFC 0001 D2: `fireCancelCallback`'s fast arm (identity
-    # `withRestoredContext`) must observe exactly its own captured
-    # context, undisturbed by an unrelated task parked mid-`await`
-    # inside its own binder elsewhere on the same dispatcher - and must
-    # leave the ambient context clean for that task's eventual resume.
-    # The parked task's own suspend already restores ambient context to
-    # nil before returning here (D3's pin, independent of D2); this
-    # test pins that D2's converted fast path does not reintroduce a
-    # leak by observing or clobbering that restored nil state.
-    let parkedWaiter = newFuture[void]("d2.parked-waiter")
+  test "cancelCallback fast arm fires cleanly while an unrelated task is parked mid-binder elsewhere":
+    # `fireCancelCallback`'s fast arm (identity `withRestoredContext`)
+    # must observe exactly its own captured context, undisturbed by an
+    # unrelated task parked mid-`await` inside its own binder elsewhere
+    # on the same dispatcher - and must leave the ambient context clean
+    # for that task's eventual resume. The parked task's own suspend
+    # already restores ambient context to nil before returning here;
+    # this test verifies that the fast path does not reintroduce a leak
+    # by observing or clobbering that restored nil state.
+    let parkedWaiter = newFuture[void]("parked-waiter")
     var parkedObserved = -2
 
     proc parked(): Future[void] {.async: (raises: [Exception]).} =
@@ -732,11 +728,11 @@ suite "contextvars: cancelCallback capture":
     let parkedFut = parked()        # runs synchronously to the await;
                                      # suspended mid-binder, ambient
                                      # context already restored to nil
-                                     # on return (D3's pin)
+                                     # on return
     check asyncInt() == 0           # confirms no leak from `parked`'s entry
 
     var fired = false
-    let fut = newFuture[void]("d2.cancel-future")
+    let fut = newFuture[void]("cancel-future")
     fut.cancelCallback = proc(_: pointer) {.gcsafe, raises: [].} =
       check asyncInt() == 0         # own captured (nil) context, not 777
       fired = true
@@ -750,16 +746,14 @@ suite "contextvars: cancelCallback capture":
     waitFor parkedFut
     check parkedObserved == 777     # parked's own binding, undisturbed
 
-suite "contextvars: RFC0001 D0/D1 fast-path pins":
+suite "contextvars: fast-path pins":
   # These tests pin the observable contract `withRestoredContext`/
   # `fireWithContext` must hold across both the identity fast arm (no
   # writes to `currentAsyncContext`) and the slow arm (write + restore).
   # They are regression guards, not drivers of a behavior change - the
-  # dispatcher already restored context correctly before D0/D1 (via the
-  # unconditional save/restore `fireWithContext` used to perform
-  # directly); D0/D1 only add the identity short-circuit. All three are
-  # expected green against the dispatcher both before and after the D0/D1
-  # refactor. See RFC 0001 §3 D0/D1, §6 S3.
+  # dispatcher already restores context correctly via the identity
+  # short-circuit on the fast arm and unconditional save/restore on the
+  # slow arm.
 
   test "interleaved fast/slow-arm callbacks in one poll batch each observe their own context":
     # `withRestoredContext` takes the identity fast arm when the
@@ -790,9 +784,9 @@ suite "contextvars: RFC0001 D0/D1 fast-path pins":
     check seen == @[0, 11, 0, 22, 33, 0]
 
   test "bind-and-raise on the fast arm leaves the ambient context clean after the batch":
-    # Fast-arm coverage for exit class 2 (raise), RFC 0001 §3 D1. The
-    # callback below is scheduled with no ambient binder, so its
-    # captured (nil) context equals the ambient (nil) context at fire
+    # Fast-arm coverage for exit class 2 (raise). The callback below is
+    # scheduled with no ambient binder, so its captured (nil) context
+    # equals the ambient (nil) context at fire
     # time - `withRestoredContext`'s identity fast arm, which runs
     # `body` directly with no `try`/`finally` of its own. `CallbackFunc`
     # is `raises: []`, so the raiser must be a `Defect` to escape the
@@ -806,7 +800,7 @@ suite "contextvars: RFC0001 D0/D1 fast-path pins":
     # `-d:chronosDebug`), not the oracle for this test.
     proc raiser(udata: pointer) {.gcsafe, raises: [].} =
       withAsyncInt(999):
-        doAssert false, "contextvars S3(b): intentional Defect to " &
+        doAssert false, "contextvars: intentional Defect to " &
                          "exercise the fast-arm raise path"
 
     callSoon(raiser, nil)
@@ -818,21 +812,19 @@ suite "contextvars: RFC0001 D0/D1 fast-path pins":
     check caught
     check asyncInt() == 0
 
-  test "nil-captured resume through a suspended binder leaves the ambient context clean for a later same-batch callback (D1 x D3 leak-repro pin)":
-    # RFC 0001 D3: `internalContinue`'s resume must restore
-    # `currentAsyncContext` even when the resumed slice suspends AGAIN
-    # inside a binder before returning control to the dispatcher (an
-    # iterator `yield` inside a `withName` block is a plain return -
-    # `contextBindSlot`'s `finally` does not run for it). Without that
-    # restore, D1's fast arm at the OUTER fire (identity nil == nil)
-    # would leave the threadvar pointing at the binder's node for every
-    # callback still queued behind it in the same batch.
-    # `futureContinue`'s own unconditional save/restore is the
-    # load-bearing net (present independently of D0/D1); this test pins
-    # the observable end-to-end behavior rather than the mechanism, so
-    # it stays valid across the S5 refactor onto `pinContext`.
-    let outerWaiter = newFuture[void]("s3.leak-repro.outer")
-    let innerWaiter = newFuture[void]("s3.leak-repro.inner")
+  test "nil-captured resume through a suspended binder leaves the ambient context clean for a later same-batch callback":
+    # `internalContinue`'s resume must restore `currentAsyncContext`
+    # even when the resumed slice suspends AGAIN inside a binder before
+    # returning control to the dispatcher (an iterator `yield` inside a
+    # `withName` block is a plain return - `contextBindSlot`'s `finally`
+    # does not run for it). Without that restore, the OUTER fire's fast
+    # arm (identity nil == nil) would leave the threadvar pointing at
+    # the binder's node for every callback still queued behind it in
+    # the same batch. `futureContinue`'s own unconditional save/restore
+    # is the load-bearing net; this test pins the observable end-to-end
+    # behavior rather than the mechanism.
+    let outerWaiter = newFuture[void]("leak-repro.outer")
+    let innerWaiter = newFuture[void]("leak-repro.inner")
     var innerObserved = -1
     var laterSeenBinding = -1
     var laterFired = false
@@ -860,13 +852,12 @@ suite "contextvars: RFC0001 D0/D1 fast-path pins":
     check innerObserved == 999
     check fut.finished()
 
-suite "contextvars: RFC0001 S7 scenario pins":
-  # RFC 0001 §6 S7 + §3 D1's "two transitive patterns" note. Each test here
-  # pins currently-correct behavior against a scenario not exercised by the
-  # earlier suites (nested reentrancy, cross-thread isolation, capture on a
-  # finished future, and the stream-server transitive-fire-site coverage
-  # named but not tested in D1). Green from the start by design - these are
-  # regression pins, not drivers of a behavior change.
+suite "contextvars: scheduling scenario pins":
+  # Each test here pins currently-correct behavior against a scenario
+  # not exercised by the earlier suites (nested reentrancy, cross-thread
+  # isolation, capture on a finished future, and the stream-server
+  # transitive-fire-site coverage). Green from the start by design -
+  # these are regression pins, not drivers of a behavior change.
 
   test "nested waitFor inside a running callback observes its own binding and leaves the outer callback's context intact":
     # Reentrancy x fast path. `waitFor` from inside a plain (non-async)
@@ -1014,12 +1005,11 @@ suite "contextvars: RFC0001 S7 scenario pins":
     # captured (`callSoon` -> `userCallback`). Complete the future under
     # one binding, then add a callback to the already-finished future from
     # a DIFFERENT binding - the callback must observe the adder's, not the
-    # completer's. Traced through callSoon/userCallback in round-2 review;
-    # this pins the conclusion.
+    # completer's.
     var seenBinding = -1
     var fired = false
 
-    let fut = newFuture[void]("s7.already-finished")
+    let fut = newFuture[void]("already-finished")
     withAsyncInt(111):
       fut.complete()               # completed under binding 111
 
@@ -1036,9 +1026,9 @@ suite "contextvars: RFC0001 S7 scenario pins":
     check seenBinding == 222       # the adder's binding, not the completer's
 
   test "stream server handler observes the context bound at start()-time registration, not creation-time or connection-time":
-    # RFC 0001 §3 D1's transitive-coverage note: server handlers are
-    # `asyncSpawn`ed from inside an already-fired `fireWithContext` frame -
-    # the accept-loop's own callback - so the handler inherits whatever
+    # Server handlers are `asyncSpawn`ed from inside an already-fired
+    # `fireWithContext` frame - the accept-loop's own callback - so the
+    # handler inherits whatever
     # context that frame captured. Traced empirically: `createStreamServer`
     # only builds the `StreamServer` object (no registration happens
     # there); `start()` -> `start2()` -> `resumeAccept()` calls
@@ -1054,7 +1044,7 @@ suite "contextvars: RFC0001 S7 scenario pins":
     # here to make a wrong capture site observable.
     var seenBinding = -1
     var handlerFired = false
-    let handlerDone = newFuture[void]("s7.stream-handler-done")
+    let handlerDone = newFuture[void]("stream-handler-done")
 
     proc handler(server: StreamServer,
                  transp: StreamTransport) {.async: (raises: []).} =

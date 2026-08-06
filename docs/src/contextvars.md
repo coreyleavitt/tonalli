@@ -92,18 +92,18 @@ be used from `withContext` any number of times, including from multiple
 callbacks interleaved on the same dispatcher.
 
 `AsyncContext` values are thread-affine: the chain they reference is
-thread-local, garbage-collected memory (see §Migration / compatibility on
-cross-thread scheduling), so a snapshot captured on one thread must not
-be sent to or restored on another — "any number of times" means any
-number of callbacks on the capturing thread.
+thread-local, garbage-collected memory (see "Migration / compatibility"
+below on cross-thread scheduling), so a snapshot captured on one thread
+must not be sent to or restored on another — "any number of times" means
+any number of callbacks on the capturing thread.
 
 There is deliberately no imperative token API (PEP 567's
 `ContextVar.set()`/`Token.reset()` shape): within a single logical task,
 `withName` expresses every binding lifecycle, and across independent
 callbacks a token could not work anyway — as described above, the
 dispatcher's restore-at-fire discipline unwinds any push a callback
-leaves behind. `tests/testcontextvarssurface.nim` pins the
-rationale alongside the surface.
+leaves behind. `tests/testcontextvarssurface.nim` enforces the
+absence of a token API as a compile-time check.
 
 ## Implementation
 
@@ -209,14 +209,12 @@ created it has exited.
   cannot be shared. Same-thread scheduling through the same API captures
   normally.
 - **Windows limitation**: callbacks that complete through the IOCP
-  waitable path (`addProcess`/`addSignal` on Windows) currently fire with
-  an *empty* context rather than the registrant's: the completion is
-  repackaged through `internalCallback`, which stores no context, and the
-  dispatcher's restore-at-fire discipline installs that empty context
-  around the invocation. The gap is fail-closed — propagation is missing,
-  but another task's bindings can never leak in. `CompletionData` does
-  not yet carry a context field. The epoll/kqueue paths propagate
-  correctly. See the TODO in `chronos/internal/asyncengine.nim`.
+  waitable path (`addProcess2`/`addSignal2` on Windows) fire with an
+  *empty* context rather than the registrant's: `CompletionData.cb` is
+  registered without capturing the caller's context. This is a
+  deliberate, documented limitation, not pending work — it is
+  fail-closed, so another task's bindings can never leak in. The
+  epoll/kqueue paths propagate correctly.
 
 ## Performance
 
@@ -228,8 +226,8 @@ measured, not assumed.
 **refc** (chronos's most latency-sensitive consumers pin `--mm:refc`
 unconditionally) is the headline: `callSoon` schedule+fire — the
 hottest path a contextvars-free program pays on every scheduled
-callback — measured against a pre-contextvars baseline under an
-interleaved cross-commit protocol, lands at 1.01x-1.11x, inside
+callback — measured against a pre-contextvars baseline, with runs
+interleaved to cancel out machine noise, lands at 1.01x-1.11x, inside
 ordinary run-to-run noise. **orc** was within noise from the first
 measurement and stays there (~1.10x).
 
@@ -270,8 +268,8 @@ of the improvement in the refc headline number above.
   interleaved tasks, survival across sequential awaits, exception and
   cancellation paths, spawn-time inheritance), per-scheduling-site
   capture coverage (`callSoon`, `setTimer`/`sleepAsync`, `callIdle`,
-  `addReader`, `race`/`allFutures`, `closeSocket`/`closeHandle`), and
-  §Bridging independent callbacks:
+  `addReader`, `race`/`allFutures`, `closeSocket`/`closeHandle`), and the
+  bridging pattern from "Bridging independent callbacks" above:
   `currentContext()`/`withContext()` carries a binding from an enter hook
   into a separately-scheduled exit hook.
 - `tests/testcontextvarsguardrails.nim` — compile-time drift detection:
