@@ -20,6 +20,12 @@ import results
 import ../[config, effects, futures, osdefs, oserrno, osutils, timer]
 
 import ./[asyncmacro, callbackqueue, errors]
+when defined(windows):
+  import ./contextnode
+    # For `ContextNodeBase`, naming the type of `CompletionData.context`
+    # below (Windows-only type): `futures.nim` merely `import`s it
+    # without re-exporting, so it isn't visible transitively through
+    # `futures`. Unused - so unimported - on non-Windows platforms.
 
 export Port
 export deques, effects, errors, timer, results
@@ -27,7 +33,7 @@ export deques, effects, errors, timer, results
 # (`callbacks`/`idlers`/`ticks`) and is not itself part of the public
 # surface, mirroring `./mpsc`'s `MpscQueue` just below.
 #
-# `userCallback`/`bareCallback`/`newCancelCallback`/
+# `userCallback`/`bareCallback`/`contextCallback`/`newCancelCallback`/
 # `currentAsyncContext`/`context`/`withRestoredContext`/`pinContext`/
 # `captureContextInto` are dispatcher-internal and excluded here so
 # plain `import chronos` doesn't expose them; `import
@@ -36,9 +42,9 @@ export deques, effects, errors, timer, results
 # since they're already publicly nameable via the `AsyncCallback` alias
 # and `InternalFutureBase.internalCancelcb*`; only the capturing
 # constructors need excluding.
-export futures except userCallback, bareCallback, newCancelCallback,
-  currentAsyncContext, context, withRestoredContext, pinContext,
-  captureContextInto
+export futures except userCallback, bareCallback, contextCallback,
+  newCancelCallback, currentAsyncContext, context, withRestoredContext,
+  pinContext, captureContextInto
 
 export
   asyncmacro.async, asyncmacro.await, asyncmacro.awaitne
@@ -327,6 +333,15 @@ elif defined(windows):
       errCode*: OSErrorCode
       bytesCount*: uint32
       udata*: pointer
+      context*: ContextNodeBase
+        ## Registrant's context, captured via `captureContextInto` at
+        ## the site that arms the overlapped completion (e.g.
+        ## `registerWaitable`, a stream server's `start()`). Nil - the
+        ## default - unless an arm site explicitly captures, which
+        ## reproduces the historical empty-context ("fail-closed")
+        ## behavior for any completion whose arm site doesn't opt in
+        ## (cross-thread posts in `processThreadCallbacks` never carry
+        ## one; that contract is intentional, not a gap).
 
     CustomOverlapped* = object of OVERLAPPED
       data*: CompletionData
@@ -524,7 +539,13 @@ elif defined(windows):
     ## NOTE: This is private procedure, not supposed to be publicly available,
     ## please use ``waitForSingleObject()``.
     let loop = getThreadDispatcher()
-    var ovl = RefCustomOverlapped(data: CompletionData(cb: cb))
+    # Capture into a fresh local, not directly into the object-literal
+    # field below - same discipline `captureContextInto`'s own doc
+    # comment requires of every caller (avoids refc's reset-then-assign
+    # double write-barrier on a field of a freshly-constructed object).
+    var registrantCtx: ContextNodeBase
+    captureContextInto(registrantCtx)
+    var ovl = RefCustomOverlapped(data: CompletionData(cb: cb, context: registrantCtx))
 
     var whandle = (ref PostCallbackData)(
       ioPort: loop.getIoHandler(),
@@ -771,12 +792,17 @@ elif defined(windows):
             else:
               OSErrorCode(rtlNtStatusToDosError(res))
         customOverlapped.data.bytesCount = events[i].dwNumberOfBytesTransferred
-        # Windows waitable callbacks (addProcess2/addSignal2) fire with an
-        # empty context: CompletionData.cb is registered without capture.
-        # Fail-closed - bindings from other tasks can never leak in. See
-        # docs/src/contextvars.md.
-        let acb = bareCallback(customOverlapped.data.cb,
-                                   cast[pointer](customOverlapped))
+        # Fire under whatever context the arm site captured into
+        # `CompletionData.context` (registerWaitable, a stream server's
+        # start()-time registration, ...) - `contextCallback` reproduces
+        # `bareCallback`'s empty-context behavior whenever that field is
+        # nil, i.e. for every completion whose arm site never opted in
+        # (cross-thread posts routed through `processThreadCallbacks`
+        # below never populate it - deliberately, see that proc's
+        # comment). See docs/src/contextvars.md.
+        let acb = contextCallback(customOverlapped.data.cb,
+                                   cast[pointer](customOverlapped),
+                                   customOverlapped.data.context)
         loop.callbacks.addLast(acb)
       else:
         hasWakeup = true

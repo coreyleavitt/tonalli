@@ -29,19 +29,22 @@ import ../chronos/contextvars
 
 # --- Guardrail 1: capture coverage is structural -----------------------------
 #
-# The two-constructor split (userCallback / bareCallback) forces
-# every AsyncCallback construction site to pick a deliberate side.
-# `InternalAsyncCallback`'s `function`/`udata`/`context` fields are
-# private to `chronos/futures.nim` — only `userCallback`/
-# `bareCallback` can construct one, and no other module can
+# The three-constructor split (userCallback / bareCallback /
+# contextCallback) forces every AsyncCallback construction site to
+# pick a deliberate side. `InternalAsyncCallback`'s
+# `function`/`udata`/`context` fields are private to
+# `chronos/futures.nim` — only `userCallback`/`bareCallback`/
+# `contextCallback` can construct one, and no other module can
 # read-modify the fields after the fact.
 
 static:
   doAssert not compiles(InternalAsyncCallback(function: nil, udata: nil)),
     "InternalAsyncCallback's fields must be private — raw construction " &
-    "outside `userCallback`/`bareCallback` must not compile. Use " &
-    "`userCallback(fn, udata)` for user-facing scheduling sites or " &
-    "`bareCallback(fn, udata)` for chronos-internal trampolines. " &
+    "outside `userCallback`/`bareCallback`/`contextCallback` must not " &
+    "compile. Use `userCallback(fn, udata)` for user-facing scheduling " &
+    "sites, `bareCallback(fn, udata)` for chronos-internal trampolines, " &
+    "or `contextCallback(fn, udata, ctx)` to reconstruct a callback from " &
+    "a context captured earlier (Windows IOCP completion dispatch). " &
     "See docs/src/contextvars.md, 'Capture discipline'."
   doAssert not compiles((var a: AsyncCallback; a.function = nil)),
     "AsyncCallback's `function` field must be private — direct mutation " &

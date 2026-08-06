@@ -179,6 +179,12 @@ when declared(userCallback):
 when declared(bareCallback):
   {.error: "`bareCallback` must not leak through the public API.".}
 
+when declared(contextCallback):
+  {.error: "`contextCallback` must not leak through the public API. It " &
+           "lives in chronos/futures.nim, excluded from `asyncengine.nim`'s " &
+           "`export futures`, and is used by Windows IOCP completion " &
+           "dispatch (`poll()`) only.".}
+
 when declared(newCancelCallback):
   {.error: "`newCancelCallback` must not leak through the public API. It " &
            "lives in chronos/futures.nim, excluded from `asyncengine.nim`'s " &

@@ -336,39 +336,49 @@ lookup is a `nil` check.
 
 ## Capture discipline
 
-Every `AsyncCallback` construction site must deliberately pick one of two
+Every `AsyncCallback` construction site must deliberately pick one of three
 constructors defined in `chronos/futures.nim`:
 
 - `userCallback(fn, udata)` — for every site that schedules *user* code
   (`addCallback`, `callSoon`, `setTimer`, `addReader`/`addWriter`,
   `addSignal`/`addProcess`, `callIdle`, `closeSocket`/`closeHandle`
   after-callbacks). Captures the current context.
-- `bareCallback(fn, udata)` — for chronos-internal trampolines (IOCP
-  completion repackaging, sentinels, cross-thread queue draining,
-  `internalCallTick`'s `CallbackFunc` overloads) where no meaningful
-  registration-time context exists. Fires with an empty context.
+- `bareCallback(fn, udata)` — for chronos-internal trampolines
+  (sentinels, cross-thread queue draining, the low-level per-operation
+  IOCP read/write completion trampolines, `internalCallTick`'s
+  `CallbackFunc` overloads) where no meaningful registration-time
+  context exists. Fires with an empty context.
+- `contextCallback(fn, udata, ctx)` — for reconstructing a callback from
+  a context value captured *earlier* rather than the ambient one at the
+  call site. Windows IOCP completion dispatch (`poll()` in
+  `asyncengine.nim`) is the only caller: it fires every completion with
+  whatever `CompletionData.context` an upstream arm site
+  (`registerWaitable`, a stream server's `start()`) stored via
+  `captureContextInto`, nil - reproducing `bareCallback`'s
+  empty-context behavior - otherwise.
 
 `internalCallTick` also has an `AsyncCallback`-taking overload
 (`internalCallTick(acb: AsyncCallback)`) that simply schedules whatever
-`AsyncCallback` the caller already built — the caller picks `userCallback`
-or `bareCallback` when constructing that value. Only the convenience
-`CallbackFunc` overloads (`internalCallTick(cbproc, data)`) default to
-`bareCallback` and are therefore context-blind by design.
+`AsyncCallback` the caller already built — the caller picks the
+constructor when building that value. Only the convenience `CallbackFunc`
+overloads (`internalCallTick(cbproc, data)`) default to `bareCallback`
+and are therefore context-blind by design.
 
 Unauthorized *construction* of an `InternalAsyncCallback` is a compile
 error, not a convention: `function`/`udata`/`context` are private to
-`chronos/futures.nim`, so only `userCallback`/`bareCallback` can build a
-value, and no other module can read-modify a field after construction
-(existing readers go through exported `function()`/`udata()`/`context()`
-getters). A raw `AsyncCallback(function: ..., udata: ...)` literal, or a
-direct field assignment, anywhere outside `chronos/futures.nim` simply
-fails to compile — `tests/testcontextvarsguardrails.nim` asserts this
-with `not compiles(...)` checks.
+`chronos/futures.nim`, so only `userCallback`/`bareCallback`/
+`contextCallback` can build a value, and no other module can
+read-modify a field after construction (existing readers go through
+exported `function()`/`udata()`/`context()` getters). A raw
+`AsyncCallback(function: ..., udata: ...)` literal, or a direct field
+assignment, anywhere outside `chronos/futures.nim` simply fails to
+compile — `tests/testcontextvarsguardrails.nim` asserts this with
+`not compiles(...)` checks.
 
 *Which* constructor a given scheduling site calls, however, is not
-something the type system can check — `userCallback` and `bareCallback`
-have the same signature, so picking the wrong one compiles fine. That
-discipline rests on an enumerate-and-pin approach instead:
+something the type system can check — the three share a shape, so
+picking the wrong one compiles fine. That discipline rests on an
+enumerate-and-pin approach instead:
 `tests/testcontextvarssurface.nim` and `tests/testcontextvarsguardrails.nim`
 enumerate every known construction/capture site and pin its expected
 behavior, so a *changed* site shows up as a failing assertion — but a
@@ -396,13 +406,24 @@ created it has exited.
   origin thread's chain is thread-local, garbage-collected memory and
   cannot be shared. Same-thread scheduling through the same API captures
   normally.
-- **Windows limitation**: callbacks that complete through the IOCP
-  waitable path (`addProcess2`/`addSignal2` on Windows) fire with an
-  *empty* context rather than the registrant's: `CompletionData.cb` is
-  registered without capturing the caller's context. This is a
-  deliberate, documented limitation, not pending work — it is
-  fail-closed, so another task's bindings can never leak in. The
-  epoll/kqueue paths propagate correctly.
+- **Windows IOCP completions carry the registrant's context**: every
+  `OVERLAPPED`-based completion (`CompletionData`, the record armed by
+  `registerWaitable` and by a stream server's accept machinery) carries
+  a `context` field, captured via `captureContextInto` at the site that
+  arms the completion, and restored when `poll()` dispatches the fired
+  callback — the same registration-time-capture contract as the
+  epoll/kqueue paths, just carried on the completion record instead of
+  in an `AsyncCallback` built inline. `addProcess2`/`addSignal2`
+  (via `registerWaitable`) and a stream server's handler (captured at
+  `start()`, not at `createStreamServer()` or per-connection) both
+  propagate correctly. `CompletionData.context` is nil - reproducing
+  the historical empty-context, fail-closed behavior - for any
+  completion whose arm site does not opt in; this remains true, by
+  design, for the low-level per-operation read/write completion
+  trampolines (they only drive an internal future to completion, and
+  that future's own awaiter already carries its own captured context
+  from the normal `userCallback` path, so there's nothing for those
+  trampolines themselves to propagate).
 
 ## Performance
 

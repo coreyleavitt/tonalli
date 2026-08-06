@@ -232,6 +232,21 @@ template bareCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCallba
   ## compile.
   InternalAsyncCallback(function: fn, udata: ud, context: nil)
 
+template contextCallback*(fn: CallbackFunc, ud: pointer,
+                          ctx: ContextNodeBase): InternalAsyncCallback =
+  ## Construct an AsyncCallback carrying a context value captured
+  ## earlier, rather than the ambient one at this call site.
+  ##
+  ## For completion-dispatch trampolines that stored the registrant's
+  ## context on the completion record at arm time (via
+  ## `captureContextInto`) and must reconstruct the fired callback from
+  ## that stored value at dispatch time - typically because the
+  ## dispatching thread has no ambient binding of its own at that point
+  ## (e.g. Windows IOCP completion processing in `poll()`). `ctx` is
+  ## nil unless some arm site upstream explicitly captured; nil here
+  ## reproduces `bareCallback`'s fail-closed, empty-context behavior.
+  InternalAsyncCallback(function: fn, udata: ud, context: ctx)
+
 template newCancelCallback*(fn: CallbackFunc): InternalCancelCallback =
   ## Construct the value stored in `internalCancelcb`. Captures the
   ## current continuation-local context at construction, same
