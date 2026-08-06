@@ -860,3 +860,185 @@ suite "contextvars: RFC0001 D0/D1 fast-path pins":
     check innerObserved == 999
     check fut.finished()
 
+suite "contextvars: RFC0001 S7 scenario pins":
+  # RFC 0001 §6 S7 + §3 D1's "two transitive patterns" note. Each test here
+  # pins currently-correct behavior against a scenario not exercised by the
+  # earlier suites (nested reentrancy, cross-thread isolation, capture on a
+  # finished future, and the stream-server transitive-fire-site coverage
+  # named but not tested in D1). Green from the start by design - these are
+  # regression pins, not drivers of a behavior change.
+
+  test "nested waitFor inside a running callback observes its own binding and leaves the outer callback's context intact":
+    # Reentrancy x fast path. `waitFor` from inside a plain (non-async)
+    # callback is legal in default builds - `chronosStrictReentrancy`
+    # (which would gate reentrant draining) defaults on only under
+    # `chronosPreviewV5`, not exercised here. `outerCb` is scheduled with
+    # no ambient binder, so its capture (nil) equals ambient at fire time -
+    # `withRestoredContext`'s identity fast arm fires it. From inside that
+    # fast-armed frame it binds its own contextVar, then calls `waitFor` on
+    # a small async proc that binds the SAME var to a different value;
+    # `waitFor` pumps the dispatcher reentrantly (a nested `poll()` loop)
+    # until the inner future resolves. Three things must hold: the inner
+    # work sees its own binding, not the outer's; the outer's ambient
+    # binding is exactly restored once the nested `waitFor` returns control
+    # (not left at the inner value, not wiped to nil); and a callback
+    # queued behind `outerCb` in the same top-level batch - which may fire
+    # either during the nested reentrant drain or after `outerCb` returns,
+    # depending on queue interleaving - observes an empty context either
+    # way, undisturbed by the reentrancy.
+    var innerObserved = -1
+    var outerAfterNested = -1
+    var outerFired = false
+    var laterSeenBinding = -1
+    var laterFired = false
+
+    proc innerWork(): Future[int] {.async: (raises: [CancelledError]).} =
+      withAsyncInt(999):
+        await sleepAsync(1.milliseconds)
+        return asyncInt()
+
+    proc laterCb(udata: pointer) {.gcsafe, raises: [].} =
+      laterSeenBinding = asyncInt()
+      laterFired = true
+
+    proc outerCb(udata: pointer) {.gcsafe, raises: [].} =
+      withAsyncInt(500):
+        check asyncInt() == 500
+        try:
+          innerObserved = waitFor(innerWork())
+        except CancelledError:
+          discard
+        outerAfterNested = asyncInt()
+      outerFired = true
+
+    callSoon(outerCb, nil)   # nil capture == nil ambient at fire -> fast arm
+    callSoon(laterCb, nil)   # queued behind outerCb, same top-level batch
+    poll()
+
+    check outerFired
+    check innerObserved == 999
+    check outerAfterNested == 500
+    check laterFired
+    check laterSeenBinding == 0
+
+  test "two threads with independent dispatchers never observe each other's contextVar binding":
+    # `currentAsyncContext` is `{.threadvar.}` (chronos/futures.nim), and
+    # each OS thread gets its own dispatcher (also threadvar-based) the
+    # first time it touches the event loop - so two threads binding the
+    # SAME contextVar to different values and each running its own async
+    # work through its own `waitFor` must never see the other's binding.
+    # Pattern follows testsoon.nim's cross-thread `createThread`/
+    # `joinThreads` and testmpsc.nim's multi-producer thread spawn; unlike
+    # testsoon's cross-thread `callSoon`, these two dispatchers never
+    # communicate - each is pristine and fully independent.
+    type ThreadArg = object
+      boundValue: int
+      resultPtr: ptr int
+      readyPtr: ptr bool
+
+    proc threadProc(arg: ThreadArg) {.thread, nimcall.} =
+      withAsyncInt(arg.boundValue):
+        proc work(): Future[int] {.async: (raises: [CancelledError]).} =
+          await sleepAsync(1.milliseconds)
+          return asyncInt()
+        arg.resultPtr[] = waitFor(work())
+      arg.readyPtr[] = true
+
+    var resultA, resultB: int
+    var readyA, readyB: bool
+    var threadA: Thread[ThreadArg]
+    var threadB: Thread[ThreadArg]
+    createThread(threadA, threadProc,
+                 ThreadArg(boundValue: 111, resultPtr: addr resultA,
+                           readyPtr: addr readyA))
+    createThread(threadB, threadProc,
+                 ThreadArg(boundValue: 222, resultPtr: addr resultB,
+                           readyPtr: addr readyB))
+    joinThreads(threadA, threadB)
+
+    check readyA
+    check readyB
+    check resultA == 111
+    check resultB == 222
+
+  test "addCallback on an already-finished future captures the caller's binding, not the completer's":
+    # `addCallback` on a future that is already finished takes the
+    # immediate-dispatch branch (`callSoon(cb, udata)`, asyncfutures.nim)
+    # rather than storing into `internalCallback`/`internalCallbacks` - the
+    # completer's binding at completion time is irrelevant; only the
+    # caller's ambient binding when `addCallback` itself is invoked is
+    # captured (`callSoon` -> `userCallback`). Complete the future under
+    # one binding, then add a callback to the already-finished future from
+    # a DIFFERENT binding - the callback must observe the adder's, not the
+    # completer's. Traced through callSoon/userCallback in round-2 review;
+    # this pins the conclusion.
+    var seenBinding = -1
+    var fired = false
+
+    let fut = newFuture[void]("s7.already-finished")
+    withAsyncInt(111):
+      fut.complete()               # completed under binding 111
+
+    check fut.finished()
+
+    withAsyncInt(222):
+      fut.addCallback(proc(udata: pointer) {.gcsafe, raises: [].} =
+        seenBinding = asyncInt()
+        fired = true
+      )
+
+    poll()
+    check fired
+    check seenBinding == 222       # the adder's binding, not the completer's
+
+  test "stream server handler observes the context bound at start()-time registration, not creation-time or connection-time":
+    # RFC 0001 §3 D1's transitive-coverage note: server handlers are
+    # `asyncSpawn`ed from inside an already-fired `fireWithContext` frame -
+    # the accept-loop's own callback - so the handler inherits whatever
+    # context that frame captured. Traced empirically: `createStreamServer`
+    # only builds the `StreamServer` object (no registration happens
+    # there); `start()` -> `start2()` -> `resumeAccept()` calls
+    # `addReader2(server.sock, acceptCb, ...)`, which captures the ambient
+    # context via `userCallback` at THAT call - i.e. at `start()` time, not
+    # `createStreamServer()` time. `acceptCb` (the fired accept-ready
+    # callback) then calls `asyncSpawn server.function(server, ntransp)`
+    # synchronously inside its own already-restored frame - a transitive
+    # fire site, not a new capture site. So the handler must observe the
+    # binding active when `start()` was called, not the binding active at
+    # `createStreamServer()` (creation-time) nor at `connect()`
+    # (connection-time) - both of which are deliberately different values
+    # here to make a wrong capture site observable.
+    var seenBinding = -1
+    var handlerFired = false
+    let handlerDone = newFuture[void]("s7.stream-handler-done")
+
+    proc handler(server: StreamServer,
+                 transp: StreamTransport) {.async: (raises: []).} =
+      seenBinding = asyncInt()
+      handlerFired = true
+      transp.close()
+      handlerDone.complete()
+
+    let ta = initTAddress("127.0.0.1:0")
+    var server: StreamServer
+    withAsyncInt(111):
+      server = createStreamServer(ta, handler, {ReuseAddr})  # creation-time: 111
+
+    withAsyncInt(222):
+      server.start()                                         # registration-time: 222
+
+    proc driver(): Future[void] {.async: (raises: [Exception]).} =
+      withAsyncInt(333):                                     # connection-time: 333
+        var transp = await connect(server.localAddress())
+        await handlerDone.wait(5.seconds)
+        transp.close()
+
+    waitFor(driver())
+
+    check handlerFired
+    check seenBinding == 222       # start()-time registration binding
+
+    server.stop()
+    server.close()
+    waitFor(server.join())
+
