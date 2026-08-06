@@ -160,6 +160,39 @@ static:
     "(function: 2-word closure proc, context: ref); " &
     "actual size = " & $sizeof(InternalCancelCallback)
 
+# --- Guardrail 7: the introspection registry is not externally mutable ------
+#
+# `ContextVarRegistration.name`/`.render` are public fields (needed so
+# the macro's generated code — which lives in the DECLARING module,
+# not this one — can construct one), but `.registered`/`.next` must
+# stay private to `chronos/internal/contextvars_impl.nim`: a reachable
+# `.next` would let arbitrary code splice registry nodes into a cycle
+# (hanging `dumpContext`'s walk) or unlink/relink entries, defeating
+# the "allocation-free, append-only, safe to read from any thread"
+# design in docs/src/contextvars.md, "Inspecting contexts". This
+# module imports `contextvars_impl` directly and still must not reach
+# those two fields — same per-module privacy discipline as Guardrail 5
+# above for `ContextNodeBase.next`.
+
+contextVar:
+  var registryProbe: int = 0
+
+static:
+  doAssert compiles(registryProbeContextVarReg.name),
+    "control: this module declared the arm, so its registration " &
+    "node's public `name` field must be readable here — otherwise " &
+    "the probe below is vacuous"
+  doAssert not compiles(registryProbeContextVarReg.registered),
+    "ContextVarRegistration.registered must not be readable outside " &
+    "contextvars_impl.nim."
+  doAssert not compiles(registryProbeContextVarReg.next),
+    "ContextVarRegistration.next must not be readable outside " &
+    "contextvars_impl.nim — a reachable link primitive would reopen " &
+    "the cycle/unlink attack the registry's append-only design closes."
+  doAssert not compiles((registryProbeContextVarReg.next = nil)),
+    "ContextVarRegistration.next must not be writable outside " &
+    "contextvars_impl.nim either."
+
 # --- A trivial runtime assertion to keep the test file unittest-recognized ---
 
 suite "contextvars: drift guardrails":

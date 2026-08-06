@@ -36,9 +36,15 @@ proc handleRequest(user: User) {.async.} =
 Each `var name: T = default` arm of a `contextVar` block generates:
 
 - a reader `name(): T` returning the innermost binding, or `default`,
+- a snapshot reader `name(ctx: AsyncContext): T` — same semantics,
+  read from a captured snapshot instead of the ambient chain (see
+  "Inspecting contexts" below),
 - a scoped binder `withName(value): body` that binds for the dynamic
   extent of `body` and restores on every exit path (normal, exception,
   `CancelledError`).
+
+An arm may omit `= default` (`var name: T`) to require a binding —
+see "Required variables" below.
 
 Bindings nest (innermost wins) and propagate into tasks spawned within the
 binder's extent. Two additional primitives, `currentContext()` and
@@ -63,6 +69,53 @@ declaration time. This differs from Python's PEP 567, where a
 `ContextVar`'s default is fixed at construction. Keep default
 expressions cheap and side-effect-free; anything expensive belongs
 behind an explicit `withName` binding instead.
+
+## Required variables
+
+An arm may omit its default entirely:
+
+```nim
+contextVar:
+  var traceId: string    # must-bind: no `= default`
+```
+
+This declares a *must-bind* variable — the analog of PEP 567's
+default-less `ContextVar`. Reading `traceId()` while no `withTraceId`
+binder is in scope raises `UnboundContextVarDefect` instead of falling
+back to a value:
+
+```nim
+proc handler() {.async: (raises: []).} =
+  # traceId() here would raise UnboundContextVarDefect unless a caller
+  # already bound it.
+  withTraceId(newTraceId()):
+    await process()
+```
+
+`UnboundContextVarDefect` is a `Defect`, not a `CatchableError`. That's
+deliberate, for two reasons:
+
+- Reading a must-bind variable before it's bound is a contract
+  violation — the caller forgot a `withName` somewhere up the call
+  chain — not a recoverable runtime condition like a failed network
+  call. `Defect` is chronos's (and Nim's) vocabulary for "this is a
+  bug," the same category as an out-of-bounds index or a failed
+  `doAssert`.
+- `Defect`s sit outside Nim's `raises` effect tracking. A must-bind
+  reader can therefore be called from an `{.async: (raises: []).}`
+  proc — the common case for handler code that doesn't want to widen
+  its raises list — without the compiler forcing every caller to
+  declare or catch an exception for a condition that, if it occurs at
+  all, indicates a bug rather than an expected failure mode.
+
+Everything else about a must-bind arm is identical to a defaulted one:
+the binder (`withName`), spawn-time inheritance, propagation across
+`await`, and restore-on-every-exit-path all use the exact same
+generated code — only the reader's behavior on a miss differs. The
+snapshot reader (below) mirrors this: `name(ctx)` raises
+`UnboundContextVarDefect` if the arm is unbound in `ctx`.
+`dumpContext` is the one exception to "raises like the reader" — see
+"Inspecting contexts" below for why introspection never raises.
 
 ## Binding multiple variables
 
@@ -138,6 +191,97 @@ callbacks a token could not work anyway — as described above, the
 dispatcher's restore-at-fire discipline unwinds any push a callback
 leaves behind. `tests/testcontextvarssurface.nim` enforces the
 absence of a token API as a compile-time check.
+
+## Inspecting contexts
+
+Three primitives exist purely for debugging and don't participate in the
+hot paths at all — they cost nothing unless a program actually calls them.
+
+**Identity.** Two `AsyncContext` snapshots compare equal with `==` iff
+they reference the same underlying chain head:
+
+```nim
+let a = currentContext()
+let b = currentContext()
+a == b            # true: no binding changed between the two captures
+
+withCurrentUser(someUser):
+  let c = currentContext()
+  a == c          # false: `c` was captured inside a new binder
+```
+
+This is identity equality (same chain-head pointer), not a
+value-by-value comparison of bindings — two snapshots built
+independently that happen to carry the same bindings are not `==`.
+
+**Snapshot readers.** Every `contextVar` arm generates a second reader
+overload alongside the ambient one:
+
+```nim
+proc name(ctx: AsyncContext): T
+```
+
+It reads the arm's binding as recorded in `ctx` — walking `ctx`'s
+chain instead of the ambient one — without installing `ctx` the way
+`withContext` would. This is the read-only counterpart to
+`withContext`: useful when code wants to inspect a captured context
+(a request's originating bindings, say, held for later logging)
+without switching the current task onto it. Semantics mirror the
+ambient reader exactly: a defaulted arm returns its default when
+unbound in `ctx`; a must-bind arm raises `UnboundContextVarDefect`.
+Export follows the arm's own `*` marker, same as the ambient reader
+and binder.
+
+**`dumpContext` / `` `$` ``.** `dumpContext(ctx: AsyncContext): seq[ContextVarEntry]`
+enumerates every `contextVar` arm declared anywhere in the program —
+across every module, defaulted or must-bind — as it stands in `ctx`:
+
+```nim
+type ContextVarEntry* = object
+  name*: string
+  bound*: bool
+  value*: string
+```
+
+Every declared arm appears exactly once, bound or not. This is a
+deliberate choice: the alternative — showing only the arms that
+happen to be bound — hides the "what else *could* be here" half of
+the picture, which is exactly what a debugger or log dump wants. An
+unbound defaulted arm shows `bound: false` and the value its reader
+would actually return (the rendered default); an unbound must-bind
+arm shows `bound: false` and a fixed `<unbound>` placeholder — calling
+`dumpContext` never raises `UnboundContextVarDefect` the way the arm's
+own reader would, because introspection has to stay total to be
+useful as a debugging tool. A value is rendered via `$` when the arm's
+type has one (checked with `when compiles`); otherwise it's shown as a
+placeholder in the form `<TypeName>`.
+
+`` `$`(ctx: AsyncContext): string `` renders the same information as a
+single `{name: value, ...}` string, for quick `echo`/logging use. Its
+format is not a stable, parseable contract — only `dumpContext`'s
+structured `seq[ContextVarEntry]` is.
+
+**Cost.** All three are zero-cost in the sense that matters for this
+feature: nothing on the reader, binder, capture, or fire hot paths
+changed to support them. `==` is one pointer comparison. The snapshot
+reader costs exactly what the ambient reader costs (the same chain
+walk), just against a caller-supplied chain instead of the ambient
+one. `dumpContext` costs one walk of a program-wide registry of
+declared arms (built once, at module init, independent of how many
+times any variable is bound or read) plus one `$`-render per arm — paid
+only when `dumpContext` is actually called.
+
+The registry itself is worth a note on how it stays out of the way:
+each `contextVar` arm emits a module-level global — a plain `object`
+(not a `ref`), holding the arm's name as a `cstring` and a
+`{.nimcall.}` render-proc pointer — linked into a single process-wide
+intrusive list at module init. Neither a `cstring` literal nor a
+`nimcall` proc pointer is GC-tracked memory, so building this registry
+allocates nothing, and — because it's written once, before any second
+thread can exist, and never again — reading it from any thread
+afterward (as `dumpContext` does) needs no lock. The only allocation
+in this whole path is the `seq[ContextVarEntry]`/rendered `string`s
+`dumpContext` itself builds, on the calling thread's own heap.
 
 ## Implementation
 
@@ -307,26 +451,40 @@ of the improvement in the refc headline number above.
 
 - `tests/testcontextvars.nim` — synchronous semantics: declaration,
   defaults, nesting/shadowing, restore on all exit paths, and the binder
-  contract (push/pop balance on every exit path).
+  contract (push/pop balance on every exit path); `AsyncContext` identity
+  (`==`); snapshot readers (bound-in-snapshot, outer-vs-inner-binding,
+  defaulted-unbound); must-bind arms (unbound raise, bound read, LIFO
+  restore, snapshot-reader raise); `dumpContext`/`` `$` `` (bound,
+  defaulted-unbound, must-bind-unbound, and a non-`$`-able type's
+  placeholder path).
 - `tests/testcontextvarsasync.nim` — async propagation (isolation across
   interleaved tasks, survival across sequential awaits, exception and
   cancellation paths, spawn-time inheritance), per-scheduling-site
   capture coverage (`callSoon`, `setTimer`/`sleepAsync`, `callIdle`,
-  `addReader`, `race`/`allFutures`, `closeSocket`/`closeHandle`), and the
+  `addReader`, `race`/`allFutures`, `closeSocket`/`closeHandle`), the
   bridging pattern from "Bridging independent callbacks" above:
   `currentContext()`/`withContext()` carries a binding from an enter hook
-  into a separately-scheduled exit hook.
+  into a separately-scheduled exit hook, and a must-bind arm's binding
+  propagating across `await` exactly like a defaulted one.
 - `tests/testcontextvarsguardrails.nim` — compile-time drift detection:
   the private-field/constructor-only enforcement, the native-`ref` context
-  field, and callback layout.
+  field, callback layout, and the introspection registry's
+  `.registered`/`.next` fields staying private to `contextvars_impl.nim`.
 - `tests/testcontextvarssurface.nim` — verifies `import chronos`
   plus `import chronos/contextvars` expose only the intended public API
-  (`contextVar`, `AsyncContext`, `currentContext`, `withContext`) and
-  none of the dispatcher internals (`ContextNodeBase`,
-  `currentAsyncContext`, `userCallback`/`bareCallback`, `context`,
-  `contextLookup`/`contextBindSlot`); also pins the deliberate absence
-  of an imperative token API (`AsyncContextToken`).
+  (`contextVar`, `AsyncContext`, `` `==` ``, `currentContext`,
+  `withContext`, `dumpContext`, `ContextVarEntry`, `` `$` ``,
+  `UnboundContextVarDefect`) and none of the dispatcher/registry
+  internals (`ContextNodeBase`, `currentAsyncContext`,
+  `userCallback`/`bareCallback`, `context`,
+  `contextLookup`/`contextLookupSnapshot`/`contextBindSlot`,
+  `contextFind`/`contextFindSnapshot`, `ContextVarRegistration`,
+  `ContextVarRenderProc`, `registerContextVar`, `contextVarRegistry`);
+  also pins the deliberate absence of an imperative token API
+  (`AsyncContextToken`), and that a must-bind arm (`var name: T`, no
+  default) is legal syntax.
 - `tests/testcontextvarsexport.nim` + `tests/contextvarshelper.nim`
-  — cross-module export-marker semantics: a starred arm's reader and
-  binder are reachable from an importing module; a non-starred arm's are
-  not, and no arm generates an imperative `setName` binder.
+  — cross-module export-marker semantics: a starred arm's reader,
+  snapshot reader, and binder are all reachable from an importing
+  module; a non-starred arm's are not, and no arm generates an
+  imperative `setName` binder.

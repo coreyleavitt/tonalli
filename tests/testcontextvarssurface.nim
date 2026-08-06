@@ -34,6 +34,29 @@ static:
   doAssert declared(AsyncContext),   "AsyncContext type must be public"
   doAssert declared(currentContext), "currentContext proc must be public"
   doAssert declared(withContext),    "withContext template must be public"
+  doAssert declared(`==`),
+    "`==`(AsyncContext, AsyncContext) must be public (declared() only " &
+    "confirms the identifier resolves; the arity/type-specific probe " &
+    "below confirms the actual overload)"
+  doAssert compiles(currentContext() == currentContext()),
+    "`==`(a, b: AsyncContext): bool must be public and callable"
+  doAssert declared(dumpContext),      "dumpContext proc must be public"
+  doAssert declared(ContextVarEntry),  "ContextVarEntry type must be public"
+  doAssert declared(UnboundContextVarDefect),
+    "UnboundContextVarDefect must be public — it's the type a caller " &
+    "needs to name to catch an unbound must-bind read"
+  doAssert compiles($(currentContext())),
+    "`$`(ctx: AsyncContext): string must be public and callable"
+  doAssert UnboundContextVarDefect is Defect,
+    "UnboundContextVarDefect must be a Defect (not a CatchableError) " &
+    "— see docs/src/contextvars.md, 'Required variables'"
+
+# A must-bind arm (`var name: T`, no `= default`) must be legal syntax
+# — this was a macro error before W2; this probe (module-scope, so it
+# runs at compile time regardless of whether any test below exercises
+# it) pins that the surface accepts it.
+contextVar:
+  var surfaceMustBind*: int
 
 # --- Deliberately absent surface ---------------------------------------------
 #
@@ -111,6 +134,42 @@ when declared(contextLookup):
 
 when declared(contextBindSlot):
   {.error: "`contextBindSlot` must not leak through the public API.".}
+
+when declared(contextLookupSnapshot):
+  {.error: "`contextLookupSnapshot` must not leak through the public " &
+           "API. It is invoked by macro-generated snapshot readers " &
+           "(`name(ctx: AsyncContext)`) only.".}
+
+when declared(contextFind):
+  {.error: "`contextFind` must not leak through the public API. It is " &
+           "invoked by macro-generated must-bind readers only.".}
+
+when declared(contextFindSnapshot):
+  {.error: "`contextFindSnapshot` must not leak through the public " &
+           "API. It is invoked by macro-generated must-bind snapshot " &
+           "readers and by dumpContext's per-arm render procs only.".}
+
+when declared(ContextVarRenderProc):
+  {.error: "`ContextVarRenderProc` must not leak through the public " &
+           "API — it's the registry's internal render-proc type, " &
+           "reached only via `dumpContext`.".}
+
+when declared(ContextVarRegistration):
+  {.error: "`ContextVarRegistration` must not leak through the public " &
+           "API — the introspection registry's node type is internal; " &
+           "`dumpContext`/`ContextVarEntry` are the public surface " &
+           "over it.".}
+
+when declared(registerContextVar):
+  {.error: "`registerContextVar` must not leak through the public " &
+           "API. It is invoked by macro-generated per-arm module init " &
+           "statements only — a reachable registration primitive would " &
+           "let user code inject fabricated entries into dumpContext.".}
+
+when declared(contextVarRegistry):
+  {.error: "`contextVarRegistry` (the registry-walking iterator) must " &
+           "not leak through the public API. It is invoked by " &
+           "`dumpContext` only.".}
 
 when declared(userCallback):
   {.error: "`userCallback` must not leak through the public API. It lives " &

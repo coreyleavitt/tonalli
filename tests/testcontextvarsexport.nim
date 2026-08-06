@@ -16,6 +16,7 @@
 ## across module boundaries.
 
 import unittest2
+import ../chronos/contextvars  # currentContext, AsyncContext
 import ./contextvarshelper
 
 {.used.}
@@ -35,6 +36,13 @@ static:
     "the macro must not generate an imperative binder — binding is " &
     "block-scoped (`withName`) only; see " &
     "testcontextvarssurface.nim for the rationale"
+  doAssert compiles(exportedVar(currentContext())),
+    "a starred arm's SNAPSHOT reader (`name(ctx: AsyncContext)`) must " &
+    "also be reachable from an importing module — export-marker " &
+    "semantics apply uniformly to both reader overloads"
+  doAssert not compiles(privateVar(currentContext())),
+    "a non-starred arm's snapshot reader must NOT be reachable from " &
+    "an importing module either"
 
 suite "contextvars: export marker (cross-module)":
 
@@ -42,6 +50,11 @@ suite "contextvars: export marker (cross-module)":
     withExportedVar(42):
       check exportedVar() == 42
     check exportedVar() == 1
+
+  test "starred var's snapshot reader is callable from another module":
+    withExportedVar(7):
+      let snap = currentContext()
+      check exportedVar(snap) == 7
 
   test "compile-time guardrails passed":
     # Reaching this line means every `static:` check above passed.

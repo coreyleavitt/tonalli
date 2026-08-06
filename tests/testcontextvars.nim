@@ -9,7 +9,7 @@
 ## Behavior tests for chronos's continuation-local storage primitive.
 ## See docs at chronos/contextvars.nim and docs/src/contextvars.md.
 
-import std/macros
+import std/[macros, strutils]
 import unittest2
 import ../chronos/contextvars
 import ../chronos/internal/contextvars_impl  # chainLen, chainBalance
@@ -274,3 +274,196 @@ suite "contextvars: binder contract":
         withProbeInt(3):
           check chainBalance == baseline + 2
       check chainBalance == baseline
+
+# --- AsyncContext identity (==) ---------------------------------------------
+
+contextVar:
+  var identA: int = 0
+
+suite "contextvars: AsyncContext identity (==)":
+
+  test "two captures with no intervening binding change are equal":
+    let a = currentContext()
+    let b = currentContext()
+    check a == b
+
+  test "capture inside a new binder is unequal to an outer capture":
+    let outer = currentContext()
+    withIdentA(1):
+      let inner = currentContext()
+      check not (inner == outer)
+
+  test "capture after restore is equal to the pre-binder capture":
+    let before = currentContext()
+    withIdentA(1):
+      discard currentContext()
+    let after = currentContext()
+    check after == before
+
+  test "nested binder captures are pairwise unequal; restore re-equalizes":
+    let c0 = currentContext()
+    withIdentA(1):
+      let c1 = currentContext()
+      check not (c1 == c0)
+      withIdentA(2):
+        let c2 = currentContext()
+        check not (c2 == c1)
+        check not (c2 == c0)
+      let c1Again = currentContext()
+      check c1Again == c1
+    let c0Again = currentContext()
+    check c0Again == c0
+
+# --- Per-variable snapshot readers ------------------------------------------
+
+contextVar:
+  var snapOuter: int = 0
+
+suite "contextvars: snapshot readers":
+
+  test "snapshot reader sees the bound value without needing to be installed":
+    withSnapOuter(11):
+      let snap = currentContext()
+      check snapOuter(snap) == 11
+
+  test "snapshot outlives the binder that captured it; ambient reverts, snapshot doesn't":
+    var snap: AsyncContext
+    withSnapOuter(22):
+      snap = currentContext()
+    # Outside the binder: the ambient reader has reverted to the
+    # default, but the snapshot still remembers the binder's value —
+    # proving the snapshot reader walks `snap`'s own chain, not the
+    # (now-reverted) ambient one.
+    check snapOuter() == 0
+    check snapOuter(snap) == 22
+
+  test "snapshot of an outer context read while an inner binding is ambient returns the OUTER value":
+    withSnapOuter(1):
+      let outerSnap = currentContext()
+      withSnapOuter(2):
+        check snapOuter() == 2             # ambient sees the innermost binder
+        check snapOuter(outerSnap) == 1    # snapshot still sees the outer value
+      check snapOuter() == 1
+
+  test "defaulted-unbound snapshot returns the default":
+    check snapOuter(currentContext()) == 0
+
+# --- Must-bind (default-less) arms ------------------------------------------
+
+contextVar:
+  var mustBindVar: int    # must-bind: no `= default`
+
+suite "contextvars: must-bind (default-less) arms":
+
+  test "reading unbound raises UnboundContextVarDefect":
+    expect UnboundContextVarDefect:
+      discard mustBindVar()
+
+  test "reading bound works":
+    withMustBindVar(5):
+      check mustBindVar() == 5
+
+  test "binding reverts on block exit; unbound read raises again":
+    withMustBindVar(5):
+      discard
+    expect UnboundContextVarDefect:
+      discard mustBindVar()
+
+  test "nested must-bind rebinding restores LIFO, same as a defaulted var":
+    withMustBindVar(1):
+      check mustBindVar() == 1
+      withMustBindVar(2):
+        check mustBindVar() == 2
+      check mustBindVar() == 1
+
+  test "snapshot reader raises on an unbound snapshot":
+    let snap = currentContext()   # nothing bound anywhere for mustBindVar
+    expect UnboundContextVarDefect:
+      discard mustBindVar(snap)
+
+  test "snapshot reader returns the bound value when bound in the snapshot":
+    withMustBindVar(9):
+      let snap = currentContext()
+      check mustBindVar(snap) == 9
+
+# --- dumpContext / $ --------------------------------------------------------
+
+type NoDollarPtr = ptr int
+  ## Deliberately has no `$`: a plain `object` picks one up for free
+  ## from `std/objectdollar`'s generic field-by-field renderer, which
+  ## would not exercise dumpContext's placeholder path. A bare pointer
+  ## type has no such fallback.
+
+static:
+  doAssert not compiles((block:
+    var chronosProbeVal: NoDollarPtr
+    $chronosProbeVal)),
+    "control: NoDollarPtr must genuinely have no `$`, or the " &
+    "placeholder-path test below is vacuous"
+
+contextVar:
+  var dumpDefaulted: int = 7
+  var dumpMustBind: string      # must-bind
+  var dumpNoDollar: NoDollarPtr = nil
+
+suite "contextvars: dumpContext and $":
+
+  test "unbound defaulted var: bound=false, value is the rendered default":
+    let entries = dumpContext(currentContext())
+    var found = false
+    for e in entries:
+      if e.name == "dumpDefaulted":
+        found = true
+        check e.bound == false
+        check e.value == "7"
+    check found
+
+  test "bound defaulted var: bound=true, value is the bound value":
+    withDumpDefaulted(99):
+      let entries = dumpContext(currentContext())
+      var found = false
+      for e in entries:
+        if e.name == "dumpDefaulted":
+          found = true
+          check e.bound == true
+          check e.value == "99"
+      check found
+
+  test "unbound must-bind var: bound=false, placeholder value, dumpContext does not raise":
+    # Introspection is total: dumpContext must complete normally even
+    # though `dumpMustBind()` itself would raise `UnboundContextVarDefect`
+    # right now.
+    let entries = dumpContext(currentContext())
+    var found = false
+    for e in entries:
+      if e.name == "dumpMustBind":
+        found = true
+        check e.bound == false
+        check e.value == "<unbound>"
+    check found
+
+  test "bound must-bind var: bound=true, value is the bound value":
+    withDumpMustBind("hello"):
+      let entries = dumpContext(currentContext())
+      var found = false
+      for e in entries:
+        if e.name == "dumpMustBind":
+          found = true
+          check e.bound == true
+          check e.value == "hello"
+      check found
+
+  test "a type with no `$` renders as a <TypeName> placeholder":
+    let entries = dumpContext(currentContext())
+    var found = false
+    for e in entries:
+      if e.name == "dumpNoDollar":
+        found = true
+        check e.bound == false
+        check e.value == "<NoDollarPtr>"
+    check found
+
+  test "`$`(ctx) renders {name: value, ...} via the same machinery as dumpContext":
+    withDumpDefaulted(55):
+      let s = $currentContext()
+      check "dumpDefaulted: 55" in s

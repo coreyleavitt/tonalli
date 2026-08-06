@@ -60,19 +60,76 @@ when defined(chronosDebug):
 # a `value: T` field); `T` is its value type. Both are inferred at
 # macro-emission time.
 
-proc contextLookup*[N: ContextNodeBase; T](default: T): T {.gcsafe, raises: [].} =
-  ## Walk the chain looking for a node of type `N`. Return its `value`
+proc contextLookupChain[N: ContextNodeBase; T](
+    chain: ContextNodeBase, default: T): T {.inline, gcsafe, raises: [].} =
+  ## Walk `chain` looking for a node of type `N`; return its `value`
   ## field (copied for value types, shared for ref types) if found,
-  ## else return `default`.
+  ## else return `default`. Shared walker: `contextLookup` (ambient
+  ## chain) and `contextLookupSnapshot` (caller-supplied chain) both
+  ## delegate here, so the lookup semantics have exactly one
+  ## implementation. `{.inline.}` plus the two trivial one-line
+  ## callers below are expected to fold back to exactly the original
+  ## hand-written loop after inlining — verified by generated-C diff,
+  ## see the W2 commit message.
+  var node = chain
+  while node != nil:
+    if node of N:
+      return N(node).value
+    node = node.nextNode
+  default
+
+proc contextLookup*[N: ContextNodeBase; T](default: T): T {.gcsafe, raises: [].} =
+  ## Walk the ambient chain looking for a node of type `N`. Return its
+  ## `value` field (copied for value types, shared for ref types) if
+  ## found, else return `default`.
   ##
   ## INTERNAL — invoked by macro-generated readers.
   {.cast(gcsafe).}:
-    var node = currentAsyncContext
-    while node != nil:
-      if node of N:
-        return N(node).value
-      node = node.nextNode
-    default
+    contextLookupChain[N, T](currentAsyncContext, default)
+
+proc contextLookupSnapshot*[N: ContextNodeBase; T](
+    chain: ContextNodeBase, default: T): T {.gcsafe, raises: [].} =
+  ## Snapshot variant of `contextLookup`: walk `chain` (typically the
+  ## chain underlying a captured `AsyncContext`) instead of the
+  ## ambient `currentAsyncContext`. Does not install `chain` — this is
+  ## a read, not a bind.
+  ##
+  ## INTERNAL — invoked by macro-generated snapshot readers
+  ## (`name(ctx: AsyncContext)`).
+  contextLookupChain[N, T](chain, default)
+
+proc contextFindChain[N: ContextNodeBase; T](
+    chain: ContextNodeBase): tuple[found: bool, value: T]
+    {.inline, gcsafe, raises: [].} =
+  ## Walk `chain` for a node of type `N`, reporting whether one was
+  ## found instead of folding a miss into a default — must-bind arms
+  ## need to distinguish "unbound" from "bound to the zero value" to
+  ## raise `UnboundContextVarDefect` (chronos/contextvars.nim)
+  ## correctly. Shared by `contextFind` and `contextFindSnapshot`
+  ## below, same one-implementation discipline as `contextLookupChain`.
+  var node = chain
+  while node != nil:
+    if node of N:
+      return (true, N(node).value)
+    node = node.nextNode
+
+proc contextFind*[N: ContextNodeBase; T](): tuple[found: bool, value: T]
+    {.gcsafe, raises: [].} =
+  ## Ambient must-bind probe. INTERNAL — invoked by macro-generated
+  ## readers for default-less (`var name: T`) arms, which raise
+  ## `UnboundContextVarDefect` when `found` is false. Kept raise-free
+  ## here — the Defect type lives in the public
+  ## `chronos/contextvars.nim` and is raised there, not in this
+  ## internal module.
+  {.cast(gcsafe).}:
+    contextFindChain[N, T](currentAsyncContext)
+
+proc contextFindSnapshot*[N: ContextNodeBase; T](
+    chain: ContextNodeBase): tuple[found: bool, value: T] {.gcsafe, raises: [].} =
+  ## Snapshot counterpart of `contextFind`. Also the primitive
+  ## `dumpContext` uses, via each arm's generated render proc, to
+  ## report an arm's bound/unbound state and value within a snapshot.
+  contextFindChain[N, T](chain)
 
 template contextBindSlot*[N: ContextNodeBase; T](v: T, body: untyped) =
   ## Push a new `N` slot owning `v` onto the chain for the dynamic
@@ -104,3 +161,76 @@ template contextBindSlot*[N: ContextNodeBase; T](v: T, body: untyped) =
     currentAsyncContext = chronosCtxPrev
     when defined(chronosDebug):
       dec chainBalance
+
+# --- Introspection registry -------------------------------------------------
+#
+# An intrusive, allocation-free registry of every declared `contextVar`
+# arm, so `dumpContext` (chronos/contextvars.nim) can enumerate them
+# without a global `Table` or any other GC-managed collection. Each arm
+# emits one module-level `ContextVarRegistration` global (a plain
+# `object`, not `ref`) and links it into `contextVarRegistryHead` from
+# that module's init statements — see the `contextVar` macro.
+
+type
+  ContextVarRenderProc* = proc(chain: ContextNodeBase):
+    tuple[bound: bool, rendered: string] {.nimcall, gcsafe, raises: [].}
+    ## Per-arm introspection renderer emitted by the `contextVar`
+    ## macro. Reports whether the arm is bound in `chain`, and a `$`-
+    ## rendered (or placeholder) string of its value either way — the
+    ## bound value if bound, else the rendered default (defaulted
+    ## arms) or a fixed placeholder (must-bind arms). INTERNAL —
+    ## invoked by `dumpContext` via the registry only.
+
+  ContextVarRegistration* = object
+    ## Intrusive registry node for one `contextVar` arm, emitted as a
+    ## module-level global by the macro. Plain `object`, not `ref`:
+    ## `name` (cstring) and `render` (a `{.nimcall.}` proc pointer,
+    ## i.e. a plain code pointer with no closure environment) involve
+    ## no GC-tracked memory, so linking one of these into the registry
+    ## allocates nothing, and reading the list from any thread after
+    ## registration has completed (see `registerContextVar`) needs no
+    ## synchronization.
+    name*: cstring
+    render*: ContextVarRenderProc
+    registered: bool
+    next: ptr ContextVarRegistration
+
+var contextVarRegistryHead: ptr ContextVarRegistration
+  ## Head of the global registry list. Deliberately a single
+  ## process-wide global, NOT `{.threadvar.}`: `contextVar` arms are
+  ## compile-time declarations, not per-task or per-thread state, so
+  ## there is exactly one registry regardless of how many threads run.
+  ## Written only during module init (see `registerContextVar`);
+  ## read-only for the remaining life of the process, so concurrent
+  ## reads from any thread (via `contextVarRegistry`, e.g. from inside
+  ## `dumpContext` called on a non-main thread) are safe without a
+  ## lock.
+
+proc registerContextVar*(node: ptr ContextVarRegistration) {.gcsafe, raises: [].} =
+  ## Link `node` into the global registry, idempotently — calling this
+  ## twice on the same node is a no-op the second time. Called once
+  ## per `contextVar` arm, from that arm's module-level init
+  ## statements (`var reg = ContextVarRegistration(...);
+  ## registerContextVar(addr reg)`, emitted by the macro).
+  ##
+  ## ASSUMPTION (thread-safety): Nim runs every module's top-level
+  ## ("init") statements once, on the main thread, as part of program
+  ## startup — strictly before user code reaches a point where it
+  ## could call `createThread`. So by the time any second thread
+  ## exists, every `contextVar` arm compiled into the program has
+  ## already registered, and this proc never runs concurrently with
+  ## itself or with a `contextVarRegistry` read. If a future Nim
+  ## toolchain changes that ordering guarantee, this would need a lock
+  ## or an atomic CAS on `contextVarRegistryHead`.
+  if not node.registered:
+    node.registered = true
+    node.next = contextVarRegistryHead
+    contextVarRegistryHead = node
+
+iterator contextVarRegistry*(): ptr ContextVarRegistration {.raises: [].} =
+  ## Walk every registered `contextVar` arm. INTERNAL — used by
+  ## `dumpContext` only.
+  var n = contextVarRegistryHead
+  while n != nil:
+    yield n
+    n = n.next

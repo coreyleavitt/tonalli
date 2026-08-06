@@ -31,6 +31,7 @@ when not defined(windows):
 contextVar:
   var asyncInt: int = 0
   var asyncStr: string = ""
+  var asyncReq: int    # must-bind: no default
 
 suite "contextvars: async propagation":
 
@@ -1236,4 +1237,33 @@ suite "contextvars: scheduling scenario pins":
     server.stop()
     server.close()
     waitFor(server.join())
+
+suite "contextvars: must-bind async propagation":
+
+  test "must-bind binding propagates across await exactly like a defaulted var":
+    # Same capture-at-scheduling/restore-at-fire machinery as
+    # `asyncInt`/`asyncStr` above — must-bind arms use the identical
+    # generated binder and the identical dispatcher plumbing, only the
+    # READER differs (raise vs. default on a miss). This test pins
+    # that the propagation half of the contract is unaffected: bind
+    # before an `await`, read the same value after it resumes.
+    proc work(): Future[int] {.async: (raises: [Exception]).} =
+      check asyncReq() == 17
+      await sleepAsync(1.milliseconds)
+      check asyncReq() == 17
+      return asyncReq()
+
+    proc driver(): Future[int] {.async: (raises: [Exception]).} =
+      withAsyncReq(17):
+        return await work()
+
+    check waitFor(driver()) == 17
+
+  test "must-bind read with no binder anywhere, including across await, raises":
+    proc work(): Future[void] {.async: (raises: [Exception]).} =
+      await sleepAsync(1.milliseconds)
+      expect(UnboundContextVarDefect):
+        discard asyncReq()
+
+    waitFor(work())
 
