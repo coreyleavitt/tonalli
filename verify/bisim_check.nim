@@ -119,7 +119,14 @@ proc doAddLastReal(s: var RealState, tag: int) =
 
 proc doAddFirstReal(s: var RealState, tag: int) =
   guardAsserts("real.addFirst"):
-    s.q.addFirst(tag)
+    # The real module's operation is named `prependNoGrow` (renamed from
+    # D9's originally-planned `addFirst` during S10; pre-existing,
+    # unrelated to W3 - this call site had drifted out of sync with the
+    # rename, same root cause `drift_check.nim` independently caught for
+    # `callbackqueue_model.nim`'s precondition message). The rule/guard
+    # LABEL stays "addFirst" (bisim's own vocabulary, shared with the
+    # `std/deques` reference side below, which genuinely has `addFirst`).
+    s.q.prependNoGrow(tag)
 
 proc addFirstEnabledReal(s: RealState): bool = s.q.len < s.cap
 

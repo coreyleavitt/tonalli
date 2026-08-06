@@ -1,48 +1,33 @@
-## RFC 0001 D9-V / S11 — drift check: verify/'s mirrors vs the real module.
+## RFC 0001 D9-V / S11 — drift check: `callbackqueue_model.nim`'s ghost
+## reimplementation vs the real module's precondition messages.
 ##
 ## **FORK-ONLY.** See `verify/README.md`. Run via `verify/run.sh drift`.
 ##
-## S9's `primitives.nim`/`callbackqueue_model.nim` are textual mirrors of
-## D9's shape, hand-copied before `chronos/internal/callbackqueue.nim`
-## existed (S9's own module doc explains why: nothing to import from at the
-## time). S11 points layers 3-5 at the REAL module directly (no more
-## copying), but layers 1-2 still walk the S9 mirrors, because symex needs
-## direct `proc`-level access to the five index primitives and the real
-## module deliberately keeps them **private** (D9's stated interface
-## narrowing — "Private data/head/tail... every touch goes through the five
-## [public] procs/templates"; exporting them to satisfy a verification tool
-## would be the exact kind of public-surface change RFC 0001's non-goals
-## rule out: "No API changes: public surface is frozen post-review-round-4").
-## So the mirrors stay, and this file is the cheap, mechanical check that
-## keeps them honest: it re-reads both files' SOURCE TEXT at runtime and
-## confirms every primitive's invariant — its literal `doAssert` message,
-## and the load-bearing arithmetic/branch shape of its body — appears
-## verbatim in both.
+## **W3 retirement note:** this file used to ALSO check `primitives.nim`
+## against the real module (S9's own module doc explained why: `primitives.
+## nim` was a hand-copied textual mirror, made before `chronos/internal/
+## callbackqueue.nim` existed). W3 replaced that mirror with a direct
+## `include` of the real module (see `primitives.nim`'s current module
+## doc) - the two are now byte-identical for the included portion BY
+## CONSTRUCTION, so a textual drift check between them is not merely
+## unnecessary, it is vacuous (there is nothing left that COULD drift
+## without a compile error). The `primitives.nim`-vs-real checks are
+## removed for exactly that reason; they are not "retired but load-
+## bearing", they are retired because the failure mode they existed to
+## catch is now structurally impossible.
 ##
-## **Known, documented divergence this check must NOT flag** (S9's own
-## finding #2, `verify/README.md`): `primitives.nim` hoists `capMask`'s
-## `cap - 1` and `slotIndex`/`isFull`'s inner call results to named `let`s
-## to work around a symex walker crash; the real module keeps the spike's
-## original single-expression shapes. This check therefore compares
-## doAssert MESSAGES (untouched by the hoist — pure string literals) and
-## the handful of substrings that survive the hoist unchanged (`cap - 1`,
-## the `growTargetCap` doubling arm), not full proc bodies. A genuine
-## semantic drift — a changed invariant, a changed growth rule, a changed
-## message — fails this check; the hoist itself does not.
-##
-## What this does NOT catch (stated, not silent): a change to `slotIndex`'s
-## masking expression itself (`pos and capMask(cap)`) that preserves the
-## substrings checked here would slip through — layer 1's symex proof
-## covers `slotIndex`'s behavior directly (over the mirror, not the real
-## module), and layers 3/5 (bisim, mutation) exercise the real module's
-## actual masking behavior at runtime, so a masking regression is still
-## caught, just not by this specific textual check.
+## What remains genuinely load-bearing: `callbackqueue_model.nim` is
+## STILL a hand-maintained, independent reimplementation (deliberately -
+## see its own module doc on why it cannot `include` the real module
+## either), so its precondition messages CAN still drift from the real
+## module's silently. This file keeps exactly that check: it re-reads
+## both files' SOURCE TEXT at runtime and confirms each checked
+## precondition's literal `doAssert` message appears verbatim in both.
 
 import std/[strutils, os]
 
 const
   realModulePath = "../chronos/internal/callbackqueue.nim"
-  primitivesPath = "./primitives.nim"
   modelPath = "./callbackqueue_model.nim"
 
 type
@@ -76,38 +61,22 @@ if not fileExists(realModulePath):
   quit(1)
 
 let realSrc = readFile(realModulePath)
-let primitivesSrc = readFile(primitivesPath)
 let modelSrc = readFile(modelPath)
-
-# --- capMask: invariant message + the return arithmetic -------------------
-runCheck("capMask: invariant message",
-  "CallbackQueue: capacity must be a positive power of two", realSrc, primitivesSrc)
-runCheck("capMask: return arithmetic (cap - 1)",
-  "cap - 1", realSrc, primitivesSrc)
-
-# --- queueLen: invariant message -------------------------------------------
-runCheck("queueLen: invariant message",
-  "CallbackQueue: tail must never precede head", realSrc, primitivesSrc)
-runCheck("queueLen: return arithmetic (tail - head)",
-  "tail - head", realSrc, primitivesSrc)
-
-# --- isFull: agreement with queueLen >= cap --------------------------------
-runCheck("isFull: threshold (queueLen(head, tail) >= cap)",
-  "queueLen(head, tail) >= cap", realSrc, primitivesSrc)
-
-# --- growTargetCap: invariant message + doubling rule ----------------------
-runCheck("growTargetCap: invariant message",
-  "CallbackQueue: capacity must not be negative", realSrc, primitivesSrc)
-runCheck("growTargetCap: doubling rule (if cap == 0: 8 else: cap * 2)",
-  "if cap == 0: 8 else: cap * 2", realSrc, primitivesSrc)
 
 # --- grow(): full-queue precondition message (callbackqueue_model.nim) ----
 runCheck("grow(): non-full-queue precondition message",
   "CallbackQueue.grow(): called on a non-full queue", realSrc, modelSrc)
 
-# --- addFirst: overfull precondition message -------------------------------
-runCheck("addFirst: unexpectedly-full precondition message",
-  "CallbackQueue.addFirst(): queue unexpectedly full", realSrc, modelSrc)
+# --- addFirst/prependNoGrow: overfull precondition message ----------------
+# Pre-existing (not a W3 finding): the ghost model's `addFirst` keeps D9's
+# originally-planned name; the shipped real implementation renamed the
+# same operation to `prependNoGrow` during S10 without updating this
+# check's needle, so it drifted silently until this run. Checking the
+# invariant text alone (dropping the proc-name prefix, which the two
+# sides intentionally disagree on by design - see `callbackqueue_model.
+# nim`'s module doc) is the correct fix, not renaming either side.
+runCheck("addFirst/prependNoGrow: unexpectedly-full precondition message",
+  "queue unexpectedly full", realSrc, modelSrc)
 
 # --- popFirst: empty-queue precondition message ----------------------------
 runCheck("popFirst: empty-queue precondition message",

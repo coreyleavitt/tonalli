@@ -3,11 +3,16 @@
 ## **FORK-ONLY.** See `verify/README.md`.
 ##
 ## Mirrors D9's exact protocol (five entry points: `initCallbackQueue`,
-## `addLast`, `addFirst`, `popFirst`, `len`; monotonic never-wrapped
-## `head`/`tail`; whole-region `copyMem`+`zeroMem` growth; template-fused
-## dequeue) against the same index primitives verified in `primitives.nim`.
-## Field-for-field, op-for-op identical to the validated S9.0 spike
-## (`spike/s9.0-callbackqueue`), generic over `T` exactly as D9 specifies.
+## `addLast`, `addFirst`, `popFirst`, `len`; monotonic `uint`, wraparound-
+## tolerant `head`/`tail` (W3); whole-region `copyMem`+`zeroMem` growth;
+## template-fused dequeue) against the same index primitives verified in
+## `primitives.nim` (reached through its exported `*V` wrappers - this file
+## deliberately does NOT `include ./primitives`: that would also pull in
+## the REAL `CallbackQueue[T]` type/`initCallbackQueue`/`addLast`/
+## `popFirst`/`grow`, colliding with this file's own same-named ghost
+## versions below). Field-for-field, op-for-op identical to the validated
+## S9.0 spike (`spike/s9.0-callbackqueue`) other than the W3 `uint` change,
+## generic over `T` exactly as D9 specifies.
 ##
 ## One deliberate addition beyond D9's real interface: `popFirstRejected`,
 ## a second dequeue template implementing the round-4 REJECTED shape
@@ -37,21 +42,23 @@ type
     id*: int
 
   CallbackQueue*[T] = object
-    ## Seq-backed queue with monotonic (never-wrapped) logical `head`/
-    ## `tail` positions -- `head == tail` is unambiguously "empty" no
-    ## matter how many times the backing buffer has wrapped physically.
+    ## Seq-backed queue with monotonic, `uint`, wraparound-tolerant
+    ## logical `head`/`tail` positions (W3) -- `head == tail` is
+    ## unambiguously "empty" no matter how many times the backing buffer
+    ## has wrapped physically OR `head`/`tail` themselves have wrapped
+    ## past `high(uint)`.
     data: seq[T]
-    head: int
-    tail: int
+    head: uint
+    tail: uint
 
 proc initCallbackQueue*[T](initialCap: int = 8): CallbackQueue[T] =
   var cap = 1
   while cap < initialCap:
     cap = cap * 2
-  CallbackQueue[T](data: newSeq[T](cap), head: 0, tail: 0)
+  CallbackQueue[T](data: newSeq[T](cap), head: 0'u, tail: 0'u)
 
 func len*[T](q: CallbackQueue[T]): int {.inline.} =
-  queueLen(q.head, q.tail)
+  queueLenV(q.head, q.tail)
 
 func cap*[T](q: CallbackQueue[T]): int {.inline.} =
   q.data.len
@@ -73,12 +80,12 @@ proc grow[T](q: var CallbackQueue[T]) =
   ## construction (D9's stated growth argument; the index-level
   ## arithmetic is proved separately in `symex_checks.nim`).
   let oldCap = q.data.len
-  let n = queueLen(q.head, q.tail)
+  let n = queueLenV(q.head, q.tail)
   doAssert n == oldCap, "CallbackQueue.grow(): called on a non-full queue"
-  let newCap = growTargetCap(oldCap)
+  let newCap = growTargetCapV(oldCap)
   var newData = newSeq[T](newCap)
   if n > 0:
-    let startIdx = slotIndex(q.head, oldCap)
+    let startIdx = slotIndexV(q.head, oldCap)
     let firstSeg = min(n, oldCap - startIdx)
     copyMem(addr newData[0], addr q.data[startIdx], firstSeg * sizeof(T))
     zeroMem(addr q.data[startIdx], firstSeg * sizeof(T))
@@ -87,13 +94,13 @@ proc grow[T](q: var CallbackQueue[T]) =
       copyMem(addr newData[firstSeg], addr q.data[0], rest * sizeof(T))
       zeroMem(addr q.data[0], rest * sizeof(T))
   q.data = newData
-  q.head = 0
-  q.tail = n
+  q.head = 0'u
+  q.tail = uint(n)
 
 proc addLast*[T](q: var CallbackQueue[T], item: chronosSink T) =
-  if isFull(q.head, q.tail, q.data.len):
+  if isFullV(q.head, q.tail, q.data.len):
     grow(q)
-  let idx = slotIndex(q.tail, q.data.len)
+  let idx = slotIndexV(q.tail, q.data.len)
   q.data[idx] = item
   inc q.tail
 
@@ -101,10 +108,10 @@ proc addFirst*[T](q: var CallbackQueue[T], item: chronosSink T) =
   ## Sole caller (D9): sentinel re-insertion at the front of an
   ## already-fully-drained batch -- never a general push-front, so no
   ## growth path here.
-  doAssert not isFull(q.head, q.tail, q.data.len),
+  doAssert not isFullV(q.head, q.tail, q.data.len),
     "CallbackQueue.addFirst(): queue unexpectedly full"
   dec q.head
-  let idx = slotIndex(q.head, q.data.len)
+  let idx = slotIndexV(q.head, q.data.len)
   q.data[idx] = item
 
 template popFirst*[T](q: var CallbackQueue[T]): T =
@@ -112,8 +119,8 @@ template popFirst*[T](q: var CallbackQueue[T]): T =
   ## straight in the caller-frame local; the vacated slot is cleared by
   ## `chronosMoveSink`'s own `wasMoved` semantics -- one transfer, same
   ## step, no intermediate uncounted hop.
-  doAssert q.tail > q.head, "CallbackQueue.popFirst(): queue is empty"
-  let chronosQueueIdx = slotIndex(q.head, q.data.len)
+  doAssert q.tail != q.head, "CallbackQueue.popFirst(): queue is empty"
+  let chronosQueueIdx = slotIndexV(q.head, q.data.len)
   inc q.head
   chronosMoveSink(q.data[chronosQueueIdx])
 
@@ -125,8 +132,8 @@ template popFirstRejected*[T](q: var CallbackQueue[T]): T =
   ## hand-waved stand-in): this is the literal shape the RFC rejects,
   ## reproduced here so `bmc_ghost.nim` can falsify it mechanically
   ## rather than by prose alone.
-  doAssert q.tail > q.head, "CallbackQueue.popFirst(): queue is empty"
-  let chronosQueueIdx = slotIndex(q.head, q.data.len)
+  doAssert q.tail != q.head, "CallbackQueue.popFirst(): queue is empty"
+  let chronosQueueIdx = slotIndexV(q.head, q.data.len)
   inc q.head
   var chronosRejectedLocal: T
   copyMem(addr chronosRejectedLocal, addr q.data[chronosQueueIdx], sizeof(T))

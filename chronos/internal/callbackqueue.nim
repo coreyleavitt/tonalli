@@ -28,41 +28,67 @@ import ../config
 
 type
   CallbackQueue*[T] = object
-    ## Seq-backed queue with monotonic (never-wrapped) logical `head`/
-    ## `tail` positions — `head == tail` is unambiguously "empty" no
-    ## matter how many times the backing buffer has wrapped physically.
-    ## Logical positions are folded into the physical `[0, cap)` range
-    ## only at slot access (`slotIndex`), never by clamping `head`/`tail`
-    ## themselves.
+    ## Seq-backed queue with monotonic logical `head`/`tail` positions
+    ## held as `uint`: rather than ever raising an overflow error after
+    ## enough pushes/pops over a long-running dispatcher's lifetime,
+    ## `head`/`tail` wrap around at `high(uint) + 1` - well-defined,
+    ## unchecked `uint` arithmetic, textbook ring-buffer discipline.
+    ## `head == tail` is unambiguously "empty" whether or not either has
+    ## wrapped: unsigned subtraction (`tail - head`) is congruent modulo
+    ## `2^wordsize`, so it recovers the true logical length regardless of
+    ## how many times either has wrapped, as long as that length never
+    ## exceeds `cap` - an invariant `isFull` itself asserts on every
+    ## check. Logical positions are folded into the physical `[0, cap)`
+    ## range only at slot access (`slotIndex`), never by clamping
+    ## `head`/`tail` themselves.
     ##
     ## The zero value (`CallbackQueue[T]()`, no `initCallbackQueue` call)
     ## is a valid, empty queue that lazily grows from capacity `0` on the
     ## first `addLast`, matching `std/deques`' own lazy-init behavior.
     ## `asyncengine.nim`'s POSIX `Dispatcher.ticks` field relies on this.
     data: seq[T]
-    head: int
-    tail: int
+    head: uint
+    tail: uint
 
 # --- index primitives ---------------------------------------------------
 
-proc capMask(cap: int): int {.inline.} =
-  doAssert cap > 0 and (cap and (cap - 1)) == 0,
+proc capMask(cap: int): uint {.inline.} =
+  # `capMinusOne` is bound to a `let` rather than inlined directly into
+  # the `and` below - same expression either way (identical codegen),
+  # but `verify/`'s symex walker (fork-only, see `verify/primitives.nim`)
+  # cannot resolve a bitwise-`and` whose second operand is an inline
+  # arithmetic sub-expression of the same variable as the first operand.
+  let capMinusOne = cap - 1
+  doAssert cap > 0 and (cap and capMinusOne) == 0,
     "CallbackQueue: capacity must be a positive power of two"
-  cap - 1
+  uint(capMinusOne)
 
-proc slotIndex(pos, cap: int): int {.inline.} =
-  ## Fold a monotonic logical position into `[0, cap)`. `cap` being a
-  ## power of two makes this correct for negative `pos` too (two's
-  ## complement `and` is congruent mod `cap`), which `prependNoGrow`'s
-  ## `dec head` relies on.
-  pos and capMask(cap)
+proc slotIndex(pos: uint, cap: int): int {.inline.} =
+  ## Fold a monotonic (uint, possibly-wrapped) logical position into
+  ## `[0, cap)`. `cap` being a power of two makes this correct across a
+  ## `pos` wrap too (unsigned `and` is congruent mod `cap`), which
+  ## `prependNoGrow`'s `dec head` relies on when `head == 0`.
+  ##
+  ## `mask` is bound to a `let` for the same symex-walkability reason as
+  ## `capMask` above (a direct, non-let-bound call result as an `and`
+  ## operand is the walker's other documented blind spot).
+  let mask = capMask(cap)
+  int(pos and mask)
 
-proc queueLen(head, tail: int): int {.inline.} =
-  doAssert tail >= head, "CallbackQueue: tail must never precede head"
-  tail - head
+proc queueLen(head, tail: uint): int {.inline.} =
+  ## `tail - head`, unsigned: congruent mod `2^wordsize`, so this is the
+  ## true logical length whether or not `head`/`tail` have wrapped - no
+  ## ordering comparison between them is meaningful any more (unlike the
+  ## former monotonic-`int` discipline, "tail must never precede head"
+  ## does not hold under wraparound).
+  int(tail - head)
 
-proc isFull(head, tail, cap: int): bool {.inline.} =
-  queueLen(head, tail) >= cap
+proc isFull(head, tail: uint, cap: int): bool {.inline.} =
+  let n = queueLen(head, tail)
+  doAssert n >= 0 and n <= cap,
+    "CallbackQueue: length invariant violated - `tail - head` " &
+    "(mod 2^wordsize) must never exceed capacity"
+  n >= cap
 
 proc growTargetCap(cap: int): int {.inline.} =
   doAssert cap >= 0, "CallbackQueue: capacity must not be negative"
@@ -79,7 +105,7 @@ proc initCallbackQueue*[T](initialCap: int = 8): CallbackQueue[T] =
   var cap = 1
   while cap < initialCap:
     cap = cap * 2
-  CallbackQueue[T](data: newSeq[T](cap), head: 0, tail: 0)
+  CallbackQueue[T](data: newSeq[T](cap), head: 0'u, tail: 0'u)
 
 func len*[T](q: CallbackQueue[T]): int {.inline.} =
   queueLen(q.head, q.tail)
@@ -108,8 +134,8 @@ proc grow[T](q: var CallbackQueue[T]) =
       copyMem(addr newData[firstSeg], addr q.data[0], rest * sizeof(T))
       zeroMem(addr q.data[0], rest * sizeof(T))
   q.data = newData
-  q.head = 0
-  q.tail = n
+  q.head = 0'u
+  q.tail = uint(n)
 
 proc addLast*[T](q: var CallbackQueue[T], item: chronosSink T) =
   if isFull(q.head, q.tail, q.data.len):
@@ -145,7 +171,7 @@ template popFirst*[T](q: var CallbackQueue[T]): T =
   ## The vacated slot is cleared via `chronosMoveSink`, an lvalue read of
   ## a live queue slot — unlike `addLast`/`prependNoGrow` above, which assign
   ## already-spent `sink` parameters directly.
-  doAssert q.tail > q.head, "CallbackQueue.popFirst(): queue is empty"
+  doAssert q.tail != q.head, "CallbackQueue.popFirst(): queue is empty"
   let chronosQueueIdx = slotIndex(q.head, q.data.len)
   inc q.head
   when defined(chronosDebug):

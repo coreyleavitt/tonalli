@@ -57,11 +57,11 @@ verification and nothing else.
 
 | File | Role |
 |---|---|
-| `primitives.nim` | The five index primitives (`capMask`, `slotIndex`, `queueLen`, `isFull`, `growTargetCap`), mirroring the validated S9.0 spike (`spike/s9.0-callbackqueue`, `ad569a3`) with two documented, load-bearing deviations (see Findings below). |
+| `primitives.nim` | W3: `include`s `chronos/internal/callbackqueue.nim` directly (no more hand-copied mirror - see "Why layers 1-2 still use mirrors, but 3-4 don't") and re-exports the five index primitives (`capMask`, `slotIndex`, `queueLen`, `isFull`, `growTargetCap`) as thin `*V`-suffixed wrappers for `symex_checks.nim`/`callbackqueue_model.nim` to call. Pre-W3, this was a hand-copied textual mirror of the S9.0 spike with two documented, load-bearing deviations (see Findings below) - those deviations now live directly in the real module's `capMask`/`slotIndex` instead (same reasoning, same fix). |
 | `callbackqueue_model.nim` | The generic `CallbackQueue[T]` (all five real entry points + growth), plus `GhostItem` and a second dequeue template, `popFirstRejected`, implementing the round-4 REJECTED `copyMem`-to-stack-local shape for layer 2 to falsify against. |
 | `symex_checks.nim` | Layer 1: six `symexFind(..., tAssertionViolation())` proofs. |
 | `bmc_ghost.nim` | Layer 2: six `bmcCheck` runs (two ownership shapes × three invariants) over a ghost refcount ledger. |
-| `drift_check.nim` | S11: cheap textual drift check between `primitives.nim`/`callbackqueue_model.nim` (S9's mirrors) and the real, shipped `chronos/internal/callbackqueue.nim` — see "Why layers 1-2 still use mirrors" below. |
+| `drift_check.nim` | S11: cheap textual drift check, originally between BOTH `primitives.nim`/`callbackqueue_model.nim` and the real module. W3 retired the `primitives.nim` half as vacuous (it now `include`s the real module - nothing left that could drift without a compile error); `callbackqueue_model.nim` is still a genuinely independent reimplementation, so its precondition-message checks remain load-bearing. |
 | `bisim_check.nim` | S11 layer 3: bisimulation (`bisimulationCheck`) of the REAL `CallbackQueue[int]` vs a `std/deques[int]` reference, both MMs. |
 | `fuzz_leak.nim` | S11 layer 4: coverage-guided (IR-mutation) fuzz over random op sequences against the REAL `CallbackQueue[LeakItem]` (`ref`-typed elements), with `GC_fullCollect`/`getOccupiedMem` leak accounting and a dedicated Defect-unwind check, both MMs. |
 | `mutants/*.patch` | S11 layer 5: one unified diff per systematic mutant applied to `chronos/internal/callbackqueue.nim` during mutation testing — applied, checked, and reverted mechanically; never left in the tree (see the Layer 5 section below for the kill matrix). |
@@ -232,6 +232,77 @@ not viable; it would never fire.
   ("minutes, harness container only"); S11's coverage-guided fuzz picks up
   where BMC's exhaustive-but-bounded sweep stops.
 
+## W3 — uint wraparound counters: re-verification
+
+`chronos/internal/callbackqueue.nim`'s `head`/`tail` changed from
+monotonic (never-wrapped) `int` to monotonic, wraparound-tolerant `uint`
+(textbook ring-buffer discipline: `len = tail - head` as unsigned
+arithmetic is correct across any number of wraps; "empty" is `head ==
+tail`; the `doAssert`s were reworked to invariants valid under modular
+arithmetic — `isFull`/`queueLen` now assert `0 <= len <= cap`, not an
+ordering relationship between `head` and `tail` that wraparound makes
+meaningless). Motivation: the pre-W3 `int` discipline could only be
+proven over a bounded domain (`[-2^40, 2^40]`, see the pre-W3 Layer 1
+table below) because unconstrained `tail - head` genuinely overflows
+`int` (Nim's checked signed arithmetic raises `OverflowDefect`) — a
+latent, if practically distant, long-run risk for a dispatcher that never
+restarts. `uint` subtraction is congruent mod `2^64` by definition and
+cannot overflow, removing the bound entirely.
+
+Layers 1-2 were switched to target the real module directly for this
+re-verification (see "Why layers 1-2 still use mirrors, but 3-4 don't",
+above, for the mechanism). All verdicts below are against the ACTUAL
+shipped `chronos/internal/callbackqueue.nim`, not a mirror.
+
+**Layer 1 (symex, `symex_checks.nim`) — all six re-proven, PROVEN, over a
+STRICTLY WIDER domain than before:**
+
+| Invariant | Verdict | Bound |
+|---|---|---|
+| `capMask`: totality + `m == uint(cap - 1)` | **PROVEN** | `cap` a positive power of two; unbounded magnitude (unchanged from pre-W3 — bitwise AND cannot overflow either way) |
+| `slotIndex`: result in `[0, cap)` over the FULL **`uint`** domain for `pos` (subsumes the `prependNoGrow` post-wraparound-decrement edge — `dec head` at `head == 0` now wraps to `high(uint)` rather than going negative) | **PROVEN** | `cap` a positive power of two; `pos` fully unconstrained over `uint` (was: fully unconstrained over `int`, pre-W3) |
+| `queueLen`: totality + `n == int(tail - head)`, `0 <= n <= cap` | **PROVEN** | `cap` a positive power of two, `<= 2^40` (unchanged scope-out, `growTargetCap`-adjacent); `head`/`tail` **fully unconstrained over the entire `uint` domain** — no `[-2^40, 2^40]` bound needed any more (was required pre-W3: unconstrained `int` subtraction genuinely overflowed) |
+| `isFull`: agrees with `(tail - head) >= uint(cap)` | **PROVEN** | same as `queueLen` above |
+| `growTargetCap`: totality + strict growth + exact doubling/8-floor | **PROVEN** | `0 <= cap <= 2^40` (unchanged — pure `int`, not touched by the `uint` change) |
+| Wrapped-region growth sweep (both `copyMem` segments in-bounds, jointly cover exactly `n` items once each) | **PROVEN** | `oldCap` a positive power of two, `<= 2^40`; `head` fully unconstrained over `uint` |
+
+**Layer 2 (`bmcCheck` ghost-ownership model, `bmc_ghost.nim`) — unchanged
+verdicts, re-run against the `uint`-typed model** (`callbackqueue_model.
+nim`'s own `CallbackQueue[T].head`/`.tail` updated to `uint` to match):
+all six runs matched their expected verdict (FUSED ownership-conserving
+on all three properties; REJECTED shape correctly FALSIFIED on
+`refcountConserved` at depth 2, VERIFIED on the other two) — same
+negative-control shape as pre-W3, confirming the `uint` change didn't
+accidentally weaken the model's ability to distinguish the adopted shape
+from the rejected one.
+
+**Layers 3-4 (bisimulation vs `std/deques`, coverage-guided fuzz + GC
+stress + leak accounting) — re-run against the real, uint-based module,
+both MMs:** `bisim`: EQUIVALENT (depth 12, 22 pairs explored, both
+`--mm:refc` and `--mm:orc`). `fuzz`: 0 crashes, 0 leak-accounting failures
+across 50,000 iterations each MM (refc: 23.5s wall; orc: 10.7s wall).
+
+**Layer 5 (mutation scoring) — all six mutant patches regenerated against
+the current file (the originals no longer applied cleanly: they predated
+both the `uint` change and an earlier, unrelated `addFirst` ->
+`prependNoGrow` rename that had also gone stale in `bisim_check.nim`/
+`fuzz_leak.nim` — fixed in passing, see those files' inline notes) and
+re-run. All six still killed:**
+
+| # | mutant | killed by (W3 re-run) | killed by (pre-W3) |
+|---|---|---|---|
+| M1 | `addLast`: `inc q.tail` → `q.tail += 2` | A (4/11 fail) | A, B, C |
+| M2 | `capMask`: return `uint(cap)` instead of `uint(cap - 1)` | A (4/11 fail) | A, B, C |
+| M3 | `grow()`: drop the first segment's `zeroMem` | **A and B (process crash / SIGSEGV, no leg needed escalation to fuzz)** | D only (A/B/C survived pre-W3; closed by the same distilled regression pin this run's leg A now reliably crashes on) |
+| M4 | `grow()`: swap the two `copyMem` destinations | A and B (process crash / SIGSEGV) | A, B, C |
+| M5 | `popFirst`: drop `chronosMoveSink`, both branches | B (10/11 fail); A survives (documented — no *observable* corruption at this scale under refc's ordinary scope-exit decref) | B only |
+| M6 | canary: `==` → `!=` in the vacated-slot-zeroed `doAssert` | B (10/11 fail); A survives (canary is `chronosDebug`-gated) | B only |
+
+Zero survivors, same as pre-W3 — mutation testing has the same (M3: even
+stronger) teeth against the `uint`-based code. No proof failed against
+the `uint` semantics; nothing in this re-verification blocks the queue
+change.
+
 ## Findings (for the control loop — none of these were fixed in D9's spec by this slice)
 
 Recorded precisely, per RFC 0001 S9's stated purpose ("this slice may send
@@ -302,7 +373,33 @@ where the mutant classes tested here (write-barrier/relocation-adjacent
 bugs) manifest most sharply — see the Layer 5 section for the exact legs
 each mutant was checked against.
 
-### Why layers 1-2 still use mirrors, but 3-4 don't
+### Why layers 1-2 still use mirrors, but 3-4 don't (superseded by W3 — see below)
+
+**W3 update:** the "layers 1-2 keep exporting nothing, so they must stay
+on a hand-copied mirror" tradeoff below was S11's call given S9/S10's
+constraints at the time. W3 (the `int` -> `uint` wraparound-counter
+change) revisited it and found a way to point layers 1-2 at the real
+module too, without widening chronos's public surface: `primitives.nim`
+now `include`s `chronos/internal/callbackqueue.nim` directly (`include`,
+unlike `import`, ignores Nim's module-privacy boundary entirely — the
+five primitives become visible to `primitives.nim` itself exactly as if
+written there, with no `*` ever added to the real file), and re-exports
+each through a thin, logic-free `{.inline.}` wrapper (`capMaskV`,
+`slotIndexV`, `queueLenV`, `isFullV`, `growTargetCapV`) for
+`symex_checks.nim` to call. `callbackqueue_model.nim` still cannot
+`include ./primitives`, because that would also pull in the real
+`CallbackQueue[T]` type and its own `initCallbackQueue`/`addLast`/
+`popFirst`/`grow` — colliding with `callbackqueue_model.nim`'s
+deliberately independent, same-named ghost-ownership versions of exactly
+those — so it keeps `import ./primitives` and calls the same `*V`
+wrappers. Net effect: layers 1-2 now prove the REAL primitives directly
+(a thin pass-through wrapper adds no semantic gap - symex's
+interprocedural walker already resolves one frame of plain
+`proc`-to-`proc` indirection), `drift_check.nim`'s `primitives.nim`-vs-
+real checks are retired as vacuous (nothing left that could drift without
+a compile error), and the public surface is untouched (the wrappers live
+in `verify/`, fork-only, never exported to `chronos/`). The historical
+rationale below is kept for the record, not because it is still current.
 
 S9's `primitives.nim`/`callbackqueue_model.nim` were built before
 `chronos/internal/callbackqueue.nim` existed, so they had nothing to

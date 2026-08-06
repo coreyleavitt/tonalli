@@ -1,23 +1,31 @@
 ## RFC 0001 D9-V / S9 — Layer 1: symex proofs of the index primitives.
+## Updated W3 for `head`/`tail`'s `int` -> `uint` wraparound-counter change.
 ##
 ## **FORK-ONLY.** See `verify/README.md`. Run via `verify/run.sh symex`.
 ##
 ## Each `checkXxx` proc assumes exactly the precondition its primitive's own
 ## `doAssert` states (via `symexAssume`, never re-derived informally), calls
-## the mirrored primitive from `primitives.nim`, and asserts the postcondition
-## (via `symexAssert`). `symexFind(checkXxx, tAssertionViolation())` returning
-## `sxUnsat` is a totality+safety PROOF: no input satisfying the assumed
-## precondition reaches ANY assertion violation -- neither the checker's own
-## postcondition assert nor the primitive's internal precondition assert
-## (symex's interprocedural call handling walks into `primitives.nim`, so
-## both are on the same proved path).
+## the REAL primitive through `primitives.nim`'s thin exported `*V` wrappers
+## (`primitives.nim` `include`s `chronos/internal/callbackqueue.nim` and
+## re-exports each of the five index primitives under a `V`-suffixed name -
+## see that file's module doc for why this file goes back to plain `import
+## ./primitives` rather than a further `include`), and asserts the
+## postcondition (via `symexAssert`). `symexFind(checkXxx,
+## tAssertionViolation())` returning `sxUnsat` is a totality+safety PROOF: no
+## input satisfying the assumed precondition reaches ANY assertion violation
+## -- neither the checker's own postcondition assert nor the primitive's
+## internal precondition assert (symex's interprocedural call handling walks
+## through the wrapper into the real code, so both are on the same proved
+## path - the wrapper is logic-free, so this proves the real primitive, not
+## an approximation of it).
 ##
-## Two named edges (RFC 0001 S9 exit criteria):
-##   * `checkSlotIndexRange` assumes NOTHING about `pos`'s sign -- proved over
-##     the FULL int domain, which subsumes the addFirst edge (`dec head` can
-##     drive `head` arbitrarily negative after repeated sentinel
-##     reinsertions; a general proof over all `pos` is strictly stronger than
-##     a proof scoped to "one decrement below zero").
+## Two named edges (RFC 0001 S9 exit criteria, restated for `uint`):
+##   * `checkSlotIndexRange` assumes NOTHING about `pos` -- proved over the
+##     FULL `uint` domain, which subsumes the `prependNoGrow` wraparound edge
+##     (`dec head` at `head == 0` wraps to `high(uint)` rather than going
+##     negative now; a general proof over all `pos` is strictly stronger than
+##     a proof scoped to "one decrement below zero", exactly as the old
+##     int-domain proof was).
 ##   * `checkGrowSweep` mirrors `callbackqueue_model.grow`'s two-segment index
 ##     arithmetic (`startIdx`, `firstSeg`, `rest`) and proves both segments
 ##     stay in bounds and jointly cover exactly `n` items once each -- the
@@ -26,31 +34,32 @@
 ##     ghost-ownership job for the elements it can model, and the standing
 ##     runtime-verified claim in D9's prose for the rest).
 ##
-## **Stated bound (recorded in the ledger, `verify/README.md`):** any check
-## touching `growTargetCap`'s multiplication (`cap * 2`) assumes
-## `cap <= realisticCapBound` (2^40). Unbounded, `cap` approaching `int.high`
-## overflows the doubling -- a real finding, but one with zero physical
-## reachability (no callback queue will ever hold 2^40 pending callbacks;
-## that is exabytes of `AsyncCallback` slots) and so is explicitly scoped out
-## rather than silently avoided. `capMask`/`slotIndex` need no such bound:
-## bitwise AND cannot overflow.
-##
-## The SAME bound applies to `head`/`tail` in `checkQueueLen`/`checkIsFull`:
-## unconstrained, `tail - head` genuinely overflows (symex found it --
-## `OverflowDefect`, Nim's default checked-arithmetic behavior -- with
-## `head`/`tail` free to range over the full int64 domain, e.g.
-## `tail = int.high, head = int.low`). Realistically `head`/`tail` are
-## monotonic counters incremented once per `addLast`/`addFirst`/`popFirst`
-## call; reaching anywhere near `int.high` needs on the order of 2^63
-## queue operations in one process lifetime -- bounded out for the same
-## reason as `growTargetCap`'s cap bound, not silently avoided.
+## **W3's bounds argument, replacing the pre-W3 ledger entries below:**
+## under the OLD monotonic-`int` discipline, `checkQueueLen`/`checkIsFull`
+## needed `head`/`tail` bounded to `[-2^40, 2^40]` because unconstrained
+## `tail - head` genuinely overflowed `int` (Nim's checked signed
+## arithmetic raises `OverflowDefect`) -- and `tail >= head` had to be
+## assumed outright, an ordering relationship the design relied on holding
+## forever (a latent long-run risk this whole W3 change exists to remove).
+## Under the NEW `uint` discipline, unsigned subtraction is congruent mod
+## `2^64` by definition -- it cannot overflow, and no ordering between
+## `head`/`tail` is assumed at all (meaningless under wraparound; see
+## `callbackqueue.nim`'s `queueLen` doc). The precondition that replaces
+## `tail >= head` is the REAL invariant the design actually maintains --
+## `isFull`'s own `doAssert`: the wrapped distance from `head` to `tail`
+## never exceeds capacity. `checkQueueLen`/`checkIsFull` below assume
+## exactly that (`(tail - head) <= uint(cap)`, unsigned compare) instead of
+## an ordering relationship, and are proved over the FULL `uint` domain for
+## `head`/`tail` -- no `2^40` bound needed on them at all; only `cap` still
+## carries the `realisticCapBound` scope-out (no physical queue holds 2^40
+## pending callbacks), same as `growTargetCap`'s multiplication.
 ##
 ## **A verification-tooling finding (recorded in the ledger, not a D9
 ## defect -- see `primitives.nim`'s module doc for the full isolation):**
 ## `symexAssume`/`symexAssert` of the inline shape
 ## `(cap and (cap - 1)) == 0` crashes the symex walker
 ## (`lowerBool: expected Bool, got svBV64`). `isPow2` below hoists the
-## subtraction to a named local exactly as `primitives.capMask` now does,
+## subtraction to a named local exactly as the real `capMask` now does,
 ## which is the confirmed workaround; every precondition assumption in this
 ## file goes through it rather than re-deriving the inline shape.
 
@@ -74,42 +83,52 @@ proc isPow2(cap: int): bool {.inline, noSideEffect.} =
 
 proc checkCapMask(cap: int) =
   symexAssume(cap > 0 and isPow2(cap))
-  let m = capMask(cap)
-  symexAssert(m == cap - 1)
-  symexAssert(m >= 0)
+  let m = capMaskV(cap)
+  symexAssert(m == uint(cap - 1))
+  # `m >= 0` (the old int-domain postcondition) is vacuously true for a
+  # `uint` result - not silently dropped, just no longer a meaningful
+  # thing to assert.
 
 # ---------------------------------------------------------------------------
-# slotIndex -- totality + range, over the FULL int domain for `pos`
-# (subsumes the negative-logical-position edge after addFirst).
+# slotIndex -- totality + range, over the FULL uint domain for `pos`
+# (subsumes the post-wraparound-decrement edge in `prependNoGrow`).
 # ---------------------------------------------------------------------------
 
-proc checkSlotIndexRange(pos, cap: int) =
+proc checkSlotIndexRange(pos: uint, cap: int) =
   symexAssume(cap > 0 and isPow2(cap))
-  let idx = slotIndex(pos, cap)
+  let idx = slotIndexV(pos, cap)
   symexAssert(idx >= 0 and idx < cap)
 
 # ---------------------------------------------------------------------------
-# queueLen -- totality under its own precondition.
+# queueLen -- totality under the REAL invariant (`isFull`'s own), not an
+# ordering relationship that is meaningless once `head`/`tail` can wrap.
 # ---------------------------------------------------------------------------
 
-proc checkQueueLen(head, tail: int) =
-  symexAssume(tail >= head and
-              head >= -realisticCapBound and head <= realisticCapBound and
-              tail >= -realisticCapBound and tail <= realisticCapBound)
-  let n = queueLen(head, tail)
-  symexAssert(n == tail - head)
-  symexAssert(n >= 0)
+proc checkQueueLen(head, tail: uint, cap: int) =
+  # No assumption on head/tail ordering, and no domain bound on head/tail
+  # themselves - unsigned subtraction cannot overflow, so both are
+  # unconstrained over the FULL `uint` domain. The precondition that
+  # replaces "tail >= head" is the invariant the design actually
+  # maintains: the wrapped distance from `head` to `tail` never exceeds
+  # capacity (this is `isFull`'s own `doAssert`, restated here as an
+  # assumption for `queueLen` alone). `cap` keeps the same
+  # `realisticCapBound` scope-out as `growTargetCap` (no physical queue
+  # ever holds 2^40 pending callbacks).
+  symexAssume(cap > 0 and cap <= realisticCapBound and
+              (tail - head) <= uint(cap))
+  let n = queueLenV(head, tail)
+  symexAssert(n == int(tail - head))
+  symexAssert(n >= 0 and n <= cap)
 
 # ---------------------------------------------------------------------------
-# isFull -- agrees with its own definition (queueLen >= cap).
+# isFull -- agrees with its own definition (wrapped distance >= cap).
 # ---------------------------------------------------------------------------
 
-proc checkIsFull(head, tail, cap: int) =
-  symexAssume(tail >= head and cap > 0 and isPow2(cap) and
-              head >= -realisticCapBound and head <= realisticCapBound and
-              tail >= -realisticCapBound and tail <= realisticCapBound)
-  let full = isFull(head, tail, cap)
-  symexAssert(full == (tail - head >= cap))
+proc checkIsFull(head, tail: uint, cap: int) =
+  symexAssume(cap > 0 and isPow2(cap) and cap <= realisticCapBound and
+              (tail - head) <= uint(cap))
+  let full = isFullV(head, tail, cap)
+  symexAssert(full == ((tail - head) >= uint(cap)))
 
 # ---------------------------------------------------------------------------
 # growTargetCap -- totality + strict growth, bounded (see module doc).
@@ -117,7 +136,7 @@ proc checkIsFull(head, tail, cap: int) =
 
 proc checkGrowTargetCap(cap: int) =
   symexAssume(cap >= 0 and cap <= realisticCapBound)
-  let g = growTargetCap(cap)
+  let g = growTargetCapV(cap)
   symexAssert(g > cap)
   symexAssert(if cap == 0: g == 8 else: g == cap * 2)
 
@@ -127,10 +146,10 @@ proc checkGrowTargetCap(cap: int) =
 # only ever called on a full queue -- its own doAssert states this).
 # ---------------------------------------------------------------------------
 
-proc checkGrowSweep(head, oldCap: int) =
+proc checkGrowSweep(head: uint, oldCap: int) =
   symexAssume(oldCap > 0 and isPow2(oldCap) and oldCap <= realisticCapBound)
   let n = oldCap
-  let startIdx = slotIndex(head, oldCap)
+  let startIdx = slotIndexV(head, oldCap)
   let firstSeg = (if oldCap - startIdx < n: oldCap - startIdx else: n)
 
   # First segment: in-bounds read+write, non-empty (n > 0 since oldCap > 0).
@@ -143,10 +162,10 @@ proc checkGrowSweep(head, oldCap: int) =
     # Second segment reads old[0, rest) -- must stay within the old region.
     symexAssert(rest >= 1 and rest <= oldCap)
     # New array must hold both segments contiguously: firstSeg + rest == n,
-    # and n must fit under growTargetCap(oldCap) (checked separately above,
+    # and n must fit under growTargetCapV(oldCap) (checked separately above,
     # restated here at the call site for this exact n/oldCap pairing).
     symexAssert(firstSeg + rest == n)
-    let newCap = growTargetCap(oldCap)
+    let newCap = growTargetCapV(oldCap)
     symexAssert(n <= newCap)
   else:
     # No wrap: the single segment already covers all n items.
@@ -176,14 +195,14 @@ echo "=== D9-V Layer 1: symex proofs of the index primitives ==="
 runProof("capMask: totality + m == cap-1",
          symexFind(checkCapMask, tAssertionViolation()))
 
-runProof("slotIndex: range [0,cap) over the FULL int domain for pos " &
-         "(subsumes the post-addFirst negative-head edge)",
+runProof("slotIndex: range [0,cap) over the FULL uint domain for pos " &
+         "(subsumes the post-prependNoGrow wraparound-head edge)",
          symexFind(checkSlotIndexRange, tAssertionViolation()))
 
 runProof("queueLen: totality + n == tail-head",
          symexFind(checkQueueLen, tAssertionViolation()))
 
-runProof("isFull: agrees with queueLen(head,tail) >= cap",
+runProof("isFull: agrees with queueLenV(head,tail) >= cap",
          symexFind(checkIsFull, tAssertionViolation()))
 
 runProof("growTargetCap: totality + strict growth (bounded, see ledger)",

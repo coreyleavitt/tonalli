@@ -1149,7 +1149,22 @@ suite "contextvars: scheduling scenario pins":
     withAsyncInt(555):
       var thread: Thread[ThreadArg]
       createThread(thread, threadProc, (disp.handle(), addr res))
-      poll()
+      # A single `poll()` only blocks long enough to observe the
+      # cross-thread post if the dispatcher's callback queue is
+      # otherwise empty at that instant (`processTimersGetTimeout`
+      # forces a non-blocking check whenever it isn't). This dispatcher
+      # is shared with every earlier test in the suite, and under
+      # strict reentrancy (`chronosPreviewV5`) a batch's leftover work
+      # is deliberately deferred rather than force-drained (so the
+      # network regularly regains control) - so a prior test can leave
+      # this queue transiently non-empty, which races this `poll()`
+      # call against however long the freshly-created thread takes to
+      # actually post. Bounded-retry rather than a single call, the
+      # same robust-wait posture other timing-sensitive assertions in
+      # this suite take (e.g. `handlerDone.wait(...)` above).
+      let deadline = Moment.now() + 5.seconds
+      while not res.fired and Moment.now() < deadline:
+        poll()
 
       check res.fired
       check res.seenBinding == 0     # DEFAULT - not leaked from the origin's 555

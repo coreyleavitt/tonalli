@@ -156,8 +156,11 @@ proc prop(ops: seq[QOpKind]) =
       # verify/README.md's Layer 5 methodology).
       if q.len < cap:
         guardAsserts("addFirst"):
+          # Real name is `prependNoGrow` - see bisim_check.nim's
+          # `doAddFirstReal` for the same pre-existing, W3-unrelated
+          # rename note.
           inc nextId
-          q.addFirst(LeakItem(id: nextId))
+          q.prependNoGrow(LeakItem(id: nextId))
           inc liveCount
     of qoPopFirst:
       if q.len > 0:
@@ -208,7 +211,7 @@ proc runDefectUnwindChecks() =
     q.addLast(LeakItem(id: 2)) # queue now at its initial capacity (2)
     var raised = false
     try:
-      q.addFirst(LeakItem(id: 999)) # addFirst never grows -- must assert
+      q.prependNoGrow(LeakItem(id: 999)) # never grows -- must assert on full
     except Defect:
       raised = true
     doAssert raised, "addFirst() on a full queue must raise (doAssert), and be catchable"

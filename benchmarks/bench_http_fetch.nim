@@ -42,7 +42,12 @@ const
   mediumMessage = createMessage(MediumRequestSize)
 
 proc inSecondsFloat(d: times.Duration): float =
-  d.inNanoseconds() / 1000000000
+  # `inNanoseconds()` returns `int64`; dividing directly against an
+  # untyped-int literal resolves to system's `/(int, int): float`, whose
+  # `int` param is 32-bit on i386 and does not unify with `int64` there.
+  # Converting explicitly to `float` sidesteps the int-width mismatch on
+  # every platform.
+  float(d.inNanoseconds()) / 1_000_000_000.0
 
 # Create a simple HTTP server for benchmarking
 proc createBenchmarkServer(address: TransportAddress): HttpServerRef =

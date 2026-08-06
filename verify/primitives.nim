@@ -3,87 +3,68 @@
 ## **FORK-ONLY. Never imported by, referenced by, or coupled to any
 ## upstream-bound file.** See `verify/README.md`.
 ##
-## Textually mirrored, byte-for-byte, from the validated S9.0 spike
-## (`git show spike/s9.0-callbackqueue:chronos/internal/callbackqueue.nim`)
-## -- the same five pure int/bool procs D9 specifies as "index primitives,
-## factored for verification". Zero marker coupling: these are the exact
-## shapes the real `chronos/internal/callbackqueue.nim` will carry at S10,
-## down to the assert messages, so a symex proof against this file is a
-## symex proof against the shipped code (mechanically diffable at S10 to
-## confirm no drift crept in between S9 and S10).
+## W3 (uint wraparound counters): this file used to be a textual mirror
+## of `chronos/internal/callbackqueue.nim`'s five index primitives,
+## hand-kept in sync and cross-checked by `drift_check.nim`. It is now
+## an `include` of the real module instead: layers 1-2 (this file's
+## callers, `symex_checks.nim` and `callbackqueue_model.nim`) prove
+## properties of the SHIPPED code directly, with no mirror to drift out
+## of sync in the first place. `include`, not `import`: the five
+## primitives are private to `chronos/internal/callbackqueue.nim` (no
+## `*`) by design (see that file's own module doc) - `include` splices
+## the file's AST into this one, making its private top-level names
+## visible here exactly as if they had been written in this file
+## (Nim's privacy boundary is per-module, and after `include` there is
+## only one module). Callers of THIS file must, in turn, `include
+## ./primitives` rather than `import` it, for the same reason -
+## `import` would only see `*`-exported names, and re-exporting the
+## five primitives under new names would mean proving properties of
+## thin wrappers one indirection away from the real procs, not the
+## real procs themselves.
 ##
-## Deliberately duplicated rather than imported: at S9 time,
-## `chronos/internal/callbackqueue.nim` does not exist yet (D9 is
-## implemented at S10, gated on this slice's findings) -- there is nothing
-## in `chronos/` to import from. `verify/` importing FROM `chronos/` (e.g.
-## `chronos/config` for the sink templates, used by `callbackqueue_model.nim`)
-## is fine per D9-V's segregation rule; the forbidden direction is
-## `chronos/` importing `verify/`.
+## The included file's `{.push raises: [], gcsafe.}` (no matching
+## `{.pop.}` - each module implicitly pops its own pushes at its own
+## end, which is exactly the boundary `include` erases) would otherwise
+## leak that pragma onto every subsequent declaration in this file and
+## every file that further imports it. The `{.pop.}` immediately below
+## is the corrective - empirically confirmed necessary and sufficient
+## (a small standalone repro: an included file's unbalanced `push`
+## reaches a `raise` two files downstream unless a `pop` closes it
+## first at the include site).
 ##
-## **One deliberate deviation from the spike, and a finding for S10 (see
-## `verify/README.md`'s ledger):** the spike declared these five as `func`;
-## here they are `proc {.noSideEffect.}` (identical codegen -- `func` is
-## pure sugar for that exact pragma). This is not cosmetic: proptest's
-## symex Phase-3 interprocedural resolution (`ensureProcRegistered`,
-## `dsl_parser.nim`) hard-errors on any callee whose `getImpl.kind !=
-## nnkProcDef` -- `func` lowers to `nnkFuncDef` and is REJECTED outright,
-## both as a direct `symexFind` target and as a callee reached from one
-## (verified empirically: `symex Phase 3: cannot resolve getImpl for
-## callee 'capMask' -- generic / private cross-module / built-in?`).
-## D9's own RFC prose already specifies "pure int->int/bool procs" (not
-## funcs) for exactly this reason; the throwaway S9.0 spike's `func` choice
-## is spike-only shorthand the S9.0 disposal rule already marks as not the
-## S10 deliverable. Recorded here so S10 does not silently reintroduce
-## `func` and quietly lose future symex-walkability.
-##
-## **A second finding, this one in the verification tool itself (recorded
-## in `verify/README.md`'s ledger as a proptest/symex issue, not a D9
-## defect):** two related shapes crash the symex walker outright
-## (`AssertionDefect ... lowerBool: expected Bool, got svBV64`,
-## `runtime.nim:3345`), both isolated empirically to minimal repros:
-##
-##   1. `doAssert (cap and (cap - 1)) == 0` -- a bitwise-`and` whose
-##      second operand is an INLINE arithmetic sub-expression of the SAME
-##      variable as the first operand. Fixed by binding the subtraction to
-##      a named `let` first (`capMask`, below).
-##   2. `pos and capMask(cap)` / `queueLen(head, tail) >= cap` -- a
-##      boolean-or-bitwise expression with a DIRECT (non-let-bound)
-##      function-call result as one operand (interprocedural depth 2:
-##      the caller of `slotIndex`/`isFull` calling INTO them, which then
-##      call `capMask`/`queueLen` inline within their own return
-##      expression). Fixed the same way: bind the call's result to a
-##      named `let` before using it (`slotIndex`, `isFull`, below).
-##
-## Both are semantically no-ops (identical codegen once optimized; still a
-## single expression at the source level in any reasonable reading) and
-## both are walker limitations, not D9 soundness questions -- the shipped
-## S10 code is free to keep the spike's exact expression-bodied shapes;
-## only the symex-walked mirror here needs the hoists to be provable at
-## all. Filing this as a limitation against proptest itself is out of this
-## slice's scope; the workaround is cheap, mechanical, and self-contained.
+## `symex_checks.nim`/`callbackqueue_model.nim` go back to `import
+## ./primitives` (not `include`), through the five thin, `{.inline.}`,
+## logic-free wrappers below - NOT the included names directly. Two
+## reasons: (1) the included file also brings in the real
+## `CallbackQueue[T]` type and its own `initCallbackQueue`/`addLast`/
+## `popFirst`/`grow` - `callbackqueue_model.nim` deliberately declares
+## ITS OWN same-named versions of exactly those for its ghost-ownership
+## model, which a transitive `include` would collide with; (2) the five
+## real primitives have no `*` (private by design - only
+## `chronos/internal/callbackqueue.nim`'s own public five entry points
+## are meant to be reachable), and a same-named exported redeclaration
+## in this scope is a hard duplicate-definition error regardless of the
+## star, so re-exporting needs distinct names either way. A thin
+## `{.inline.}` pass-through with no logic of its own proves nothing
+## different from proving the real proc directly - symex's
+## interprocedural walker already resolves one call-frame of plain
+## `proc`-to-`proc` indirection (it does so today resolving
+## `slotIndex`'s own call into `capMask`), so this adds no semantic gap.
 
-proc capMask*(cap: int): int {.inline, noSideEffect.} =
-  let capMinusOne = cap - 1
-  doAssert cap > 0 and (cap and capMinusOne) == 0,
-    "CallbackQueue: capacity must be a positive power of two"
-  capMinusOne
+include ../chronos/internal/callbackqueue
+{.pop.}
 
-proc slotIndex*(pos, cap: int): int {.inline, noSideEffect.} =
-  ## Fold a monotonic logical position into `[0, cap)`. `cap` being a
-  ## power of two makes this correct for negative `pos` too (two's
-  ## complement `and` is congruent mod `cap`), which `addFirst`'s
-  ## `dec head` relies on.
-  let mask = capMask(cap)
-  pos and mask
+proc capMaskV*(cap: int): uint {.inline.} =
+  capMask(cap)
 
-proc queueLen*(head, tail: int): int {.inline, noSideEffect.} =
-  doAssert tail >= head, "CallbackQueue: tail must never precede head"
-  tail - head
+proc slotIndexV*(pos: uint, cap: int): int {.inline.} =
+  slotIndex(pos, cap)
 
-proc isFull*(head, tail, cap: int): bool {.inline, noSideEffect.} =
-  let n = queueLen(head, tail)
-  n >= cap
+proc queueLenV*(head, tail: uint): int {.inline.} =
+  queueLen(head, tail)
 
-proc growTargetCap*(cap: int): int {.inline, noSideEffect.} =
-  doAssert cap >= 0, "CallbackQueue: capacity must not be negative"
-  if cap == 0: 8 else: cap * 2
+proc isFullV*(head, tail: uint, cap: int): bool {.inline.} =
+  isFull(head, tail, cap)
+
+proc growTargetCapV*(cap: int): int {.inline.} =
+  growTargetCap(cap)
