@@ -569,6 +569,165 @@ and already covered by the standing matrix, not merely decorative; M1/M2/M4
 confirm layers 3-4 (and the pre-existing test suite) have real teeth
 against the more overt structural bug classes without needing escalation.
 
+## B-wave verification upgrades (fork-only, post-S11)
+
+Three additional slices, run against the same final fold head this
+repository's `worktree-contextvars-rebase` branch carries (`chronos/`
+content here is bit-identical to the published series head — the only
+difference between this branch and the published head is the presence of
+this `verify/` directory itself, which is never part of any upstream or
+downstream pin; see the top of this file). None of these touch
+`chronos/internal/callbackqueue.nim` or any other tracked file outside
+`verify/` — Phase 2's mutant patches are applied, checked, and reverted
+mechanically, exactly like the original six.
+
+### Phase 1 — cross-commit reproducibility re-run, with raw trials + bootstrap CI
+
+Re-run of the standing D6 cross-commit protocol (RFC 0001 §3, §6) at 15
+trials per side per MM instead of the historic 13, with every raw trial
+recorded to CSV (not only summary statistics) and a bootstrap/Mann-Whitney
+analysis layered on top of the standing range-overlap gate. Full
+methodology, results tables, and the deliverable ratio/CI sentences are in
+`verify/measurements/crosscommit_final_analysis.md`; raw data in
+`verify/measurements/crosscommit_final_{refc,orc}.csv`; analysis script in
+`verify/measurements/analyze_crosscommit.py` (host `python3`, stdlib
+only).
+
+| MM | base median (range), n=15 | head median (range), n=15 | ratio | overlap | bootstrap 95% CI | Mann-Whitney p |
+|---|---|---|---|---|---|---|
+| refc | 30.20 ns/op (24.0–43.4) | 31.50 ns/op (25.1–39.6) | 1.043x | yes — PASS | [0.817, 1.262] | 0.756 |
+| orc | 45.90 ns/op (39.6–65.3) | 45.30 ns/op (39.4–64.0) | 0.987x | yes — PASS | [0.803, 1.196] | 0.771 |
+
+Both MMs pass the standing direction-aware overlap gate cleanly, at the
+tightest ratios this bellwether has shown across the RFC's entire history,
+with bootstrap CIs comfortably bracketing 1.0 and Mann-Whitney p-values
+giving no basis to reject the null hypothesis that base and head are drawn
+from the same distribution.
+
+### Phase 2 — systematic mutant sweep
+
+Extended from the original 6 regenerated mutants to 19, systematically
+covering the five index primitives (`capMask`, `slotIndex` — no viable
+mutant of `slotIndex` itself beyond what `capMask`/wraparound already
+cover, since it is a single-expression fold — `queueLen`, `isFull`,
+`growTargetCap`) and the queue ops (`initCallbackQueue`, `addLast`,
+`prependNoGrow`, `popFirst`'s canary), spanning: every comparison operator
+flipped to its off-by-one neighbor, every `±1` shift, every `inc`/`dec`
+target turned into a no-op or a double-application, and the wraparound
+subtraction's operands swapped. **The original 6 mutant patch files on
+disk had gone stale** (four of six no longer applied cleanly against the
+current `chronos/internal/callbackqueue.nim` — `addFirst`/`int`-cap-era
+line numbers, pre-dating the `prependNoGrow` rename and the W3 `uint`
+change) despite the README text above claiming they were "regenerated";
+all six were regenerated fresh as part of this sweep (`m1`–`m6`, same
+mutant descriptions, corrected patch content) alongside 13 new ones
+(`m7`–`m19`). Each mutant is one unified diff under `verify/mutants/`,
+confirmed to `git apply --check` cleanly against the current tree.
+
+Kill ladder, same four legs as the original slice, stopping at first kill:
+(A) `tests/testcallbackqueue.nim` plain (`-d:release --mm:refc`); (B) the
+same file under the debug leg (`-d:debug -d:chronosDebug -d:useSysAssert
+-d:useGcAssert --mm:refc`); (C) `bisim_check.nim` (`--mm:refc`); (D)
+`fuzz_leak.nim` (`--mm:refc`). Driven mechanically by
+`verify/mutants/run_ladder.sh` (apply → legs in order → revert,
+regardless of outcome; per-mutant results appended to
+`verify/mutants/ladder_results.tsv`).
+
+**Full kill matrix — 19/19 killed, zero survivors:**
+
+| # | mutant | class | mutation | killed by |
+|---|---|---|---|---|
+| M1 | `addLast`: `inc q.tail` → `q.tail += 2` | inc/dec, double | off-by-2 tail advance | A |
+| M2 | `capMask`: return `cap` instead of `cap - 1` | wrong mask | mask literal | A |
+| M3 | `grow()`: drop the first segment's `zeroMem` | dropped zeroMem | double-decref on next growth | A (the S11 distilled pin — "repeated growth cycles preserve ref-field values under memory pressure" — already lands this at leg A; previously D-only, see S11's own ledger above) |
+| M4 | `grow()`: swap the two `copyMem` destinations | swapped copyMem segments | wrong-slot relocation | A |
+| M5 | `popFirst`: drop `chronosMoveSink`, both branches | dropped move | vacated slot retains a live ref | B |
+| M6 | canary: `==` → `!=` in the vacated-slot-zeroed `doAssert` | wrong sentinel compare | canary inverted | B |
+| M7 | `isFull`: `n >= cap` → `n > cap` | comparison off-by-one | full-check under-triggers by one slot | A |
+| M8 | `isFull`'s `doAssert` guard: `n <= cap` → `n < cap` | comparison off-by-one | guard rejects the valid `n == cap` state | A |
+| M9 | `popFirst`'s empty-guard: `q.tail != q.head` → `q.tail == q.head` | comparison inverted | guard fires on non-empty, not empty | A |
+| M10 | `prependNoGrow`'s not-full `doAssert`: `not isFull(...)` → `isFull(...)` | guard inverted | guard fires on non-full, not full | A |
+| M11 | `prependNoGrow`'s not-full `doAssert` removed entirely | guard removed | full-queue prepend silently corrupts | D (only `runDefectUnwindChecks`' explicit full-queue `prependNoGrow` call reaches this; A/B/C's op-mixes avoid a full-queue `addFirst` by construction, mirroring the real precondition) |
+| M12 | `capMask`: `cap - 1` → `cap - 2` | ±1 shift | wrong mask, off by one bit position | A |
+| M13 | `growTargetCap`: `cap * 2` → `cap + 2` | ±1/shift (mul→add) | growth no longer doubles; breaks power-of-two invariant | A |
+| M14 | `growTargetCap`: `cap * 2` → `cap * 2 - 1` | ±1 shift | growth target off by one; breaks power-of-two invariant | A |
+| M15 | `initCallbackQueue`'s rounding loop: `while cap < initialCap` → `while cap <= initialCap` | rounding boundary | over-allocates one extra doubling whenever `initialCap` is itself a power of two | D (harmless-looking oversizing; only `runDefectUnwindChecks`' `initCallbackQueue[LeakItem](2)` — expecting a full queue at length 2 — notices the queue silently isn't full there) |
+| M16 | `addLast`: `inc q.tail` dropped (no-op) | inc/dec, no-op | tail never advances; every push overwrites slot 0 | A |
+| M17 | `prependNoGrow`: `dec q.head` dropped (no-op) | inc/dec, no-op | head never recedes; prepend overwrites the current head slot | A |
+| M18 | `prependNoGrow`: `dec q.head` → applied twice | inc/dec, double | head recedes by 2; skips/reuses a slot | A |
+| M19 | `queueLen`: `tail - head` → `head - tail` | wraparound subtraction swapped | length computed backwards | A |
+
+No survivors past all four legs, so no new test pin is required by this
+sweep (the standing rule: "a SURVIVOR of all four layers is a finding" —
+none occurred). 14 of 19 mutants die at the cheapest leg (A, plain
+release tests); M5/M6 need the `chronosDebug` canary (leg B, matching the
+original slice's finding that the canary is load-bearing, not
+decorative); M11/M15 need the fuzz harness's explicit
+`runDefectUnwindChecks` full-queue/initial-capacity probes (leg D) —
+both are guard/precondition mutants whose effect is invisible to
+op-mixes that already avoid the precondition's violation by
+construction (mirroring the real precondition, per the standing "never
+smuggle a precondition violation into the leak-accounting loop"
+discipline), so only a check that deliberately drives the precondition
+edge catches them. No leg-C-only kills and no full survivors this round.
+
+### Phase 3 — fuzz coverage histogram
+
+`verify/fuzz_leak.nim`'s `prop()` now records three per-run observations,
+all derived from public operations only (no pragmas or private-field
+reads on `chronos/internal/callbackqueue.nim` — see the `RunCoverage`
+doc comment in the file itself for the full derivation):
+
+- **final capacity reached** — the file's pre-existing `cap` shadow local
+  (already tracked via `growTargetCapShadow`, the same shadow arithmetic
+  `bisim_check.nim` uses and `drift_check.nim` verifies against the real
+  private `growTargetCap`).
+- **growth events** — a new counter incremented at the same
+  `if q.len == cap: cap = growTargetCapShadow(cap)` check the real
+  `addLast` uses to decide whether to call `grow()`.
+- **physical wrap** — derived exactly, not via the RFC's own floated
+  fallback heuristic (`cumulative pops > 0 and cumulative pushes >
+  initial cap`, which the module doc notes is necessary-but-not-sufficient:
+  many pushes after one pop does not guarantee the physical write cursor
+  actually revisited index 0). Instead: `addLast` is the only op that
+  advances the tail cursor, and the real `slotIndex` folds a monotonic
+  position into `[0, cap)` by `pos and (cap-1)`, so successive pushes land
+  at consecutive physical slots `0, 1, ..., cap-1, 0, 1, ...` until either
+  growth resets the array (a fresh unwrapped layout, mirroring `grow()`'s
+  own `q.head = 0; q.tail = uint(n)`) or the physical index cycles from
+  `cap-1` back to `0` — a wrap, by definition. The file shadows this exact
+  sequence (`shadowTail`/`lastPushPhysIdx`, reset on every growth event)
+  and flags a wrap the instant a push's physical index is lower than the
+  previous push's within the same growth epoch — an exact signal, not a
+  probabilistic proxy.
+
+Run at 50,000 iterations per MM (`op-mix` unchanged: `frequency`-weighted
+5 `addLast` : 1 `addFirst` : 4 `popFirst`, same as the standing Layer 4
+config), same seed both MMs (op-sequence generation is MM-independent, so
+the coverage distribution is identical between refc and orc by
+construction — only wall clock and the allocator-level leak accounting
+differ):
+
+| MM | runs | final cap=8 | final cap=16 | 1 growth event | 2 growth events | wrapped | >=2 growth cycles | crashes | leak failures |
+|---|---|---|---|---|---|---|---|---|---|
+| refc | 48,698 | 35,412 (72.72%) | 13,286 (27.28%) | 35,412 (72.72%) | 13,286 (27.28%) | 43,957 (**90.26%**) | 13,286 (**27.28%**) | 0 | 0 |
+| orc | 48,698 | 35,412 (72.72%) | 13,286 (27.28%) | 35,412 (72.72%) | 13,286 (27.28%) | 43,957 (**90.26%**) | 13,286 (**27.28%**) | 0 | 0 |
+
+**90.26% of runs exercised at least one physical wrap; 27.28% exercised
+>= 2 growth cycles.** Both figures are far above the "thin coverage"
+concern threshold this slice was scoped to check for (<10% wrap rate) —
+**no op-mix or directed-phase adjustment was needed**: the existing
+`frequency`-weighted mix (`addLast` at 5x the weight of `popFirst`'s 4x,
+`addFirst` at 1x, up to 300 ops per sequence) already drives the queue
+through growth and wraparound on the large majority of runs, because
+`maxOpsPerSeq=300` against an `initialCap`-0 lazy-started queue means most
+generated sequences exceed the capacity-8 and capacity-16 thresholds many
+times over, and the roughly-balanced push/pop weighting reliably
+interleaves enough pops to let the tail cursor's physical position cycle
+back through low indices before a subsequent growth would reset it. `0`
+crashes, `0` leak-accounting failures, both MMs, matching the pre-B-wave
+Layer 4 ledger exactly (no regression from adding the instrumentation).
+
 ## Re-running
 
 ```sh

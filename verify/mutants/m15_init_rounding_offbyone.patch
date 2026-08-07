@@ -1,0 +1,13 @@
+diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
+index ffee89f..d7ecec8 100644
+--- i/chronos/internal/callbackqueue.nim
++++ w/chronos/internal/callbackqueue.nim
+@@ -103,7 +103,7 @@ proc initCallbackQueue*[T](initialCap: int = 8): CallbackQueue[T] =
+   ## constructors call this to size the backing store up front and avoid
+   ## early growth churn.
+   var cap = 1
+-  while cap < initialCap:
++  while cap <= initialCap:
+     cap = cap * 2
+   CallbackQueue[T](data: newSeq[T](cap), head: 0'u, tail: 0'u)
+ 

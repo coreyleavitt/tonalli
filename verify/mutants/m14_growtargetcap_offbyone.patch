@@ -1,0 +1,13 @@
+diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
+index ffee89f..bdf0869 100644
+--- i/chronos/internal/callbackqueue.nim
++++ w/chronos/internal/callbackqueue.nim
+@@ -92,7 +92,7 @@ proc isFull(head, tail: uint, cap: int): bool {.inline.} =
+ 
+ proc growTargetCap(cap: int): int {.inline.} =
+   doAssert cap >= 0, "CallbackQueue: capacity must not be negative"
+-  if cap == 0: 8 else: cap * 2
++  if cap == 0: 8 else: cap * 2 - 1
+ 
+ # --- public interface -----------------------------------------------------
+ 

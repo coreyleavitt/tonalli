@@ -1,0 +1,12 @@
+diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
+index ffee89f..914675d 100644
+--- i/chronos/internal/callbackqueue.nim
++++ w/chronos/internal/callbackqueue.nim
+@@ -158,6 +158,7 @@ proc prependNoGrow*[T](q: var CallbackQueue[T], item: chronosSink T) =
+   doAssert not isFull(q.head, q.tail, q.data.len),
+     "CallbackQueue.prependNoGrow(): queue unexpectedly full"
+   dec q.head
++  dec q.head
+   let idx = slotIndex(q.head, q.data.len)
+   q.data[idx] = item
+ 

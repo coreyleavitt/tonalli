@@ -1,0 +1,13 @@
+diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
+index ffee89f..02c2dd8 100644
+--- i/chronos/internal/callbackqueue.nim
++++ w/chronos/internal/callbackqueue.nim
+@@ -155,8 +155,6 @@ proc prependNoGrow*[T](q: var CallbackQueue[T], item: chronosSink T) =
+   ## intended for re-inserting an item into a queue known to have
+   ## spare capacity (e.g. re-inserting a sentinel at the front of an
+   ## already-fully-drained batch).
+-  doAssert not isFull(q.head, q.tail, q.data.len),
+-    "CallbackQueue.prependNoGrow(): queue unexpectedly full"
+   dec q.head
+   let idx = slotIndex(q.head, q.data.len)
+   q.data[idx] = item

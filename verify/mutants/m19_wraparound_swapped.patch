@@ -1,0 +1,13 @@
+diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
+index ffee89f..cbda988 100644
+--- i/chronos/internal/callbackqueue.nim
++++ w/chronos/internal/callbackqueue.nim
+@@ -81,7 +81,7 @@ proc queueLen(head, tail: uint): int {.inline.} =
+   ## ordering comparison between them is meaningful any more (unlike the
+   ## former monotonic-`int` discipline, "tail must never precede head"
+   ## does not hold under wraparound).
+-  int(tail - head)
++  int(head - tail)
+ 
+ proc isFull(head, tail: uint, cap: int): bool {.inline.} =
+   let n = queueLen(head, tail)

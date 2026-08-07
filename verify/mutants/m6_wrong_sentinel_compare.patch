@@ -1,13 +1,13 @@
 diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
-index 542dd6d..261635d 100644
+index ffee89f..f566bd5 100644
 --- i/chronos/internal/callbackqueue.nim
 +++ w/chronos/internal/callbackqueue.nim
-@@ -232,7 +232,7 @@ template popFirst*[T](q: var CallbackQueue[T]): T =
-     # is fully elided when undefined, leaving the exact single-expression
-     # form the barrier-count analysis above describes.
-     let chronosPopped = chronosMoveSink(q.data[chronosQueueIdx])
--    doAssert q.data[chronosQueueIdx] == default(T),
-+    doAssert q.data[chronosQueueIdx] != default(T),
+@@ -185,7 +185,7 @@ when defined(chronosDebug) and chronosUseSink:
+     ## own generic-instantiation path does not hit this, so hoisting the
+     ## check here is the fix, not a workaround for a real ambiguity in
+     ## what's being asserted.
+-    doAssert item == default(T),
++    doAssert item != default(T),
        "CallbackQueue: a vacated slot retained a non-nil ghost value after " &
        "popFirst() — a slot-vacating path bypassed the fused-move discipline"
-     chronosPopped
+ 

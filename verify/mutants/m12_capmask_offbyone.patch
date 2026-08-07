@@ -1,0 +1,13 @@
+diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
+index ffee89f..03fe902 100644
+--- i/chronos/internal/callbackqueue.nim
++++ w/chronos/internal/callbackqueue.nim
+@@ -58,7 +58,7 @@ proc capMask(cap: int): uint {.inline.} =
+   # but `verify/`'s symex walker (fork-only, see `verify/primitives.nim`)
+   # cannot resolve a bitwise-`and` whose second operand is an inline
+   # arithmetic sub-expression of the same variable as the first operand.
+-  let capMinusOne = cap - 1
++  let capMinusOne = cap - 2
+   doAssert cap > 0 and (cap and capMinusOne) == 0,
+     "CallbackQueue: capacity must be a positive power of two"
+   uint(capMinusOne)

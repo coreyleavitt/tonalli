@@ -1,8 +1,8 @@
 diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
-index 542dd6d..bbd1697 100644
+index ffee89f..c115590 100644
 --- i/chronos/internal/callbackqueue.nim
 +++ w/chronos/internal/callbackqueue.nim
-@@ -149,11 +149,11 @@ proc grow[T](q: var CallbackQueue[T]) =
+@@ -127,11 +127,11 @@ proc grow[T](q: var CallbackQueue[T]) =
    if n > 0:
      let startIdx = slotIndex(q.head, oldCap)
      let firstSeg = min(n, oldCap - startIdx)
@@ -15,4 +15,4 @@ index 542dd6d..bbd1697 100644
 +      copyMem(addr newData[0], addr q.data[0], rest * sizeof(T))
        zeroMem(addr q.data[0], rest * sizeof(T))
    q.data = newData
-   q.head = 0
+   q.head = 0'u
