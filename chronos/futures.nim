@@ -41,7 +41,7 @@ type
       ## gcsafe-inaccessible from `poll`.
       ##
       ## `function`/`udata`/`context` are private to this module -
-      ## only `userCallback`/`bareCallback` below can construct an
+      ## only `capturingCallback`/`bareCallback` below can construct an
       ## `InternalAsyncCallback`.
 
   InternalCancelCallback* = object
@@ -171,15 +171,15 @@ template captureContextInto*(dest: var ContextNodeBase) =
   if not isNil(currentAsyncContext):
     dest = currentAsyncContext
 
-template userCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCallback =
-  ## Construct an AsyncCallback that fires user-supplied code, capturing
-  ## the current continuation-local context so it fires under the
-  ## registrant's `contextVar` bindings. Use at every site that
-  ## schedules user code (`addCallback`, `callSoon`, `setTimer`,
-  ## `addReader`/`addWriter`/`addSignal`/`addProcess`, `callIdle`,
-  ## `closeSocket`/`closeHandle` aftercb, and `internalContinue`'s
-  ## iterator-pump resume); use `bareCallback` for trampolines that
-  ## don't read contextVars.
+template capturingCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCallback =
+  ## Construct an AsyncCallback that captures the current continuation-local
+  ## context, so the callback fires under the bindings live at its
+  ## registration site. Use at every scheduling site whose callback must
+  ## observe registration-time bindings — whether the callback is
+  ## application code or chronos-internal (transport loops, combinators,
+  ## the continuation pump all qualify); use `bareCallback` only for
+  ## context-neutral trampolines that neither read contextVars nor fire
+  ## code that does.
   ##
   ## Must be a template, not a proc returning by value: constructs into
   ## a fresh local via `captureContextInto` (see its doc for why).
@@ -196,11 +196,11 @@ template bareCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCallba
   ## completion repackaging, idle-loop sentinels, fd-readiness
   ## trampolines) that doesn't itself read contextVars — no context
   ## capture. Downstream user-visible callbacks still carry their own
-  ## context from their original `userCallback` site.
+  ## context from their original `capturingCallback` site.
   ##
   ## Must be a template, like `SentinelCallback` in asyncengine.nim.
   ## Param is `ud`, not `udata`, for the same substitution reason as
-  ## `userCallback`.
+  ## `capturingCallback`.
   InternalAsyncCallback(function: fn, udata: ud, context: nil)
 
 template contextCallback*(fn: CallbackFunc, ud: pointer,
@@ -215,7 +215,7 @@ template contextCallback*(fn: CallbackFunc, ud: pointer,
 
 template newCancelCallback*(fn: CallbackFunc): InternalCancelCallback =
   ## Construct the value stored in `internalCancelcb`, capturing context
-  ## at construction like `userCallback` - the handler must observe the
+  ## at construction like `capturingCallback` - the handler must observe the
   ## context bound at `cancelCallback=` time, not whatever's ambient
   ## when it fires.
   var cb: InternalCancelCallback

@@ -339,10 +339,11 @@ lookup is a `nil` check.
 Every `AsyncCallback` construction site must deliberately pick one of three
 constructors defined in `chronos/futures.nim`:
 
-- `userCallback(fn, udata)` — for every site that schedules *user* code
-  (`addCallback`, `callSoon`, `setTimer`, `addReader`/`addWriter`,
-  `addSignal`/`addProcess`, `callIdle`, `closeSocket`/`closeHandle`
-  after-callbacks). Captures the current context.
+- `capturingCallback(fn, udata)` — for every scheduling site whose callback
+  must observe registration-time bindings (`addCallback`, `callSoon`,
+  `setTimer`, `addReader`/`addWriter`, `addSignal`/`addProcess`, `callIdle`,
+  `closeSocket`/`closeHandle` after-callbacks), whether the callback is
+  application code or chronos-internal. Captures the current context.
 - `bareCallback(fn, udata)` — for chronos-internal trampolines
   (sentinels, cross-thread queue draining, the low-level per-operation
   IOCP read/write completion trampolines, `internalCallTick`'s
@@ -366,7 +367,7 @@ and are therefore context-blind by design.
 
 Unauthorized *construction* of an `InternalAsyncCallback` is a compile
 error, not a convention: `function`/`udata`/`context` are private to
-`chronos/futures.nim`, so only `userCallback`/`bareCallback`/
+`chronos/futures.nim`, so only `capturingCallback`/`bareCallback`/
 `contextCallback` can build a value, and no other module can
 read-modify a field after construction (existing readers go through
 exported `function()`/`udata()`/`context()` getters). A raw
@@ -422,7 +423,7 @@ created it has exited.
   design, for the low-level per-operation read/write completion
   trampolines (they only drive an internal future to completion, and
   that future's own awaiter already carries its own captured context
-  from the normal `userCallback` path, so there's nothing for those
+  from the normal `capturingCallback` path, so there's nothing for those
   trampolines themselves to propagate).
 
 ## Performance
@@ -497,7 +498,7 @@ of the improvement in the refc headline number above.
   `withContext`, `dumpContext`, `ContextVarEntry`, `` `$` ``,
   `UnboundContextVarDefect`) and none of the dispatcher/registry
   internals (`ContextNodeBase`, `currentAsyncContext`,
-  `userCallback`/`bareCallback`, `context`,
+  `capturingCallback`/`bareCallback`, `context`,
   `contextLookup`/`contextLookupSnapshot`/`contextBindSlot`,
   `contextFind`/`contextFindSnapshot`, `ContextVarRegistration`,
   `ContextVarRenderProc`, `registerContextVar`, `contextVarRegistry`);

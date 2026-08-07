@@ -150,8 +150,8 @@ when declared(contextVarRegistry):
            "not leak through the public API. It is invoked by " &
            "`dumpContext` only.".}
 
-when declared(userCallback):
-  {.error: "`userCallback` must not leak through the public API. It lives " &
+when declared(capturingCallback):
+  {.error: "`capturingCallback` must not leak through the public API. It lives " &
            "in chronos/futures.nim, excluded from `asyncengine.nim`'s " &
            "`export futures`, and is used by dispatcher code only.".}
 
@@ -190,7 +190,7 @@ when declared(captureContextInto):
            "It lives in chronos/futures.nim (the shared " &
            "construction-discipline template), excluded from " &
            "`asyncengine.nim`'s `export futures`, and is used by " &
-           "`userCallback`/`newCancelCallback` only — a reachable capture " &
+           "`capturingCallback`/`newCancelCallback` only — a reachable capture " &
            "primitive would let plain `import chronos` code write " &
            "`currentAsyncContext` into arbitrary fields, bypassing the " &
            "construction discipline entirely.".}

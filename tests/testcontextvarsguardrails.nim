@@ -22,13 +22,13 @@ import ../chronos/contextvars
 # --- Guardrail 1: capture coverage is structural -----------------------------
 #
 # InternalAsyncCallback's fields are private to chronos/futures.nim;
-# only userCallback/bareCallback/contextCallback can construct one.
+# only capturingCallback/bareCallback/contextCallback can construct one.
 
 static:
   doAssert not compiles(InternalAsyncCallback(function: nil, udata: nil)),
     "InternalAsyncCallback's fields must be private — raw construction " &
-    "outside `userCallback`/`bareCallback`/`contextCallback` must not " &
-    "compile. Use `userCallback(fn, udata)` for user-facing scheduling " &
+    "outside `capturingCallback`/`bareCallback`/`contextCallback` must not " &
+    "compile. Use `capturingCallback(fn, udata)` for user-facing scheduling " &
     "sites, `bareCallback(fn, udata)` for chronos-internal trampolines, " &
     "or `contextCallback(fn, udata, ctx)` to reconstruct a callback from " &
     "a context captured earlier (Windows IOCP completion dispatch). " &

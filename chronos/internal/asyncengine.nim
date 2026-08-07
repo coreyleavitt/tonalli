@@ -35,7 +35,7 @@ export deques, effects, errors, timer, results
 # `InternalAsyncCallback`/`InternalCancelCallback` stay exported since
 # they're already nameable via `AsyncCallback` and
 # `InternalFutureBase.internalCancelcb*`.
-export futures except userCallback, bareCallback, contextCallback,
+export futures except capturingCallback, bareCallback, contextCallback,
   newCancelCallback, currentAsyncContext, context, withRestoredContext,
   pinContext, captureContextInto
 
@@ -225,7 +225,7 @@ template processTicks(loop: untyped) =
 
 template fireWithContext(callable: untyped) =
   # Restore the context captured at the callback's scheduling site
-  # (via `userCallback`), with an identity fast path when the ambient
+  # (via `capturingCallback`), with an identity fast path when the ambient
   # context already matches.
   withRestoredContext(callable.context):
     # `callable.function`/`.udata` are UFCS calls to private-field
@@ -828,7 +828,7 @@ elif defined(windows):
     # not supported so we discard the return value.
     discard closeFd(SocketHandle(fd))
     if not(isNil(aftercb)):
-      loop.callbacks.addLast(userCallback(aftercb))
+      loop.callbacks.addLast(capturingCallback(aftercb))
 
   proc closeHandle*(fd: AsyncFD, aftercb: CallbackFunc = nil) =
     ## Closes a (pipe/file) handle and ensures that it is unregistered.
@@ -841,7 +841,7 @@ elif defined(windows):
     discard closeFd(HANDLE(fd))
 
     if not(isNil(aftercb)):
-      loop.callbacks.addLast(userCallback(aftercb))
+      loop.callbacks.addLast(capturingCallback(aftercb))
 
   proc unregisterAndCloseFd*(fd: AsyncFD): Result[void, OSErrorCode] =
     ## Unregister from system queue and close asynchronous socket.
@@ -976,8 +976,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       # releasing its captured context - re-arming is leak-safe.
       # Assign via a temp: the destination is an existing heap field,
       # not a fresh local, so direct assignment misses the
-      # write-barrier elision `userCallback` relies on.
-      let acb = userCallback(cb, udata)
+      # write-barrier elision `capturingCallback` relies on.
+      let acb = capturingCallback(cb, udata)
       adata.reader = acb
       if not(isNil(adata.writer.function)):
         newEvents.incl(Event.Write)
@@ -1007,7 +1007,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     withData(loop.selector, cint(fd), adata) do:
       # Assign via a temp: same write-barrier-elision reason as
       # `addReader2` above.
-      let acb = userCallback(cb, udata)
+      let acb = capturingCallback(cb, udata)
       adata.writer = acb
       if not(isNil(adata.reader.function)):
         newEvents.incl(Event.Read)
@@ -1109,7 +1109,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     # We can't unregister file descriptor from system queue here, because
     # in such case processing queue will stuck on poll() call, because there
     # can be no file descriptors registered in system queue.
-    var acb = userCallback(continuation)
+    var acb = capturingCallback(continuation)
     loop.callbacks.addLast(acb)
 
   proc closeHandle*(fd: AsyncFD, aftercb: CallbackFunc = nil) =
@@ -1141,7 +1141,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       withData(loop.selector, sigfd, adata) do:
         # Assign via a temp: same write-barrier-elision reason as
         # `addReader2` above.
-        let acb = userCallback(cb, udata)
+        let acb = capturingCallback(cb, udata)
         adata.reader = acb
       do:
         return err(osdefs.EBADF)
@@ -1161,7 +1161,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       withData(loop.selector, procfd, adata) do:
         # Assign via a temp: same write-barrier-elision reason as
         # `addReader2` above.
-        let acb = userCallback(cb, udata)
+        let acb = capturingCallback(cb, udata)
         adata.reader = acb
       do:
         return err(osdefs.EBADF)
@@ -1339,7 +1339,7 @@ proc setTimer*(at: Moment, cb: CallbackFunc,
   ## timestamp ``at``. You can also pass ``udata`` to callback.
   let loop = getThreadDispatcher()
   result = TimerCallback(finishAt: at,
-                         function: userCallback(cb, udata))
+                         function: capturingCallback(cb, udata))
   loop.timers.push(result)
 
 proc clearTimer*(timer: TimerCallback) {.inline.} =
@@ -1398,7 +1398,7 @@ proc callSoon*(cbproc: CallbackFunc, udata: pointer = nil) =
   ## Schedule `cbproc` to be called as soon as possible.
   ## The callback is called when control returns to the event loop.
   doAssert(not isNil(cbproc))
-  callSoon(userCallback(cbproc, udata))
+  callSoon(capturingCallback(cbproc, udata))
 
 when hasThreadSupport:
   type DispatcherHandle* = distinct (ptr Dispatcher)
@@ -1454,7 +1454,7 @@ when hasThreadSupport:
       # Same thread: add directly to the callbacks deque, capturing
       # context like `callSoon`. The cross-thread branch below fires
       # with an empty context - unreachable from the target thread.
-      distinctBase(current).callbacks.addLast(userCallback(cbproc, udata))
+      distinctBase(current).callbacks.addLast(capturingCallback(cbproc, udata))
     else:
       # Cross-thread: enqueue to shared MPSC queue
       let node = createShared(ThreadCallbackNode)
@@ -1488,7 +1488,7 @@ proc callIdle*(cbproc: CallbackFunc, data: pointer) =
   ## iteration if there no network events available, not when the loop is
   ## actually "idle".
   doAssert(not isNil(cbproc))
-  callIdle(userCallback(cbproc, data))
+  callIdle(capturingCallback(cbproc, data))
 
 proc callIdle*(cbproc: CallbackFunc) =
   callIdle(cbproc, nil)
@@ -1496,7 +1496,7 @@ proc callIdle*(cbproc: CallbackFunc) =
 proc internalCallTick*(acb: AsyncCallback) =
   ## Schedule ``acb`` to be called after all scheduled callbacks, but only
   ## when OS system queue finished processing events. Caller-supplied
-  ## AsyncCallback - caller decides whether to use `userCallback` or
+  ## AsyncCallback - caller decides whether to use `capturingCallback` or
   ## `bareCallback`.
   getThreadDispatcher().ticks.addLast(acb)
 
@@ -1504,7 +1504,7 @@ proc internalCallTick*(cbproc: CallbackFunc, data: pointer) =
   ## Schedule ``cbproc`` to be called after all scheduled callbacks when
   ## OS system queue processing is done. No context capture - `cbproc`
   ## is treated as an internal trampoline. Use
-  ## `internalCallTick(userCallback(cb, data))` to opt into capture.
+  ## `internalCallTick(capturingCallback(cb, data))` to opt into capture.
   doAssert(not isNil(cbproc))
   internalCallTick(bareCallback(cbproc, data))
 

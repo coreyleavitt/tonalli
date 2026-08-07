@@ -13,7 +13,7 @@ import std/deques
 import stew/[ptrops, shims/sequninit]
 import results
 import ".."/[asyncloop, config, handles, bipbuffer, osdefs, osutils, oserrno]
-import ../futures except userCallback, bareCallback, contextCallback,
+import ../futures except capturingCallback, bareCallback, contextCallback,
   newCancelCallback, currentAsyncContext, context, withRestoredContext,
   pinContext
   # Only `captureContextInto` is used here; exclusion list kept in sync

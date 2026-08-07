@@ -315,16 +315,16 @@ proc addCallback*(future: FutureBase, cb: CallbackFunc, udata: pointer) =
   if future.finished():
     callSoon(cb, udata)
   else:
-    # `userCallback` captures the current contextVar bindings; the
+    # `capturingCallback` captures the current contextVar bindings; the
     # dispatcher restores them in `processCallbacks` before firing.
     if isNil(future.internalCallback.function):
       # Assign via a temp: `internalCallback` is an existing heap
       # field, not a fresh local, so direct assignment misses refc's
       # write-barrier elision.
-      let acb = userCallback(cb, udata)
+      let acb = capturingCallback(cb, udata)
       future.internalCallback = acb
     else:
-      future.internalCallbacks.add userCallback(cb, udata)
+      future.internalCallbacks.add capturingCallback(cb, udata)
 
 proc addCallback*(future: FutureBase, cb: CallbackFunc) =
   ## Adds the callbacks proc to be called when the future completes.
@@ -835,7 +835,7 @@ proc cancelSoon(future: FutureBase, aftercb: CallbackFunc, udata: pointer,
     # We could not schedule callback directly otherwise we could fall into
     # recursion problem.
     if not(isNil(aftercb)):
-      callSoon(userCallback(aftercb, udata))
+      callSoon(capturingCallback(aftercb, udata))
     return
 
   future.addCallback(continuation)
@@ -1359,7 +1359,7 @@ proc idleAsync*(): Future[void] {.
   retFuture.cancelCallback = cancellation
   # `continuation` is an internal trampoline that doesn't read
   # contextVars, so schedule it via `bareCallback` rather than
-  # `userCallback` to avoid needlessly capturing the caller's context.
+  # `capturingCallback` to avoid needlessly capturing the caller's context.
   callIdle(bareCallback(continuation, nil))
   retFuture
 
