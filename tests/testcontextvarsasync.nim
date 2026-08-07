@@ -886,6 +886,20 @@ suite "contextvars: fast-path pins":
       check asyncInt() == 444
     check asyncInt() == 0
 
+    # `tryCancel`'s cancel-callback fire happens before the state
+    # transition that would otherwise mark `fut` cancelled and run
+    # `finish()` (chronos/internal/asyncfutures.nim's `tryCancel`: the
+    # `Defect` from `raiserCancel` above escapes before
+    # `cancelAndSchedule` runs) - so without this, `fut` is left
+    # permanently `Pending` under `-d:chronosDebug`'s future-tracking
+    # registry (`futureList.count` never decremented, since that only
+    # happens in `finish()`'s `scheduleDestructor`), inflating
+    # `pendingFuturesCount()`/`getCount()` for every test that runs
+    # afterward in the same process (testutils.nim's exact-count
+    # assertions in particular). `complete()` doesn't touch
+    # `cancelCallback` at all, so this doesn't re-fire `raiserCancel`.
+    fut.complete()
+
   test "nil-captured resume through a suspended binder leaves the ambient context clean for a later same-batch callback":
     # `internalContinue`'s resume must restore `currentAsyncContext`
     # even when the resumed slice suspends AGAIN inside a binder before
