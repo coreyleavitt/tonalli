@@ -36,6 +36,10 @@ let testArguments =
       "-d:debug -d:chronosDebug -d:chronosEventEngine=poll -d:useSysAssert -d:useGcAssert",
       "-d:debug -d:chronosDebug -d:chronosPreviewV5 -d:useSysAssert -d:useGcAssert",
       "-d:release -d:chronosPreviewV5",
+      # Pins the vacated-slot canary's no-sink branch (chronosUseSink
+      # gates `chronosMoveSink`'s identity-passthrough fallback) on
+      # every toolchain, not just whichever default chronosUseSink picks.
+      "-d:debug -d:chronosDebug -d:chronosUseSink=false -d:useSysAssert -d:useGcAssert",
     ]
 
 let cfg =
@@ -82,7 +86,7 @@ task benchmarks, "Run benchmarks":
   # Make sure benchmarks compile
   for f in walkDirRec("benchmarks"):
 
-    if f.contains("bench_") and f.endsWith(".nim"):
+    if f.extractFilename.startsWith("bench_") and f.endsWith(".nim"):
       run "-d:release", f[0..^5]
 
 task test, "Run all tests":
@@ -96,7 +100,7 @@ task test, "Run all tests":
   # does not default it on, and bench_bulk_tcp.nim imports
   # chronos/threadsync, which hard-fails to compile without it.
   for f in walkDirRec("benchmarks"):
-    if f.contains("bench_") and f.endsWith(".nim"):
+    if f.extractFilename.startsWith("bench_") and f.endsWith(".nim"):
       build "--threads:on", f[0..^5]
 
   if testSuccessMarker.len > 0:

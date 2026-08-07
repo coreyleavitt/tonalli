@@ -190,9 +190,11 @@ type
 var contextVarRegistryHead: ptr ContextVarRegistration
   ## Head of the global registry list. A single process-wide global,
   ## not `{.threadvar.}` — one registry regardless of thread count.
-  ## Thread-safety invariant: written only during module init, which
-  ## Nim runs on the main thread before any `createThread` is
-  ## possible, so it is write-once-then-read-only and needs no lock.
+  ## Thread-safety invariant scoped to a static single-binary
+  ## deployment: module init runs on the main thread before any
+  ## `createThread` is possible, so it is write-once-then-read-only
+  ## and needs no lock. See docs/src/contextvars.md, "Inspecting
+  ## contexts" for the shared-library/dlopen caveat.
 
 proc registerContextVar*(node: ptr ContextVarRegistration) {.gcsafe, raises: [].} =
   ## Link `node` into the global registry, idempotently. Called once

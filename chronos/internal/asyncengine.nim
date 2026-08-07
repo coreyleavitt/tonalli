@@ -36,7 +36,7 @@ export deques, effects, errors, timer, results
 # they're already nameable via `AsyncCallback` and
 # `InternalFutureBase.internalCancelcb*`.
 export futures except capturingCallback, bareCallback, contextCallback,
-  newCancelCallback, currentAsyncContext, context, withRestoredContext,
+  capturingCancelCallback, currentAsyncContext, context, withRestoredContext,
   pinContext, captureContextInto
 
 export
@@ -326,12 +326,19 @@ elif defined(windows):
       errCode*: OSErrorCode
       bytesCount*: uint32
       udata*: pointer
-      context*: ContextNodeBase
+      context: ContextNodeBase
         ## Registrant's context, captured via `captureContextInto` at
         ## the site that arms the overlapped completion (e.g.
         ## `registerWaitable`, a stream server's `start()`). Nil unless
         ## an arm site explicitly captures, reproducing the
         ## empty-context fail-closed default for the rest.
+        ##
+        ## Private: a public field would make `ContextNodeBase`
+        ## structurally reachable via plain `import chronos` on
+        ## Windows. Same-module code (this file) may still read it
+        ## directly; `stream.nim` writes it through the
+        ## `captureContextInto(var CompletionData)` overload defined
+        ## right after this type section.
 
     CustomOverlapped* = object of OVERLAPPED
       data*: CompletionData
@@ -371,6 +378,13 @@ elif defined(windows):
       Ok, Timeout
 
     AsyncFD* = distinct int
+
+  template captureContextInto*(dest: var CompletionData) =
+    ## `CompletionData`-typed overload of
+    ## `captureContextInto(var ContextNodeBase)` (futures.nim), for
+    ## call sites — `stream.nim`'s accept-loop registration — that
+    ## cannot write the private `context` field directly.
+    captureContextInto(dest.context)
 
   proc hash(x: AsyncFD): Hash {.borrow.}
   proc `==`*(x: AsyncFD, y: AsyncFD): bool {.borrow, gcsafe.}

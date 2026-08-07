@@ -51,7 +51,7 @@ proc capMask(cap: int): uint {.inline.} =
   # bitwise-`and` whose operand is an inline sub-expression of itself.
   let capMinusOne = cap - 1
   doAssert cap > 0 and (cap and capMinusOne) == 0,
-    "CallbackQueue: capacity must be a positive power of two"
+    "CallbackQueue.capMask(): capacity must be a positive power of two"
   uint(capMinusOne)
 
 proc slotIndex(pos: uint, cap: int): int {.inline.} =
@@ -72,12 +72,12 @@ proc queueLen(head, tail: uint): int {.inline.} =
 proc isFull(head, tail: uint, cap: int): bool {.inline.} =
   let n = queueLen(head, tail)
   doAssert n >= 0 and n <= cap,
-    "CallbackQueue: length invariant violated - `tail - head` " &
+    "CallbackQueue.isFull(): length invariant violated - `tail - head` " &
     "(mod 2^wordsize) must never exceed capacity"
   n >= cap
 
 proc growTargetCap(cap: int): int {.inline.} =
-  doAssert cap >= 0, "CallbackQueue: capacity must not be negative"
+  doAssert cap >= 0, "CallbackQueue.growTargetCap(): capacity must not be negative"
   if cap == 0: 8 else: cap * 2
 
 # --- public interface -----------------------------------------------------
@@ -102,6 +102,18 @@ proc grow[T](q: var CallbackQueue[T]) =
   ## matching `zeroMem` of the vacated region — `copyMem` doesn't touch
   ## the MM, so without it the old seq's destructor would double-decref
   ## the relocated `ref` fields.
+  # `supportsCopyMem(T)` (std/typetraits) is unusable here: it rejects
+  # any `ref`-containing T, including the real `InternalAsyncCallback`/
+  # `InternalCancelCallback` this queue already relocates safely via
+  # the copyMem+zeroMem move below. Nim exposes no public trait for
+  # the actual invariant ("no custom =destroy/=copy/=sink/=trace"), so
+  # this catches the most likely misuse instead — T itself being a
+  # seq/string, whose move semantics this queue does not model.
+  static: doAssert not (T is (seq or string)),
+    "CallbackQueue.grow(): T must not be a seq/string — grow() relocates " &
+    "slots via raw copyMem+zeroMem, valid for a T whose move is a plain " &
+    "bit-copy (refs/ptrs/procs and structs of them), not guaranteed for " &
+    "seq/string or a T with custom lifecycle hooks"
   let oldCap = q.data.len
   let n = queueLen(q.head, q.tail)
   doAssert n == oldCap, "CallbackQueue.grow(): called on a non-full queue"
@@ -155,8 +167,9 @@ when defined(chronosDebug) and chronosUseSink:
     ## `when` body: Nim 1.6 fails to resolve `default(T)`'s `T` when the
     ## call sits inside a `when` nested in a generic `template`.
     doAssert item == default(T),
-      "CallbackQueue: a vacated slot retained a non-nil ghost value after " &
-      "popFirst() — a slot-vacating path bypassed the fused-move discipline"
+      "CallbackQueue.chronosCheckVacatedSlot(): a vacated slot retained a " &
+      "non-nil ghost value after popFirst() — a slot-vacating path " &
+      "bypassed the fused-move discipline"
 
 template popFirst*[T](q: var CallbackQueue[T]): T =
   ## Fused dequeue. A `template`, not a `proc`: a proc returning `T` by

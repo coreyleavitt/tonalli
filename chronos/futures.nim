@@ -49,7 +49,7 @@ type
     context: ContextNodeBase
       ## Same capture/lifetime discipline as
       ## `InternalAsyncCallback.context` above. Private to this
-      ## module - only `newCancelCallback` and the no-capture
+      ## module - only `capturingCancelCallback` and the no-capture
       ## construction in `internalInitFutureBase` build one.
 
   FutureState* {.pure.} = enum
@@ -213,7 +213,7 @@ template contextCallback*(fn: CallbackFunc, ud: pointer,
   ## processing in `poll()`).
   InternalAsyncCallback(function: fn, udata: ud, context: ctx)
 
-template newCancelCallback*(fn: CallbackFunc): InternalCancelCallback =
+template capturingCancelCallback*(fn: CallbackFunc): InternalCancelCallback =
   ## Construct the value stored in `internalCancelcb`, capturing context
   ## at construction like `capturingCallback` - the handler must observe the
   ## context bound at `cancelCallback=` time, not whatever's ambient

@@ -378,10 +378,10 @@ proc `cancelCallback=`*(future: FutureBase, cb: CallbackFunc) =
   when chronosStrictFutureAccess:
     doAssert not future.finished(),
       "cancellation callback must be set before finishing the future"
-  # `newCancelCallback` captures the current contextVar bindings at
+  # `capturingCancelCallback` captures the current contextVar bindings at
   # registration time - the handler must observe that context, not
   # whatever's ambient when `tryCancel` eventually invokes it.
-  let icb = newCancelCallback(cb)
+  let icb = capturingCancelCallback(cb)
   future.internalCancelcb = icb
 
 {.push stackTrace: off.}

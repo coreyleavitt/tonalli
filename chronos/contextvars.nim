@@ -29,6 +29,11 @@
 ## raises `UnboundContextVarDefect` rather than falling back to a
 ## value. See docs/src/contextvars.md, "Required variables".
 ##
+## A non-starred arm (`var name: T = default`, no `*`) is
+## module-private: its reader/binder are unreachable from other
+## modules, and it is invisible to `dumpContext`/`` `$` `` called from
+## anywhere else. See "Inspecting contexts" in docs/src/contextvars.md.
+##
 ## ## Public API
 ##
 ## - `contextVar`: declaration macro (block form: see usage above).
@@ -41,19 +46,21 @@
 ##   e.g. independently-fired enter/exit hooks that don't go through
 ##   `await`. See docs/src/contextvars.md for details.
 ## - `` `==`(a, b: AsyncContext): bool `` — identity equality between
-##   two snapshots.
+##   two snapshots; `hash*(ctx: AsyncContext): Hash` matches the same
+##   identity, so `AsyncContext` works as a `Table`/`HashSet` key.
 ## - `dumpContext(ctx: AsyncContext): seq[ContextVarEntry]` / `` `$`
-##   (ctx: AsyncContext): string `` — introspect every declared arm's
-##   state within a snapshot. See "Inspecting contexts" in
-##   docs/src/contextvars.md.
+##   (ctx: AsyncContext): string `` — introspect every *starred*
+##   declared arm's state within a snapshot, sorted by name. See
+##   "Inspecting contexts" in docs/src/contextvars.md.
 ## - `UnboundContextVarDefect`: raised by a must-bind arm's reader
-##   (ambient or snapshot) when read while unbound.
+##   (ambient or snapshot) when read while unbound; carries the arm's
+##   name in `varName`.
 ##
 ## `ContextNodeBase` and the per-slot `contextLookup`/`contextBindSlot`
 ## primitives are internal, living in
 ## `chronos/internal/contextvars_impl.nim`.
 
-import std/[macros, strutils]
+import std/[algorithm, hashes, macros, strutils]
 import ./internal/contextvars_impl
 
 # --- Public type: opaque snapshot ------------------------------------------
@@ -70,6 +77,11 @@ proc `==`*(a, b: AsyncContext): bool {.gcsafe, raises: [].} =
   ## not by walking and comparing bindings — two chains with the same
   ## bindings but built independently are NOT equal.
   ContextNodeBase(a) == ContextNodeBase(b)
+
+proc hash*(ctx: AsyncContext): Hash {.gcsafe, raises: [].} =
+  ## Pointer-identity hash, consistent with `==`'s identity semantics —
+  ## safe to use `AsyncContext` as a `Table`/`HashSet` key.
+  hash(cast[pointer](ContextNodeBase(ctx)))
 
 proc currentContext*(): AsyncContext {.gcsafe, raises: [].} =
   ## Capture the current task's binding chain as an opaque snapshot.
@@ -117,6 +129,7 @@ type
     ## must-bind context vars without widening its raises list for a
     ## condition that signals a bug rather than an expected failure
     ## mode. See docs/src/contextvars.md, "Required variables".
+    varName*: string      ## Name of the unbound arm, e.g. `"traceId"`.
 
 proc contextRequire[N: ContextNodeBase; T](varName: string): T
     {.gcsafe, raises: [].} =
@@ -126,9 +139,11 @@ proc contextRequire[N: ContextNodeBase; T](varName: string): T
   ## macro-generated readers for default-less (`var name: T`) arms.
   let r = contextFind[N, T]()
   if not r.found:
-    raise newException(UnboundContextVarDefect,
+    var e = newException(UnboundContextVarDefect,
       "context variable '" & varName & "' has no default and is not " &
       "bound in the current context")
+    e.varName = varName
+    raise e
   r.value
 
 proc contextRequireSnapshot[N: ContextNodeBase; T](
@@ -137,9 +152,11 @@ proc contextRequireSnapshot[N: ContextNodeBase; T](
   ## `name(ctx: AsyncContext)` snapshot reader on a must-bind arm.
   let r = contextFindSnapshot[N, T](chain)
   if not r.found:
-    raise newException(UnboundContextVarDefect,
+    var e = newException(UnboundContextVarDefect,
       "context variable '" & varName & "' has no default and is not " &
       "bound in the given snapshot")
+    e.varName = varName
+    raise e
   r.value
 
 # --- Declaration macro -----------------------------------------------------
@@ -186,9 +203,17 @@ macro contextVar*(body: untyped): untyped =
   ##    snapshot captured inside `body` remains sound after `body`
   ##    exits.
   ##
-  ## Every arm — defaulted or must-bind — also registers itself with
-  ## the allocation-free introspection registry that `dumpContext`
-  ## walks; see "Inspecting contexts" in docs/src/contextvars.md.
+  ## Every *starred* arm — defaulted or must-bind — also registers
+  ## itself with the allocation-free introspection registry that
+  ## `dumpContext` walks; a non-starred arm is never registered, so it
+  ## stays invisible to `dumpContext`/`` `$` `` even from within its
+  ## own module. See "Inspecting contexts" in docs/src/contextvars.md.
+  ##
+  ## If the arm's generated `withName` identifier is already declared
+  ## in the expansion scope — a name collision with an existing
+  ## symbol, chronos's own or a same-module duplicate arm — this is a
+  ## compile error naming both the arm and the colliding symbol. See
+  ## "Naming caution" in docs/src/contextvars.md.
   ##
   ## The `var name` from the input is NOT emitted as a runtime variable
   ## — the macro reuses var-section syntax purely for its parse
@@ -238,7 +263,19 @@ macro contextVar*(body: untyped): untyped =
       # nskVar can't be reused as a template name.
       let bareName = ident(name)
       let slotTypeName = ident(toUpperAscii(name[0]) & name[1 .. ^1] & "Slot")
-      let withName = ident("with" & toUpperAscii(name[0]) & name[1 .. ^1])
+      let withNameStr = "with" & toUpperAscii(name[0]) & name[1 .. ^1]
+      let withName = ident(withNameStr)
+      # Collision message built at macro-expansion time (a plain string
+      # literal), checked against the expansion scope via `when
+      # declared` emitted into the generated code below — catches both
+      # a cross-module name clash (e.g. an arm named `timeout` vs
+      # chronos's `withTimeout`) and a same-module duplicate arm, since
+      # each arm's `when declared` check runs after every earlier arm's
+      # `withName` template is already in scope.
+      let collisionMsg = newLit(
+        "contextVar: arm '" & name & "' would generate `" & withNameStr &
+        "`, but `" & withNameStr & "` is already declared in this scope " &
+        "— rename the arm or the colliding symbol.")
       # `*`-postfixed definition-site nodes when the arm is exported;
       # `slotTypeName`/`bareName`/`withName` stay bare for reference
       # positions (e.g. contextLookup[slotTypeName, ...]) where a
@@ -280,25 +317,38 @@ macro contextVar*(body: untyped): untyped =
               ContextNodeBase(`chronosCtxSnapIdent`), `defaultVal`)
       # must-bind arms show a fixed placeholder (dumpContext never
       # raises); defaulted arms show the default, `$`-rendered when
-      # possible. The `compiles` probe runs against a zero-initialized
-      # `var` of `typExpr`, not against `defaultVal` directly: a
-      # polymorphic literal default like `nil` has no fixed type of
-      # its own, so probing it can resolve `$` against an unrelated
-      # compatible type (e.g. cstring's strlen-based `$`) and then
-      # evaluate that overload on the real default — a null-pointer
-      # read for something like a bare `ptr T`.
+      # possible. `defaultVal` is bound through an explicitly-typed
+      # `let` rather than probed directly: a polymorphic literal like
+      # `nil` has no fixed type of its own, so an untyped probe can
+      # resolve `$` against an unrelated compatible overload and then
+      # evaluate it on the real default — a null-pointer read for a
+      # `ref`/`ptr T`. A `ref`-typed nil renders as `"nil"` without
+      # calling `$` at all, since a `$` proof-of-existence via
+      # `compiles` doesn't prove the callee is nil-safe.
       let notFoundTuple =
         if isMustBind:
           quote do: (false, "<unbound>")
         else:
           quote do:
-            when compiles((block:
-              var chronosCtxZero: `typExpr`
-              $chronosCtxZero)):
-              (false, $(`defaultVal`))
-            else:
-              (false, "<" & `typeNameLit` & ">")
+            block:
+              let chronosCtxDefaultVal: `typExpr` = `defaultVal`
+              when `typExpr` is ref:
+                if chronosCtxDefaultVal.isNil:
+                  (false, "nil")
+                else:
+                  when compiles($chronosCtxDefaultVal):
+                    (false, $chronosCtxDefaultVal)
+                  else:
+                    (false, "<" & `typeNameLit` & ">")
+              else:
+                when compiles($chronosCtxDefaultVal):
+                  (false, $chronosCtxDefaultVal)
+                else:
+                  (false, "<" & `typeNameLit` & ">")
       result.add quote do:
+        when declared(`withName`):
+          {.error: `collisionMsg`.}
+
         type `slotTypeNameDef` = ref object of ContextNodeBase
           ## Slot type for this `contextVar` declaration. Each
           ## declaration emits a fresh `ref object of ContextNodeBase`
@@ -339,16 +389,31 @@ macro contextVar*(body: untyped): untyped =
           ## the registry, by `dumpContext`.
           let chronosCtxR = contextFindSnapshot[`slotTypeName`, `typExpr`](chronosCtxChain)
           if chronosCtxR.found:
-            when compiles($(chronosCtxR.value)):
-              (true, $(chronosCtxR.value))
+            when `typExpr` is ref:
+              if chronosCtxR.value.isNil:
+                (true, "nil")
+              else:
+                when compiles($(chronosCtxR.value)):
+                  (true, $(chronosCtxR.value))
+                else:
+                  (true, "<" & `typeNameLit` & ">")
             else:
-              (true, "<" & `typeNameLit` & ">")
+              when compiles($(chronosCtxR.value)):
+                (true, $(chronosCtxR.value))
+              else:
+                (true, "<" & `typeNameLit` & ">")
           else:
             `notFoundTuple`
 
-        var `regNodeName`: ContextVarRegistration = ContextVarRegistration(
-          name: cstring(`nameLit`), render: `readerProcName`)
-        registerContextVar(addr `regNodeName`)
+      # Registration is gated on the arm's own export marker: a
+      # non-starred arm is module-private, so it must stay invisible
+      # to dumpContext/`$` from every other module — only a starred
+      # arm links itself into the process-wide registry.
+      if isExported:
+        result.add quote do:
+          var `regNodeName`: ContextVarRegistration = ContextVarRegistration(
+            name: cstring(`nameLit`), render: `readerProcName`)
+          registerContextVar(addr `regNodeName`)
 
 # --- Introspection -----------------------------------------------------------
 
@@ -379,6 +444,9 @@ proc dumpContext*(ctx: AsyncContext): seq[ContextVarEntry] {.raises: [].} =
   ## the way the arm's own reader would, since a debugger or log dump
   ## wants the whole declared universe, not just what's bound now.
   ##
+  ## Entries are sorted by `name` (deterministic across runs, since
+  ## registry link order otherwise depends on module init order).
+  ##
   ## Cost: proportional to the number of `contextVar` arms declared
   ## anywhere in the program (one allocation-free registry walk) plus
   ## one `$`-render per arm — paid only when `dumpContext` is called,
@@ -388,6 +456,7 @@ proc dumpContext*(ctx: AsyncContext): seq[ContextVarEntry] {.raises: [].} =
     for node in contextVarRegistry():
       let (bound, rendered) = node.render(chain)
       result.add ContextVarEntry(name: $node.name, bound: bound, value: rendered)
+  result.sort(proc(a, b: ContextVarEntry): int = cmp(a.name, b.name))
 
 proc `$`*(ctx: AsyncContext): string {.raises: [].} =
   ## Render `ctx` as `{name: value, ...}`, via the same registry walk

@@ -55,10 +55,13 @@ synchronous-callback boundaries that don't go through `await`.
 module scope with everything else chronos exports, and the two can
 collide. An arm named `timeout`, for instance, generates `withTimeout`
 — the same name as chronos's own `withTimeout` combinator
-(`Future[T].withTimeout(Duration): Future[bool]`) — leading to
-confusing ambiguity or overload-resolution errors at call sites that
-use either one. Choose arm names that don't shadow existing chronos
-API, particularly common words.
+(`Future[T].withTimeout(Duration): Future[bool]`). This is a compile
+error, not just a caution: `contextVar` checks, per arm, whether its
+generated `withName` identifier is already declared in the expansion
+scope, and fails with a message naming both the arm and the colliding
+symbol. The same check catches a duplicate arm name declared twice in
+the same module — the second declaration's `withName` is already
+declared by the first, so it fails the identical way.
 
 ## Semantics notes
 
@@ -82,7 +85,9 @@ contextVar:
 This declares a *must-bind* variable — the analog of PEP 567's
 default-less `ContextVar`. Reading `traceId()` while no `withTraceId`
 binder is in scope raises `UnboundContextVarDefect` instead of falling
-back to a value:
+back to a value. The Defect's `varName: string` field names the
+unbound arm (`"traceId"` here), from both the ambient and the
+snapshot reader:
 
 ```nim
 proc handler() {.async: (raises: []).} =
@@ -142,6 +147,16 @@ don't interact with each other, so the nesting order between them is
 arbitrary — binding `requestId` inside `currentUser` or the other way
 around produces the same observable bindings either way.
 
+## The empty context
+
+A default-initialized `AsyncContext` (`var ctx: AsyncContext`, never
+assigned from `currentContext()`) is the *empty* context — the same
+one every task starts with before any `withName` runs. Running under
+it via `withContext` installs no bindings at all: a defaulted arm
+reads its own default, exactly as if no binder were ever entered, and
+a must-bind arm raises `UnboundContextVarDefect`, same as an unbound
+ambient read.
+
 ## Bridging independent callbacks
 
 `withName` binds for the dynamic extent of one body inside one logical
@@ -154,6 +169,11 @@ scheduling time around *every* callback invocation (`fireWithContext` in
 `chronos/internal/asyncengine.nim`), so nothing one callback binds
 survives into a second, separately-scheduled callback — the next callback
 observes whatever context it captured at its own registration.
+
+Skipping this pattern is fail-closed, not a leak: an exit hook that
+never captured a snapshot simply runs under whatever context was
+ambient at its own registration (typically empty), never under
+another task's binding.
 
 For that shape, use `currentContext()`/`withContext()` — capture a
 snapshot in the enter hook, restore it in the exit hook:
@@ -213,9 +233,19 @@ withCurrentUser(someUser):
 This is identity equality (same chain-head pointer), not a
 value-by-value comparison of bindings — two snapshots built
 independently that happen to carry the same bindings are not `==`.
+`hash*(ctx: AsyncContext): Hash` matches the same identity (a
+pointer-identity hash), so `AsyncContext` works as a `Table`/`HashSet`
+key.
 
 **Snapshot readers.** Every `contextVar` arm generates a second reader
-overload alongside the ambient one:
+overload alongside the ambient one, under the *same* name as the
+ambient reader rather than a differently-spelled accessor (no
+`name[]`/`name.get(ctx)` shape): one accessor identity per variable,
+with the snapshot passed explicitly when reading a captured context
+instead of the ambient one. A subscript or get-style alternative was
+considered and rejected for the same reason `withName` isn't spelled
+`bind(name, v)`: it would give each arm two unrelated-looking call
+forms for what is conceptually a single reader.
 
 ```nim
 proc name(ctx: AsyncContext): T
@@ -233,8 +263,9 @@ Export follows the arm's own `*` marker, same as the ambient reader
 and binder.
 
 **`dumpContext` / `` `$` ``.** `dumpContext(ctx: AsyncContext): seq[ContextVarEntry]`
-enumerates every `contextVar` arm declared anywhere in the program —
-across every module, defaulted or must-bind — as it stands in `ctx`:
+enumerates every *starred* `contextVar` arm declared anywhere in the
+program — across every module, defaulted or must-bind — as it stands
+in `ctx`, sorted by name:
 
 ```nim
 type ContextVarEntry* = object
@@ -243,7 +274,11 @@ type ContextVarEntry* = object
   value*: string
 ```
 
-Every declared arm appears exactly once, bound or not. This is a
+A non-starred arm is never registered, so it never appears here —
+module-private means private to introspection too, not just to
+readers/binders. See "Implementation" below.
+
+Every registered arm appears exactly once, bound or not. This is a
 deliberate choice: the alternative — showing only the arms that
 happen to be bound — hides the "what else *could* be here" half of
 the picture, which is exactly what a debugger or log dump wants. An
@@ -254,12 +289,16 @@ arm shows `bound: false` and a fixed `<unbound>` placeholder — calling
 own reader would, because introspection has to stay total to be
 useful as a debugging tool. A value is rendered via `$` when the arm's
 type has one (checked with `when compiles`); otherwise it's shown as a
-placeholder in the form `<TypeName>`.
+placeholder in the form `<TypeName>`. A `ref`-typed arm whose value is
+nil renders as the literal string `"nil"` without calling `$` at all —
+`when compiles($v)` only proves a matching overload exists, not that
+it tolerates a nil receiver, and `dumpContext` walks every declared
+arm including ones no caller has bound yet.
 
 `` `$`(ctx: AsyncContext): string `` renders the same information as a
-single `{name: value, ...}` string, for quick `echo`/logging use. Its
-format is not a stable, parseable contract — only `dumpContext`'s
-structured `seq[ContextVarEntry]` is.
+single `{name: value, ...}` string, in the same sorted order, for
+quick `echo`/logging use. Its format is not a stable, parseable
+contract — only `dumpContext`'s structured `seq[ContextVarEntry]` is.
 
 **Cost.** All three are zero-cost in the sense that matters for this
 feature: nothing on the reader, binder, capture, or fire hot paths
@@ -282,6 +321,15 @@ thread can exist, and never again — reading it from any thread
 afterward (as `dumpContext` does) needs no lock. The only allocation
 in this whole path is the `seq[ContextVarEntry]`/rendered `string`s
 `dumpContext` itself builds, on the calling thread's own heap.
+
+This no-lock argument assumes a static single-binary deployment,
+where module init genuinely runs once, on the main thread, before
+`createThread`. It does not hold across `dlopen`/shared-library
+boundaries: a library loaded after other threads already exist can
+run its module init concurrently with readers, and unloading it
+leaves dangling registry entries. Neither shape is a chronos use case
+today, but embedding chronos in a plugin/shared-library host would
+need to revisit this registry's locking.
 
 ## Implementation
 
@@ -308,7 +356,9 @@ not silent misresolution. Qualified access (`moduleA.name()` vs
 `moduleB.name()`) still resolves each side to its own, genuinely distinct
 slot type. To avoid the collision in the first place, leave an arm
 unstarred (`var name: T = default`, no `*`): non-starred arms are
-module-private and invisible to other modules entirely.
+module-private and invisible to other modules entirely — including to
+`dumpContext`/`` `$` ``, which only ever see a starred arm's state,
+not merely its reader/binder identifiers.
 
 The current chain head lives in a per-thread variable. The dispatcher
 propagates it by value through every scheduling site:
@@ -335,6 +385,14 @@ a context variable carries a `nil` chain: capture copies one pointer and
 lookup is a `nil` check.
 
 ## Capture discipline
+
+The obligation this section places on every scheduling-site author: a
+context-blind trampoline (`bareCallback`) is sound only when everything
+it fires either captured its own context at registration or is itself
+context-neutral. `bareCallback` doesn't check this — it just fires with
+an empty context — so a bare trampoline that starts firing
+context-sensitive code without one of the other two constructors
+upstream reintroduces a leak silently.
 
 Every `AsyncCallback` construction site must deliberately pick one of three
 constructors defined in `chronos/futures.nim`:
@@ -424,7 +482,11 @@ created it has exited.
   trampolines (they only drive an internal future to completion, and
   that future's own awaiter already carries its own captured context
   from the normal `capturingCallback` path, so there's nothing for those
-  trampolines themselves to propagate).
+  trampolines themselves to propagate). The accept loop's `context` is
+  captured once, at `start()`, and reused for every connection the
+  server ever accepts — it is not re-captured per connection, so a
+  caller that binds a large value around `start()` pins it for the
+  server's entire lifetime, not just for one `start()` call.
 
 ## Performance
 
@@ -437,9 +499,22 @@ measured, not assumed.
 unconditionally) is the headline: `callSoon` schedule+fire — the
 hottest path a contextvars-free program pays on every scheduled
 callback — measured against a pre-contextvars baseline, with runs
-interleaved to cancel out machine noise, lands at 1.01x-1.11x, inside
-ordinary run-to-run noise. **orc** was within noise from the first
-measurement and stays there (~1.10x).
+interleaved to cancel out machine noise, lands at 1.04x (bootstrap 95%
+CI [0.82, 1.26] — statistically indistinguishable from 1.0x, i.e. no
+measurable regression). **orc** lands at 0.99x, likewise noise.
+
+Per-call-class timings, both memory managers, baseline (pre-contextvars)
+vs. this feature (ns/call):
+
+| call class    | refc baseline | refc w/ contextvars | orc baseline | orc w/ contextvars |
+|----------------|---------------:|----------------------:|---------------:|----------------------:|
+| `callSoon`     | 30.8           | 36.8                  | 57.2           | 63.8                  |
+| sleep chain    | 860            | 864                   | 1083           | 1054                  |
+| create + await | 101.2          | 106.5                 | 127.7          | 124.7                 |
+
+orc's sleep-chain and create/await rows land *below* baseline —
+within the same run-to-run noise as the rest of this table, not a
+claim that contextvars makes orc faster.
 
 Per-call-class cost, both memory managers, confirmed by inspecting the
 generated C at each site rather than inferred from throughput alone:
@@ -474,11 +549,14 @@ of the improvement in the refc headline number above.
 - `tests/testcontextvars.nim` — synchronous semantics: declaration,
   defaults, nesting/shadowing, restore on all exit paths, and the binder
   contract (push/pop balance on every exit path); `AsyncContext` identity
-  (`==`); snapshot readers (bound-in-snapshot, outer-vs-inner-binding,
-  defaulted-unbound); must-bind arms (unbound raise, bound read, LIFO
-  restore, snapshot-reader raise); `dumpContext`/`` `$` `` (bound,
-  defaulted-unbound, must-bind-unbound, and a non-`$`-able type's
-  placeholder path).
+  (`==`, `hash`, table-key usability); snapshot readers (bound-in-snapshot,
+  outer-vs-inner-binding, defaulted-unbound); must-bind arms (unbound
+  raise with `varName` set, bound read, LIFO restore, snapshot-reader
+  raise); `dumpContext`/`` `$` `` (bound, defaulted-unbound,
+  must-bind-unbound, a non-`$`-able type's placeholder path, a
+  `ref`-typed arm's nil-safe render, and sorted-by-name ordering); the
+  empty (default/nil) `AsyncContext`'s no-bindings behavior under
+  `withContext`.
 - `tests/testcontextvarsasync.nim` — async propagation (isolation across
   interleaved tasks, survival across sequential awaits, exception and
   cancellation paths, spawn-time inheritance), per-scheduling-site
@@ -490,11 +568,13 @@ of the improvement in the refc headline number above.
   propagating across `await` exactly like a defaulted one.
 - `tests/testcontextvarsguardrails.nim` — compile-time drift detection:
   the private-field/constructor-only enforcement, the native-`ref` context
-  field, callback layout, and the introspection registry's
-  `.registered`/`.next` fields staying private to `contextvars_impl.nim`.
+  field, callback layout, the introspection registry's
+  `.registered`/`.next` fields staying private to `contextvars_impl.nim`,
+  and the `withName` collision check (a colliding arm name, and a
+  same-module duplicate arm, both fail to compile).
 - `tests/testcontextvarssurface.nim` — verifies `import chronos`
   plus `import chronos/contextvars` expose only the intended public API
-  (`contextVar`, `AsyncContext`, `` `==` ``, `currentContext`,
+  (`contextVar`, `AsyncContext`, `` `==` ``, `hash`, `currentContext`,
   `withContext`, `dumpContext`, `ContextVarEntry`, `` `$` ``,
   `UnboundContextVarDefect`) and none of the dispatcher/registry
   internals (`ContextNodeBase`, `currentAsyncContext`,
@@ -503,10 +583,14 @@ of the improvement in the refc headline number above.
   `contextFind`/`contextFindSnapshot`, `ContextVarRegistration`,
   `ContextVarRenderProc`, `registerContextVar`, `contextVarRegistry`);
   also pins the deliberate absence of an imperative token API
-  (`AsyncContextToken`), and that a must-bind arm (`var name: T`, no
-  default) is legal syntax.
-- `tests/testcontextvarsexport.nim` + `tests/contextvarshelper.nim`
+  (`AsyncContextToken`), that a must-bind arm (`var name: T`, no
+  default) is legal syntax, and — on the `--os:windows` leg —
+  that `CompletionData.context` is not reachable either.
+- `tests/testcontextvarsexport.nim` + `tests/contextvarsexportfixture.nim`
   — cross-module export-marker semantics: a starred arm's reader,
   snapshot reader, and binder are all reachable from an importing
-  module; a non-starred arm's are not, and no arm generates an
-  imperative `setName` binder.
+  module; a non-starred arm's are not (including from `dumpContext`,
+  not just by name); no arm generates an imperative `setName` binder.
+- `tests/testcontextvarsbalance.nim` — the suite-final binder-balance
+  check (`chainBalance`/`chainLen`), split out of `testutils.nim` so it
+  runs on every engine, including `poll` (see `tests/testall.nim`).

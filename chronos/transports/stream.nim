@@ -14,12 +14,20 @@ import stew/[ptrops, shims/sequninit]
 import results
 import ".."/[asyncloop, config, handles, bipbuffer, osdefs, osutils, oserrno]
 import ../futures except capturingCallback, bareCallback, contextCallback,
-  newCancelCallback, currentAsyncContext, context, withRestoredContext,
+  capturingCancelCallback, currentAsyncContext, context, withRestoredContext,
   pinContext
   # Only `captureContextInto` is used here; exclusion list kept in sync
   # with `asyncengine.nim`'s so this import can't widen the public
   # surface through `stream.nim`.
 import ./[common, ipnet]
+
+when defined(windows):
+  import ../internal/asyncengine
+    # Direct import, bypassing `asyncloop.nim`'s filtered re-export, for
+    # the `captureContextInto(var CompletionData)` overload only — the
+    # accept-loop registration sites below need it; `asyncloop.nim`
+    # deliberately excludes it from its own export surface so it can't
+    # widen the public surface through `import chronos`.
 
 export results
 
@@ -1256,7 +1264,7 @@ when defined(windows):
       # proc), so the continuation should observe whatever context is
       # ambient right here, not whatever's ambient whenever the OS
       # happens to complete the `AcceptEx`.
-      captureContextInto(server.aovl.data.context)
+      captureContextInto(server.aovl.data)
       server.apending = true
       let res = loop.acceptEx(SocketHandle(server.sock),
                               SocketHandle(server.asock),
@@ -1300,7 +1308,7 @@ when defined(windows):
       server.aovl.data = CompletionData(cb: continuationPipe,
                                         udata: cast[pointer](server))
       # See the matching comment on the TCP branch above.
-      captureContextInto(server.aovl.data.context)
+      captureContextInto(server.aovl.data)
       server.apending = true
       let res = connectNamedPipe(HANDLE(server.sock),
                                  cast[POVERLAPPED](addr server.aovl))
@@ -1861,7 +1869,7 @@ proc start2*(server: StreamServer): Result[void, OSErrorCode] =
       # `CompletionData`, mirroring the POSIX path's capture inside
       # `resumeAccept()`'s `addReader2` call - the registrant's context
       # is the one bound when `start()` runs, not when the server was built.
-      captureContextInto(server.aovl.data.context)
+      captureContextInto(server.aovl.data)
     ? server.resumeAccept()
     server.status = ServerStatus.Running
   ok()
