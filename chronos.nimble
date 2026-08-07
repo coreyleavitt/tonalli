@@ -92,10 +92,16 @@ task test, "Run all tests":
     if (NimMajor, NimMinor) >= (2, 2): # ORC on 2.0 is too broken to investigate
       run args & " --mm:orc", "tests/testall"
 
-  # Make sure benchmarks compile
+  # Make sure benchmarks compile. `--threads:on` explicitly: Nim >= 2.0
+  # defaults threads on, so this was never needed there, but Nim 1.6
+  # does not default it - benchmarks/bench_bulk_tcp.nim imports
+  # chronos/threadsync (thread-safe primitives), which hard-fails to
+  # compile without it ("Compile this program with threads enabled!").
+  # Latent since bench_bulk_tcp started using threadsync; unreachable on
+  # Nim 1.6 CI until other, unrelated 1.6 build blockers were fixed.
   for f in walkDirRec("benchmarks"):
     if f.contains("bench_") and f.endsWith(".nim"):
-      build "", f[0..^5]
+      build "--threads:on", f[0..^5]
 
   if testSuccessMarker.len > 0:
     # Mobile CI uses this to confirm that the full task reached its end.
