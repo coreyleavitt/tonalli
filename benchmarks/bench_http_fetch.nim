@@ -148,8 +148,13 @@ proc print(results: BenchmarkResult) =
     totalTime: results.totalTime.inSecondsFloat,
     numRequests: results.numRequests,
     reqsps: ((results.numRequests.float / results.totalTime.inSecondsFloat)),
-    sent: results.totalBytesSent / (1024 * 1024),
-    received: results.totalBytesReceived / (1024 * 1024),
+    # `.float` explicitly, same reasoning as `inSecondsFloat` above and
+    # `sendSpeed`/`recvSpeed` below: `totalBytesSent`/`totalBytesReceived`
+    # are `int64`, and dividing directly against an untyped-int literal
+    # resolves to system's `/(int, int): float`, whose `int` param is
+    # 32-bit on i386.
+    sent: results.totalBytesSent.float / (1024 * 1024),
+    received: results.totalBytesReceived.float / (1024 * 1024),
     sendSpeed:
       (results.totalBytesSent.float / results.totalTime.inSecondsFloat / (1024 * 1024)),
     recvSpeed: (

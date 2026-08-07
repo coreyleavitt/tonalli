@@ -161,6 +161,24 @@ proc prependNoGrow*[T](q: var CallbackQueue[T], item: chronosSink T) =
   let idx = slotIndex(q.head, q.data.len)
   q.data[idx] = item
 
+when defined(chronosDebug):
+  proc chronosCheckVacatedSlot[T](item: T) {.inline.} =
+    ## Debug-only guardrail: every slot `popFirst` vacates must end up
+    ## default-valued, catching a slot-vacating path that bypasses the
+    ## fused-move discipline below. A standalone generic `proc`, not
+    ## inlined into `popFirst`'s `when defined(chronosDebug):` body: Nim
+    ## 1.6 fails to resolve `default(T)`'s `T` as the template's generic
+    ## parameter when the call sits inside a `when` block nested in a
+    ## generic `template` (`Error: type mismatch: got <InternalAsyncCallback>`
+    ## at the call to `default`, cross-checked against a known Nim
+    ## generic-template-plus-`when` type-resolution bug of the same
+    ## shape) - a `proc`'s own generic-instantiation path does not hit
+    ## this, so hoisting the check here is the fix, not a workaround for
+    ## a real ambiguity in what's being asserted.
+    doAssert item == default(T),
+      "CallbackQueue: a vacated slot retained a non-nil ghost value after " &
+      "popFirst() — a slot-vacating path bypassed the fused-move discipline"
+
 template popFirst*[T](q: var CallbackQueue[T]): T =
   ## Fused dequeue. A `template`, not a `proc`: a proc returning `T` by
   ## value pays refc's hidden-return-slot reset-then-assign lowering
@@ -175,13 +193,8 @@ template popFirst*[T](q: var CallbackQueue[T]): T =
   let chronosQueueIdx = slotIndex(q.head, q.data.len)
   inc q.head
   when defined(chronosDebug):
-    # Debug-only guardrail: every slot this queue vacates must end up
-    # default-valued, catching a slot-vacating path that bypasses the
-    # fused-move discipline above.
     let chronosPopped = chronosMoveSink(q.data[chronosQueueIdx])
-    doAssert q.data[chronosQueueIdx] == default(T),
-      "CallbackQueue: a vacated slot retained a non-nil ghost value after " &
-      "popFirst() — a slot-vacating path bypassed the fused-move discipline"
+    chronosCheckVacatedSlot(q.data[chronosQueueIdx])
     chronosPopped
   else:
     chronosMoveSink(q.data[chronosQueueIdx])
