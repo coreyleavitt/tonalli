@@ -9,7 +9,7 @@
 ## Behavior tests for chronos's continuation-local storage primitive.
 ## See docs at chronos/contextvars.nim and docs/src/contextvars.md.
 
-import std/[macros, strutils]
+import std/[algorithm, macros, strutils, tables]
 import unittest2
 import ../chronos/contextvars
 import ../chronos/internal/contextvars_impl  # chainLen, chainBalance
@@ -262,6 +262,23 @@ suite "contextvars: AsyncContext identity (==)":
     let c0Again = currentContext()
     check c0Again == c0
 
+  test "hash matches == identity: two equal snapshots hash equal":
+    let a = currentContext()
+    let b = currentContext()
+    check a == b
+    check hash(a) == hash(b)
+
+  test "AsyncContext works as a Table key":
+    var t: Table[AsyncContext, int]
+    let outer = currentContext()
+    t[outer] = 1
+    withIdentA(1):
+      let inner = currentContext()
+      t[inner] = 2
+      check t[outer] == 1
+      check t[inner] == 2
+    check t[currentContext()] == 1
+
 # --- Per-variable snapshot readers ------------------------------------------
 
 contextVar:
@@ -305,6 +322,21 @@ suite "contextvars: must-bind (default-less) arms":
     expect UnboundContextVarDefect:
       discard mustBindVar()
 
+  test "UnboundContextVarDefect carries the arm's name":
+    try:
+      discard mustBindVar()
+      check false
+    except UnboundContextVarDefect as e:
+      check e.varName == "mustBindVar"
+
+  test "snapshot reader's UnboundContextVarDefect also carries the arm's name":
+    let snap = currentContext()
+    try:
+      discard mustBindVar(snap)
+      check false
+    except UnboundContextVarDefect as e:
+      check e.varName == "mustBindVar"
+
   test "reading bound works":
     withMustBindVar(5):
       check mustBindVar() == 5
@@ -345,10 +377,20 @@ static:
     "control: NoDollarPtr must genuinely have no `$`, or the " &
     "placeholder-path test below is vacuous"
 
+type DerefDollarRef = ref object
+  ## `$` dereferences `field` — calling it on a nil value would crash,
+  ## which is exactly what the nil-safe render path must avoid.
+  field: int
+
+proc `$`(r: DerefDollarRef): string = "field=" & $r.field
+
 contextVar:
-  var dumpDefaulted: int = 7
-  var dumpMustBind: string      # must-bind
-  var dumpNoDollar: NoDollarPtr = nil
+  # Starred: dumpContext only ever sees a starred arm's state — these
+  # fixtures test dumpContext itself, so they must be visible to it.
+  var dumpDefaulted*: int = 7
+  var dumpMustBind*: string      # must-bind
+  var dumpNoDollar*: NoDollarPtr = nil
+  var dumpRefNilDefault*: DerefDollarRef = nil
 
 suite "contextvars: dumpContext and $":
 
@@ -410,3 +452,45 @@ suite "contextvars: dumpContext and $":
     withDumpDefaulted(55):
       let s = $currentContext()
       check "dumpDefaulted: 55" in s
+
+  test "ref-typed arm with nil value renders as \"nil\" without calling $ (would crash otherwise)":
+    let entries = dumpContext(currentContext())
+    var found = false
+    for e in entries:
+      if e.name == "dumpRefNilDefault":
+        found = true
+        check e.bound == false
+        check e.value == "nil"
+    check found
+
+  test "bound ref-typed arm with a non-nil value renders via $":
+    withDumpRefNilDefault(DerefDollarRef(field: 42)):
+      let entries = dumpContext(currentContext())
+      var found = false
+      for e in entries:
+        if e.name == "dumpRefNilDefault":
+          found = true
+          check e.bound == true
+          check e.value == "field=42"
+      check found
+
+  test "entries are sorted by name":
+    let entries = dumpContext(currentContext())
+    var names: seq[string]
+    for e in entries: names.add e.name
+    check names == sorted(names)
+
+# --- Empty (default/nil) AsyncContext ----------------------------------------
+
+contextVar:
+  var emptyCtxDefaulted: int = 3
+  var emptyCtxMustBind: int    # must-bind
+
+suite "contextvars: empty (default/nil) AsyncContext":
+
+  test "withContext over a default AsyncContext installs no bindings":
+    var emptyCtx: AsyncContext   # zero value: no capture was ever taken
+    withContext(emptyCtx):
+      check emptyCtxDefaulted() == 3      # defaulted arm reads its default
+      expect UnboundContextVarDefect:
+        discard emptyCtxMustBind()        # must-bind arm raises

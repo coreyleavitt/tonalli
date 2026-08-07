@@ -164,8 +164,8 @@ when declared(contextCallback):
            "`export futures`, and is used by Windows IOCP completion " &
            "dispatch (`poll()`) only.".}
 
-when declared(newCancelCallback):
-  {.error: "`newCancelCallback` must not leak through the public API. It " &
+when declared(capturingCancelCallback):
+  {.error: "`capturingCancelCallback` must not leak through the public API. It " &
            "lives in chronos/futures.nim, excluded from `asyncengine.nim`'s " &
            "`export futures`, and is used by `cancelCallback=` only — " &
            "otherwise plain `import chronos` code could manufacture an " &
@@ -190,7 +190,7 @@ when declared(captureContextInto):
            "It lives in chronos/futures.nim (the shared " &
            "construction-discipline template), excluded from " &
            "`asyncengine.nim`'s `export futures`, and is used by " &
-           "`capturingCallback`/`newCancelCallback` only — a reachable capture " &
+           "`capturingCallback`/`capturingCancelCallback` only — a reachable capture " &
            "primitive would let plain `import chronos` code write " &
            "`currentAsyncContext` into arbitrary fields, bypassing the " &
            "construction discipline entirely.".}
@@ -233,6 +233,24 @@ static:
     "`InternalCancelCallback`'s `context` getter must not leak through " &
     "the public API either — same exclusion, same reasoning, used by " &
     "the dispatcher's `fireCancelCallback` only."
+
+# --- Windows: CompletionData.context must not be reachable -------------------
+#
+# A public field here would make `ContextNodeBase` structurally
+# reachable via plain `import chronos` on Windows, same class of leak
+# as the `AsyncCallback`/`InternalCancelCallback` `context` getters
+# above. Compiled only on the `--os:windows --compileOnly` CI leg.
+
+when defined(windows):
+  static:
+    doAssert not compiles((var cd: CompletionData; discard cd.context)),
+      "`CompletionData.context` must not be readable via `import " &
+      "chronos` — it is private to chronos/internal/asyncengine.nim, " &
+      "reached only through the `captureContextInto(var CompletionData)` " &
+      "overload (write) and same-module code (read)."
+    doAssert not compiles((var cd: CompletionData; cd.context = nil)),
+      "`CompletionData.context` must not be writable via `import " &
+      "chronos` either."
 
 # --- A trivial runtime assertion to keep the test file unittest-recognized ---
 

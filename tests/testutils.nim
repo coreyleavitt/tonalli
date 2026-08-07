@@ -7,24 +7,10 @@
 #              MIT license (LICENSE-MIT)
 import unittest2
 import ../chronos, ../chronos/config
-import ../chronos/internal/contextvars_impl
 
 {.used.}
 
 suite "Asynchronous utilities test suite":
-
-  test "contextvars binder balance (no leaked bindings)":
-    when defined(chronosDebug):
-      # `contextBindSlot` increments at push, decrements at pop. A
-      # nonzero count at suite end means some `with*` binder pushed
-      # a slot without popping. Suite-level check — testutils.nim
-      # runs last (see `testall.nim`).
-      check chainBalance == 0
-      # Chain must also be empty at top-level (no test left a leaked
-      # binding in `currentAsyncContext`).
-      check chainLen() == 0
-    else:
-      skip()
 
   when chronosFutureTracking:
     proc getCount(): uint =

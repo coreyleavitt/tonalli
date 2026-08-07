@@ -11,13 +11,13 @@
 ## pair, while `var name: T = v` (no star) must produce a module-private
 ## pair that is unreachable from an importing module.
 ##
-## Uses a real second module (`contextvarshelper.nim`) rather than
+## Uses a real second module (`contextvarsexportfixture.nim`) rather than
 ## same-module `declared()` checks, since visibility only differs
 ## across module boundaries.
 
 import unittest2
 import ../chronos/contextvars  # currentContext, AsyncContext
-import ./contextvarshelper
+import ./contextvarsexportfixture
 
 {.used.}
 
@@ -55,6 +55,24 @@ suite "contextvars: export marker (cross-module)":
     withExportedVar(7):
       let snap = currentContext()
       check exportedVar(snap) == 7
+
+  test "non-starred arm is invisible to dumpContext from an importing module":
+    # privateVar is registered (if at all) from contextvarsexportfixture.nim,
+    # not here — the module-private contract requires it to be absent from
+    # this module's dumpContext output too, not just unreachable by name.
+    let entries = dumpContext(currentContext())
+    for e in entries:
+      check e.name != "privateVar"
+
+  test "starred arm IS visible to dumpContext from an importing module":
+    # Control: proves the check above isn't vacuous (registration works
+    # at all across the module boundary for the starred sibling arm).
+    let entries = dumpContext(currentContext())
+    var found = false
+    for e in entries:
+      if e.name == "exportedVar":
+        found = true
+    check found
 
   test "compile-time guardrails passed":
     # Reaching this line means every `static:` check above passed.

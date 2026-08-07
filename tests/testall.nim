@@ -31,3 +31,8 @@ when (chronosEventEngine in ["epoll", "kqueue"]) or defined(windows):
 
   # Must be imported last to check for Pending futures
   import testutils
+
+# Unconditional (unlike testutils above, which the `poll` engine never
+# imports): the contextvars binder-balance check must run on every
+# engine, so it lives in its own file, imported last.
+import testcontextvarsbalance

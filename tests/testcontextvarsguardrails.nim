@@ -108,9 +108,9 @@ static:
 static:
   doAssert not compiles(InternalCancelCallback(function: nil, context: nil)),
     "InternalCancelCallback's fields must be private — raw construction " &
-    "outside `newCancelCallback` (or the no-capture site in " &
+    "outside `capturingCancelCallback` (or the no-capture site in " &
     "`internalInitFutureBase`) must not compile. Use " &
-    "`newCancelCallback(fn)`. See docs/src/contextvars.md, 'Capture " &
+    "`capturingCancelCallback(fn)`. See docs/src/contextvars.md, 'Capture " &
     "discipline'."
   doAssert not compiles((var c: InternalCancelCallback; c.function = nil)),
     "InternalCancelCallback's `function` field must be private — direct " &
@@ -136,9 +136,13 @@ static:
 # code constructs entries), but `.registered`/`.next` must stay private
 # to contextvars_impl.nim — a reachable `.next` would let code splice
 # or unlink registry nodes, corrupting dumpContext's walk.
+#
+# Starred, not bare: only a starred arm emits a registration node at
+# all (non-starred arms are never registered — see "Guardrail 8" and
+# docs/src/contextvars.md, "Inspecting contexts").
 
 contextVar:
-  var registryProbe: int = 0
+  var registryProbe*: int = 0
 
 static:
   doAssert compiles(registryProbeContextVarReg.name),
@@ -155,6 +159,34 @@ static:
   doAssert not compiles((registryProbeContextVarReg.next = nil)),
     "ContextVarRegistration.next must not be writable outside " &
     "contextvars_impl.nim either."
+
+# --- Guardrail 8: withX collision is a compile error, named -----------------
+#
+# An arm's generated `withName` must not silently shadow/collide with
+# an already-declared symbol of the same name — chronos's own
+# `withTimeout` is the canonical case. Also covers a same-module
+# duplicate arm, which resolves the exact same way (the second arm's
+# `withName` is already declared by the first by the time its own
+# check runs).
+
+static:
+  doAssert not compiles((block:
+    contextVar:
+      var timeout*: int = 0)),
+    "an arm named `timeout` must fail to compile — it collides with " &
+    "chronos's own `withTimeout` combinator. See docs/src/contextvars.md, " &
+    "'Naming caution'."
+
+contextVar:
+  var guardrailDupArm: int = 1
+
+static:
+  doAssert not compiles((block:
+    contextVar:
+      var guardrailDupArm: int = 2)),
+    "a same-module duplicate arm must fail to compile with the same " &
+    "collision error — the second declaration's `withGuardrailDupArm` " &
+    "is already declared by the first."
 
 # --- A trivial runtime assertion to keep the test file unittest-recognized ---
 
