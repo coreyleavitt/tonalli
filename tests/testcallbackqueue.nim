@@ -6,18 +6,11 @@
 #  Apache License, version 2.0, (LICENSE-APACHEv2)
 #              MIT license (LICENSE-MIT)
 
-## Freestanding test suite for `chronos/internal/callbackqueue.nim`.
-## Deliberately independent of the contextvars feature and its test
-## files: `CallbackQueue[T]` is a general-purpose dispatcher substrate
-## (it backs `callbacks`/`idlers`/`ticks`, none of which are
-## contextvars-specific), so its coverage must not require the
-## contextvars suite either to build or to make sense standing alone.
-##
-## Includes coverage for growth triggered mid-drain, by a callback
-## reentrantly scheduling more work while the pop cursor (`head`) has
-## already advanced past the queue's start — exactly the shape
-## `asyncengine.nim`'s default (non-strict-reentrancy) drain protocol
-## allows (`callSoon` from inside a firing callback).
+## Tests for `chronos/internal/callbackqueue.nim`'s `CallbackQueue[T]`,
+## independent of the contextvars suite: growth mid-drain (including
+## while a callback reentrantly schedules more work), ordering,
+## integrity across a Defect unwind, and ref-field preservation under
+## repeated growth.
 
 import unittest2
 import ../chronos/internal/callbackqueue
@@ -45,13 +38,12 @@ proc drain(q: var CallbackQueue[TestItem]): seq[int] =
 
 suite "CallbackQueue: basic semantics":
   test "zero-value queue is valid and empty":
-    # The zero value must be a usable, empty queue with no
-    # `initCallbackQueue` call — `asyncengine.nim`'s POSIX `ticks` field
-    # relies on exactly this (never explicitly constructed).
+    # Zero value must be usable without an `initCallbackQueue` call --
+    # asyncengine.nim's `ticks` field relies on this.
     var q: CallbackQueue[TestItem]
     check q.len == 0
 
-    # First `addLast` on a never-initialized queue must lazily grow from
+    # First addLast on a never-initialized queue must lazily grow from
     # capacity zero rather than fault.
     q.addLast(newItem(1))
     check q.len == 1
@@ -70,11 +62,9 @@ suite "CallbackQueue: basic semantics":
     check q.len == 0
 
   test "initCallbackQueue rounds capacity up to a power of two":
-    # Not directly observable through the public interface (no `cap`
-    # accessor — by design the interface is exactly five entry points),
-    # so this exercises the rounding indirectly: a queue requested with a
-    # non-power-of-two initial capacity must still accept at least that
-    # many items without growing prematurely in a way that corrupts order.
+    # No public `cap` accessor, so this exercises the rounding
+    # indirectly: a non-power-of-two initial capacity must still accept
+    # at least that many items without growing prematurely.
     var q = initCallbackQueue[TestItem](5)
     for i in 0 ..< 5:
       q.addLast(newItem(i))
@@ -83,8 +73,8 @@ suite "CallbackQueue: basic semantics":
       check q.popFirst().tag == i
 
   test "prependNoGrow ordering: sentinel re-insertion at the front":
-    # Mirrors the sole real caller (asyncengine.nim's poll(): re-inserting
-    # a sentinel at the front of an already-fully-drained batch).
+    # Mirrors the sole real caller: asyncengine.nim's poll() re-inserts
+    # a sentinel at the front of an already-fully-drained batch.
     var q = initCallbackQueue[TestItem]()
     q.addLast(newItem(10))
     discard q.popFirst() # drain to empty, as the real caller always does
@@ -99,19 +89,16 @@ suite "CallbackQueue: basic semantics":
     check q.popFirst().tag == 2
 
   test "sentinel field fidelity through moves (full-struct value, not identity)":
-    # The sentinel is compared by full-struct VALUE
-    # (`isSentinel` in asyncengine.nim), so a move-based queue owes field
-    # fidelity, not pointer identity of the AsyncCallback struct itself —
-    # but the `ref` field it carries (`context`, mirrored here by
-    # `payload`) must survive as the SAME ref, not a copy, through
-    # addLast/popFirst and across a growth relocation.
+    # The sentinel is compared by full-struct value (see `isSentinel` in
+    # asyncengine.nim); its `ref` field (`context`, mirrored here by
+    # `payload`) must survive as the same ref, not a copy, across
+    # addLast/popFirst and a growth relocation.
     var q = initCallbackQueue[TestItem](2)
     let sentinel = newItem(-1)
     let sentinelPayloadAddr = cast[int](sentinel.payload)
 
     q.addLast(sentinel)
-    # Force growth while the sentinel is still queued, to prove the
-    # relocation path preserves the ref field too.
+    # Force growth while the sentinel is still queued.
     q.addLast(newItem(1))
     q.addLast(newItem(2))
     q.addLast(newItem(3))
@@ -122,7 +109,6 @@ suite "CallbackQueue: basic semantics":
     check cast[int](popped.payload) == sentinelPayloadAddr
     check popped.payload.value == -1
 
-    # Drain the rest so the test doesn't leave state for later tests.
     discard drain(q)
 
 suite "CallbackQueue: growth":
@@ -137,33 +123,21 @@ suite "CallbackQueue: growth":
     check q.len == 0
 
   test "wrapped-region growth: live region spans the physical end of the buffer":
-    # Advance head/tail past a wrap boundary first (push then pop enough
-    # to leave the live region straddling index `cap - 1` / `0`), then
-    # push past capacity so `grow()` must relocate a physically
-    # wrapped two-segment live region.
+    # Advances head/tail past the wrap boundary before growing, so
+    # grow() must relocate a live region physically split across the end
+    # and start of the backing array (two copyMem segments), not a
+    # contiguous one.
     var q = initCallbackQueue[TestItem](4)
     for i in 0 ..< 4:
       q.addLast(newItem(i))
-    # Drain 3, leaving one live item at the tail end of the backing array
-    # and head/tail advanced (monotonic, so head=3, tail=4 logically, but
-    # physically slot 3 of a 4-slot buffer -- next addLast wraps to slot 0).
     for i in 0 ..< 3:
       check q.popFirst().tag == i
     check q.len == 1
 
-    # Refill: tail wraps physically to slots 0,1,2 while head is still
-    # anchored at physical slot 3 -- the live region is now physically
-    # split across the end and start of the buffer (item 3 at slot 3,
-    # items 4,5,6 at slots 0,1,2). Pushing the 4th item (tag 7) fills the
-    # queue to its old capacity of 4 and then immediately exceeds it,
-    # triggering `grow()` on a genuinely wrapped live region -- the two
-    # `copyMem` segments must reassemble slot 3 then slots 0..2 into
-    # logical order, not physical order.
     for i in 4 ..< 8:
       q.addLast(newItem(i))
     check q.len == 5 # item 3 (never popped) + items 4..7, post-grow
 
-    # One more push lands in the freshly grown (cap 8), non-wrapped region.
     q.addLast(newItem(8))
     check q.len == 6
 
@@ -171,24 +145,18 @@ suite "CallbackQueue: growth":
     check popped == @[3, 4, 5, 6, 7, 8]
 
   test "repeated growth cycles preserve ref-field values under memory pressure":
-    # `grow()`'s two `zeroMem` calls are not cosmetic -- dropping either
-    # one leaves a stale, un-zeroed slot in the OLD backing array; when
-    # that old seq's destructor later runs, it decrefs the
-    # (already-relocated) `ref` field a SECOND time (the real `grow()`'s
-    # own doc comment states this explicitly). A single growth event, as
-    # in the tests above, does not reliably surface this -- the
-    # corruption depends on the freed memory being reused before the
-    # stale reference is read again. Repeated growth cycles interleaved
-    # with unrelated heap allocations (to encourage prompt reuse of
-    # whatever `grow()` just freed) give the corruption many more chances
-    # to manifest.
+    # grow()'s zeroMem calls prevent a stale ref left in the old backing
+    # array from being decref'd a second time when that array's
+    # destructor runs. Repeated growth cycles interleaved with unrelated
+    # heap allocations increase the odds of surfacing a missing zeroMem
+    # as observable corruption rather than it sitting inert.
     var q = initCallbackQueue[TestItem](2)
     var expected: seq[int]
     var popped: seq[int]
     for cycle in 0 ..< 200:
-      # Push enough to force a grow() most cycles; pop most of them back
-      # off, but leave a couple alive across the boundary so grow()
-      # relocates a genuinely live, ref-bearing region every time.
+      # Push enough to force growth most cycles; pop most back off but
+      # leave a couple alive so grow() relocates a live, ref-bearing
+      # region every time.
       for i in 0 ..< 6:
         let tag = cycle * 10 + i
         q.addLast(newItem(tag))
@@ -197,9 +165,8 @@ suite "CallbackQueue: growth":
         let item = q.popFirst()
         popped.add item.tag
         check item.payload.value == item.tag
-      # Unrelated heap noise: encourages the allocator to reuse whatever
-      # `grow()` just freed, so a stale un-zeroed slot's double-decref (if
-      # present) corrupts something observable instead of sitting inert.
+      # Unrelated heap noise encourages the allocator to reuse whatever
+      # grow() just freed.
       discard newSeq[int](64)
       discard newString(64)
 
@@ -211,14 +178,10 @@ suite "CallbackQueue: growth":
     check popped == expected
 
   test "growth during reentrant drain across capacity boundaries":
-    # The exact shape `asyncengine.nim`'s default drain protocol allows:
-    # a callback fires (via popFirst, `head` already advanced past the
-    # queue's start) and, before the batch finishes, reentrantly
-    # schedules more work onto the SAME live queue. Each popped item here
-    # schedules two more (net +1 per iteration) so `q.len` is driven past
-    # its initial capacity WHILE `head` is already partway through the
-    # buffer -- `grow()` must run under a live, advanced (not fresh/zero)
-    # pop cursor. Currently exercised by zero tests anywhere in the suite.
+    # Mirrors asyncengine.nim's drain protocol: a callback fires (head
+    # already advanced) and reentrantly schedules more work onto the
+    # same queue, driving q.len past capacity while head is mid-buffer
+    # rather than fresh.
     var q = initCallbackQueue[TestItem](4)
     q.addLast(newItem(0))
 
@@ -235,11 +198,6 @@ suite "CallbackQueue: growth":
           q.addLast(newItem(nextTag))
           inc nextTag
           inc scheduled
-      # Net queue growth of +1 per iteration while scheduling budget
-      # remains drives `q.len` past capacity 4 within the first few
-      # iterations -- by which point several items have already been
-      # popped from the front, so `grow()`'s relocation runs against a
-      # genuinely advanced `head`, not a freshly-filled queue.
 
     check processed.len == totalToSchedule
     for i, tag in processed:
@@ -248,16 +206,11 @@ suite "CallbackQueue: growth":
 
 suite "CallbackQueue: integrity under unwind":
   test "post-Defect-unwind queue integrity":
-    # `popFirst`'s slot mutation (advancing `head`, clearing the vacated
-    # slot) happens before the popped value is handed to the caller for
-    # processing -- so a callback that raises must not corrupt the queue
-    # for subsequent drains. Mirrors the real dispatcher's shape: a
-    # callback body raising inside `fireWithContext` propagates out of
-    # `processCallbacksBody`'s popping loop entirely (surfaced as a
-    # Defect via `raiseAsDefect` in the real `poll()`) -- so the `try`
-    # here wraps the whole drain loop, not a single iteration, to
-    # reproduce an actual unwind out of the loop rather than a
-    # same-iteration catch.
+    # popFirst advances head and clears the vacated slot before handing
+    # the value to the caller, so a callback that raises must not
+    # corrupt the queue for subsequent drains. The try wraps the whole
+    # drain loop (not one iteration) to reproduce an unwind out of the
+    # loop, mirroring a Defect surfacing from the real poll().
     var q = initCallbackQueue[TestItem](4)
     for i in 0 ..< 6:
       q.addLast(newItem(i))
@@ -280,8 +233,7 @@ suite "CallbackQueue: integrity under unwind":
     # corrupting the queue.
     check q.len == 2 # items 4, 5 remain, unprocessed
 
-    # The queue must still be fully usable afterward, exactly as the real
-    # dispatcher's next `poll()` cycle would require.
+    # Queue must remain usable after the unwind.
     check q.popFirst().tag == 4
     check q.popFirst().tag == 5
     check q.len == 0

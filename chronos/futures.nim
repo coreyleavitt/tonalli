@@ -33,15 +33,12 @@ type
     udata: pointer
     context: ContextNodeBase
       ## Continuation-local context captured at scheduling time. A
-      ## native `ref` field: Nim's MM refcounts it at construction and
-      ## releases it on every drop, no manual `GC_ref`/`GC_unref`
-      ## needed. Nil for callbacks scheduled outside any binding, and
-      ## for chronos-internal trampolines that don't fire user code.
-      ##
-      ## `SentinelCallback` (asyncengine.nim) must be a `template`, not
-      ## `const`: Nim 2.x rejects `const` of an object containing a
-      ## `ref` field, and a module-level `let` is gcsafe-inaccessible
-      ## from `poll`.
+      ## native `ref` field, MM-managed. Nil for callbacks scheduled
+      ## outside any binding and for internal trampolines that don't
+      ## fire user code. `SentinelCallback` (asyncengine.nim) must be a
+      ## `template`, not `const`: Nim 2.x rejects `const` of an object
+      ## with a `ref` field, and a module-level `let` is
+      ## gcsafe-inaccessible from `poll`.
       ##
       ## `function`/`udata`/`context` are private to this module -
       ## only `userCallback`/`bareCallback` below can construct an
@@ -50,14 +47,10 @@ type
   InternalCancelCallback* = object
     function: CallbackFunc
     context: ContextNodeBase
-      ## Same capture/lifetime discipline as `InternalAsyncCallback.
-      ## context` above - a native `ref` field, MM-managed, nil for
-      ## cancel callbacks registered outside any binding.
-      ##
-      ## `function`/`context` are private to this module - only
-      ## `newCancelCallback` (below) and the no-capture construction in
-      ## `internalInitFutureBase` can build an `InternalCancelCallback`,
-      ## and no other module can mutate the fields after the fact.
+      ## Same capture/lifetime discipline as
+      ## `InternalAsyncCallback.context` above. Private to this
+      ## module - only `newCancelCallback` and the no-capture
+      ## construction in `internalInitFutureBase` build one.
 
   FutureState* {.pure.} = enum
     Pending, Completed, Cancelled, Failed
@@ -179,31 +172,19 @@ template captureContextInto*(dest: var ContextNodeBase) =
     dest = currentAsyncContext
 
 template userCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCallback =
-  ## Construct an AsyncCallback that fires user-supplied code. Captures
-  ## the current continuation-local context at construction so the
-  ## callback fires under the same `contextVar` bindings the registrant
-  ## had at registration.
-  ##
-  ## Use at every site that schedules user code: `addCallback`,
-  ## `callSoon(cb, data)`, `setTimer`, `addReader`/`addWriter`/
-  ## `addSignal`/`addProcess`, `callIdle`,
-  ## `closeSocket(fd, aftercb)`/`closeHandle(fd, aftercb)`. Use
-  ## `bareCallback` instead for chronos-internal trampolines that
+  ## Construct an AsyncCallback that fires user-supplied code, capturing
+  ## the current continuation-local context so it fires under the
+  ## registrant's `contextVar` bindings. Use at every site that
+  ## schedules user code (`addCallback`, `callSoon`, `setTimer`,
+  ## `addReader`/`addWriter`/`addSignal`/`addProcess`, `callIdle`,
+  ## `closeSocket`/`closeHandle` aftercb, and `internalContinue`'s
+  ## iterator-pump resume); use `bareCallback` for trampolines that
   ## don't read contextVars.
   ##
-  ## `internalContinue` (the iterator-pump resume trampoline scheduled
-  ## by `futureContinue`) also goes through this constructor rather
-  ## than `bareCallback` - the capture is load-bearing, carrying
-  ## the iterator's per-yield context across suspension.
-  ##
-  ## Must be a template, not a proc returning by value: constructs
-  ## into a fresh local in the caller's frame via `captureContextInto`
-  ## (see its doc comment for why).
-  ##
-  ## Param is named `ud`, not `udata`: template substitution rewrites
-  ## every matching identifier in the body, including the field name
-  ## after a dot (`acb.udata`) - a `udata` param would try to
-  ## substitute the field access itself.
+  ## Must be a template, not a proc returning by value: constructs into
+  ## a fresh local via `captureContextInto` (see its doc for why).
+  ## Param is `ud`, not `udata`: template substitution would otherwise
+  ## rewrite the `acb.udata` field access below too.
   var acb: InternalAsyncCallback
   acb.function = fn
   acb.udata = ud
@@ -211,50 +192,32 @@ template userCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCallba
   acb
 
 template bareCallback*(fn: CallbackFunc, ud: pointer = nil): InternalAsyncCallback =
-  ## Construct an AsyncCallback that fires chronos-internal scaffolding
-  ## (IOCP completion repackaging, idle-loop sentinels, fd-readiness
-  ## trampolines that just complete user futures). No context capture
-  ## — the chronos-internal code being scheduled doesn't read
-  ## contextVars, and any user-visible callbacks downstream (the
-  ## awaiters on whatever future the trampoline completes) carry their
-  ## own captured context via `userCallback` at their original
-  ## `addCallback`/`callSoon` site.
+  ## Construct an AsyncCallback for chronos-internal scaffolding (IOCP
+  ## completion repackaging, idle-loop sentinels, fd-readiness
+  ## trampolines) that doesn't itself read contextVars — no context
+  ## capture. Downstream user-visible callbacks still carry their own
+  ## context from their original `userCallback` site.
   ##
-  ## Must be a template so it composes into `SentinelCallback` in
-  ## `asyncengine.nim`, which also has to be a template (Nim 2.x
-  ## rejects `const` of an object containing a `ref` field, and a
-  ## module-level `let` is gcsafe-inaccessible from `poll`).
-  ##
-  ## Param is named `ud`, not `udata`: template substitution applies to
-  ## identifiers anywhere in the body, including the LHS of
-  ## `field: value` in the object constructor below - a `udata` param
-  ## would expand `udata: ud` to `<value>: <value>` and fail to
-  ## compile.
+  ## Must be a template, like `SentinelCallback` in asyncengine.nim.
+  ## Param is `ud`, not `udata`, for the same substitution reason as
+  ## `userCallback`.
   InternalAsyncCallback(function: fn, udata: ud, context: nil)
 
 template contextCallback*(fn: CallbackFunc, ud: pointer,
                           ctx: ContextNodeBase): InternalAsyncCallback =
-  ## Construct an AsyncCallback carrying a context value captured
-  ## earlier, rather than the ambient one at this call site.
-  ##
-  ## For completion-dispatch trampolines that stored the registrant's
-  ## context on the completion record at arm time (via
-  ## `captureContextInto`) and must reconstruct the fired callback from
-  ## that stored value at dispatch time - typically because the
-  ## dispatching thread has no ambient binding of its own at that point
-  ## (e.g. Windows IOCP completion processing in `poll()`). `ctx` is
-  ## nil unless some arm site upstream explicitly captured; nil here
-  ## reproduces `bareCallback`'s fail-closed, empty-context behavior.
+  ## Construct an AsyncCallback carrying a context captured earlier
+  ## rather than the ambient one here — for dispatch trampolines that
+  ## stored the registrant's context at arm time and reconstruct the
+  ## fired callback from it because the dispatching thread has no
+  ## ambient binding of its own (e.g. Windows IOCP completion
+  ## processing in `poll()`).
   InternalAsyncCallback(function: fn, udata: ud, context: ctx)
 
 template newCancelCallback*(fn: CallbackFunc): InternalCancelCallback =
-  ## Construct the value stored in `internalCancelcb`. Captures the
-  ## current continuation-local context at construction, same
-  ## discipline as `userCallback` - the handler must observe the
-  ## context bound when `cancelCallback=` was called, not whatever's
-  ## ambient when it fires. No `udata` field: the fire site
-  ## (`fireCancelCallback` in `asyncfutures.nim`) already has the
-  ## owning future in scope and derives `cast[pointer](future)` itself.
+  ## Construct the value stored in `internalCancelcb`, capturing context
+  ## at construction like `userCallback` - the handler must observe the
+  ## context bound at `cancelCallback=` time, not whatever's ambient
+  ## when it fires.
   var cb: InternalCancelCallback
   cb.function = fn
   captureContextInto(cb.context)

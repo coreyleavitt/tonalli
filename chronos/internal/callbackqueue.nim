@@ -29,23 +29,16 @@ import ../config
 type
   CallbackQueue*[T] = object
     ## Seq-backed queue with monotonic logical `head`/`tail` positions
-    ## held as `uint`: rather than ever raising an overflow error after
-    ## enough pushes/pops over a long-running dispatcher's lifetime,
-    ## `head`/`tail` wrap around at `high(uint) + 1` - well-defined,
-    ## unchecked `uint` arithmetic, textbook ring-buffer discipline.
-    ## `head == tail` is unambiguously "empty" whether or not either has
-    ## wrapped: unsigned subtraction (`tail - head`) is congruent modulo
-    ## `2^wordsize`, so it recovers the true logical length regardless of
-    ## how many times either has wrapped, as long as that length never
-    ## exceeds `cap` - an invariant `isFull` itself asserts on every
-    ## check. Logical positions are folded into the physical `[0, cap)`
-    ## range only at slot access (`slotIndex`), never by clamping
-    ## `head`/`tail` themselves.
+    ## held as `uint`, wrapping around at `high(uint) + 1` instead of
+    ## ever overflow-erroring. `tail - head`, unsigned, is congruent
+    ## mod `2^wordsize` and so recovers the true logical length across
+    ## any number of wraps, as long as it never exceeds `cap` (asserted
+    ## in `isFull`). Logical positions are folded into `[0, cap)` only
+    ## at slot access (`slotIndex`), never by clamping `head`/`tail`.
     ##
-    ## The zero value (`CallbackQueue[T]()`, no `initCallbackQueue` call)
-    ## is a valid, empty queue that lazily grows from capacity `0` on the
-    ## first `addLast`, matching `std/deques`' own lazy-init behavior.
-    ## `asyncengine.nim`'s POSIX `Dispatcher.ticks` field relies on this.
+    ## The zero value is a valid, empty queue that lazily grows from
+    ## capacity `0` on first `addLast`, matching `std/deques`; relied
+    ## on by `asyncengine.nim`'s POSIX `Dispatcher.ticks` field.
     data: seq[T]
     head: uint
     tail: uint
@@ -53,34 +46,27 @@ type
 # --- index primitives ---------------------------------------------------
 
 proc capMask(cap: int): uint {.inline.} =
-  # `capMinusOne` is bound to a `let` rather than inlined directly into
-  # the `and` below - same expression either way (identical codegen),
-  # but `verify/`'s symex walker (fork-only, see `verify/primitives.nim`)
-  # cannot resolve a bitwise-`and` whose second operand is an inline
-  # arithmetic sub-expression of the same variable as the first operand.
+  # `let`-bound rather than inlined into the `and` below: identical
+  # codegen, but verify/'s symex walker (fork-only) cannot resolve a
+  # bitwise-`and` whose operand is an inline sub-expression of itself.
   let capMinusOne = cap - 1
   doAssert cap > 0 and (cap and capMinusOne) == 0,
     "CallbackQueue: capacity must be a positive power of two"
   uint(capMinusOne)
 
 proc slotIndex(pos: uint, cap: int): int {.inline.} =
-  ## Fold a monotonic (uint, possibly-wrapped) logical position into
+  ## Fold a monotonic (possibly-wrapped) logical position into
   ## `[0, cap)`. `cap` being a power of two makes this correct across a
-  ## `pos` wrap too (unsigned `and` is congruent mod `cap`), which
-  ## `prependNoGrow`'s `dec head` relies on when `head == 0`.
-  ##
-  ## `mask` is bound to a `let` for the same symex-walkability reason as
-  ## `capMask` above (a direct, non-let-bound call result as an `and`
-  ## operand is the walker's other documented blind spot).
+  ## `pos` wrap too, which `prependNoGrow`'s `dec head` relies on when
+  ## `head == 0`. `mask` is `let`-bound for the same symex-walkability
+  ## reason as `capMask` above.
   let mask = capMask(cap)
   int(pos and mask)
 
 proc queueLen(head, tail: uint): int {.inline.} =
   ## `tail - head`, unsigned: congruent mod `2^wordsize`, so this is the
-  ## true logical length whether or not `head`/`tail` have wrapped - no
-  ## ordering comparison between them is meaningful any more (unlike the
-  ## former monotonic-`int` discipline, "tail must never precede head"
-  ## does not hold under wraparound).
+  ## true logical length regardless of wraps — no ordering comparison
+  ## between `head`/`tail` is meaningful any more.
   int(tail - head)
 
 proc isFull(head, tail: uint, cap: int): bool {.inline.} =
@@ -111,14 +97,11 @@ func len*[T](q: CallbackQueue[T]): int {.inline.} =
   queueLen(q.head, q.tail)
 
 proc grow[T](q: var CallbackQueue[T]) =
-  ## Whole-region relocation: one or two `copyMem` segments (two only when
-  ## the live region is physically wrapped in the old backing) followed by
-  ## a matching `zeroMem` of the vacated old region. The `zeroMem` is not
-  ## cosmetic: `copyMem` does not touch the MM, so without it the old
-  ## seq's eventual destructor would see the relocated `ref` fields as
-  ## still-owned and decref them a second time — relocating an
-  ## already-counted ref between GC-traced heap slots must neither create
-  ## nor destroy a count.
+  ## Whole-region relocation: one or two `copyMem` segments (two only
+  ## when the live region wraps in the old backing), each followed by a
+  ## matching `zeroMem` of the vacated region — `copyMem` doesn't touch
+  ## the MM, so without it the old seq's destructor would double-decref
+  ## the relocated `ref` fields.
   let oldCap = q.data.len
   let n = queueLen(q.head, q.tail)
   doAssert n == oldCap, "CallbackQueue.grow(): called on a non-full queue"
@@ -162,29 +145,15 @@ proc prependNoGrow*[T](q: var CallbackQueue[T], item: chronosSink T) =
   q.data[idx] = item
 
 when defined(chronosDebug) and chronosUseSink:
-  # `chronosUseSink` (not just `chronosDebug`) gates this: the "vacated
-  # slot ends up default-valued" invariant only holds where a move
-  # actually happens. On the non-sink codepath (Nim < 2.0.6),
-  # `chronosMoveSink` is `config.nim`'s identity passthrough by design
-  # (see its own doc comment) - nothing ever clears the slot there, so
-  # this check would fail on every single `popFirst()` call, not just a
-  # genuinely bypassed fused-move discipline. Latent since `CallbackQueue`
-  # was introduced (S10): unreachable on Nim 1.6 until the `default(T)`
-  # fix immediately below let 1.6 builds reach `popFirst()` at all for
-  # the first time.
+  # Gated on chronosUseSink, not just chronosDebug: on the no-sink
+  # codepath `chronosMoveSink` is an identity passthrough, so no move
+  # ever clears the slot and this check would fail unconditionally.
   proc chronosCheckVacatedSlot[T](item: T) {.inline.} =
     ## Debug-only guardrail: every slot `popFirst` vacates must end up
-    ## default-valued, catching a slot-vacating path that bypasses the
-    ## fused-move discipline below. A standalone generic `proc`, not
-    ## inlined into `popFirst`'s `when` body: Nim 1.6 fails to resolve
-    ## `default(T)`'s `T` as the template's generic parameter when the
-    ## call sits inside a `when` block nested in a generic `template`
-    ## (`Error: type mismatch: got <InternalAsyncCallback>` at the call
-    ## to `default`, cross-checked against a known Nim generic-template-
-    ## plus-`when` type-resolution bug of the same shape) - a `proc`'s
-    ## own generic-instantiation path does not hit this, so hoisting the
-    ## check here is the fix, not a workaround for a real ambiguity in
-    ## what's being asserted.
+    ## default-valued, catching a path that bypasses the fused-move
+    ## discipline below. A standalone proc, not inlined into `popFirst`'s
+    ## `when` body: Nim 1.6 fails to resolve `default(T)`'s `T` when the
+    ## call sits inside a `when` nested in a generic `template`.
     doAssert item == default(T),
       "CallbackQueue: a vacated slot retained a non-nil ghost value after " &
       "popFirst() — a slot-vacating path bypassed the fused-move discipline"

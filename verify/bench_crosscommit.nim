@@ -11,49 +11,35 @@
 ## **Base-compatibility requirement.** This file imports plain `chronos`
 ## only -- nothing from `chronos/contextvars` -- so it compiles and runs
 ## *unmodified* against both the pinned pre-substrate base (b71392a) and
-## any commit in this series. That property is deliberate, not
-## incidental: the intra-commit harness (`bench_contextvars.nim`) can
-## only measure a delta *within* one checkout -- any cost paid
-## identically by both its unused/bound arms cancels out of that
-## comparison, no matter how large. Only a true cross-commit run, same
-## file, same flags, two checkouts, catches that class of regression.
-## Do not add a `chronos/contextvars` import here; that would silently
-## break comparability against the base checkout.
+## any commit in this series. This is what makes a true cross-commit run
+## possible; the intra-commit harness (`bench_contextvars.nim`) can only
+## measure a delta within one checkout, which cancels out any cost paid
+## identically by both its arms. Do not add a `chronos/contextvars`
+## import here; that would break comparability against the base checkout.
 ##
 ## Each metric is a single-process, single-pass average over many
-## iterations (no internal trial loop, no median-of-N) -- one run of
-## the compiled binary is one *trial*. The standing protocol generates
-## a distribution by running the binary itself multiple times,
-## alternating checkouts, not by looping inside the program:
+## iterations -- one run of the compiled binary is one *trial*. The
+## distribution comes from running the binary itself multiple times,
+## alternating checkouts, not from looping inside the program:
 ##
 ##   1. Check out base commit b71392a into a second worktree, e.g.
-##      `build/base` (`build/` is gitignored, so this file's header is
-##      the durable record of the procedure). Caution: plain `git`
-##      commands run *inside* `build/base` report the outer worktree's
-##      HEAD (the checkout has no `.git` of its own) -- verify the
-##      snapshot by diffing files against `git show b71392a:<path>`,
-##      never by `git log` from within it.
+##      `build/base`. Caution: plain `git` commands run *inside*
+##      `build/base` report the outer worktree's HEAD (the checkout has
+##      no `.git` of its own) -- verify the snapshot by diffing files
+##      against `git show b71392a:<path>`, never by `git log` from
+##      within it.
 ##   2. Build this file identically in both checkouts, once per memory
-##      manager, with the base-compat rule (import plain `chronos` only)
-##      guaranteeing it compiles unmodified in `build/base`:
+##      manager:
 ##      `nim c -d:release --mm:<orc|refc> --skipParentCfg --skipUserCfg
 ##      --outdir:build --nimcache:build/nimcache/$projectName
 ##      benchmarks/bench_crosscommit`.
 ##   3. Run the two resulting binaries **genuinely interleaved**
-##      (base, head, base, head, ...) -- never batched one side then the
-##      other, which reintroduces exactly the systemic drift
-##      interleaving exists to rule out. Label every trial in the log.
-##      13 trials per side for `callSoon fire` (the primary bellwether --
-##      the tightest, least-diluted measurement of the
-##      construction+enqueue+dequeue path); 9 per side for
-##      `future create/await` and `sleepAsync(0) chain`. Judge pass/fail
-##      per MM independently; the primary criterion is min-max range
-##      non-overlap across the interleaved trials -- medians and the
+##      (base, head, base, head, ...), never batched one side then the
+##      other. Judge pass/fail per MM independently by min-max range
+##      non-overlap across the interleaved trials; medians and the
 ##      head/base ratio are reported for trend only and never gate by
-##      themselves (this container's documented ~30% same-code swings
-##      make a bare ratio threshold fragile at these sample sizes).
-##      Struct-size and memory rows are context, never part of the
-##      distributional test.
+##      themselves. Struct-size and memory rows are context, never part
+##      of the distributional test.
 ##
 ## This file performs one trial for a single checkout/MM combination;
 ## steps 1 and 3's repetition and interleaving are external to it.

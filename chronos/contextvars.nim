@@ -208,24 +208,17 @@ macro contextVar*(body: untyped): untyped =
       let nameIdent  = identDefs[0]
       let typExpr    = identDefs[1]
       let defaultVal = identDefs[2]
-      # A missing default (`var name: T`, no `= default`) is legal —
-      # it declares a must-bind arm: reading while unbound raises
-      # `UnboundContextVarDefect` instead of falling back to a value.
-      # Nim's parser requires an explicit type when there is no value
-      # to infer one from, so `typExpr` is never empty here — a bare
-      # `var name` with neither type nor value is already a parse
-      # error before this macro ever sees it.
+      # A missing default (`var name: T`) is legal: it declares a
+      # must-bind arm. `typExpr` is never empty here — Nim's parser
+      # already rejects `var name` with neither type nor value.
       let isMustBind = defaultVal.kind == nnkEmpty
       if typExpr.kind == nnkEmpty:
         error("contextVar: each arm must declare an explicit type " &
               "(`var name: T = default` or `var name: T`); type " &
               "inference from the default is not supported", identDefs)
-      # Accept `nnkSym` alongside `nnkIdent`/`nnkPostfix` so this macro
-      # composes from other macros — e.g., a wrapper that builds the
-      # arm name via `genSym`. `$node` stringifies all forms; the
-      # emitted slot type, reader, and binder always get fresh
-      # `nnkIdent`s, so the public surface is regular identifiers
-      # regardless of how the arm name arrived.
+      # nnkSym is accepted alongside nnkIdent/nnkPostfix so a wrapper
+      # macro can supply the arm name via genSym; emission always uses
+      # a fresh nnkIdent regardless of the input node kind.
       if nameIdent.kind notin {nnkIdent, nnkSym, nnkPostfix}:
         error("contextVar: arm name must be an identifier (pragmas not " &
               "supported)", nameIdent)
@@ -241,55 +234,33 @@ macro contextVar*(body: untyped): untyped =
         else:
           nameIdent
       let name = $rawBareName
-      # Normalize to a fresh `nnkIdent` for emission. An incoming
-      # `nnkSym` of kind `nskVar` (from a wrapper macro's `genSym`)
-      # can't be reused as a template name — Nim rejects with
-      # "cannot use symbol of kind 'var' as a 'template'". Going
-      # through `ident($node)` produces a regular identifier and
-      # avoids the kind mismatch.
+      # A fresh nnkIdent, not the incoming node: an nnkSym of kind
+      # nskVar can't be reused as a template name.
       let bareName = ident(name)
-      # Slot type name: capitalize first char + "Slot" suffix.
-      # ASCII-only identifiers (Nim convention); non-ASCII names are
-      # rejected upstream by Nim's identifier parser.
       let slotTypeName = ident(toUpperAscii(name[0]) & name[1 .. ^1] & "Slot")
       let withName = ident("with" & toUpperAscii(name[0]) & name[1 .. ^1])
-      # Definition-site name nodes: `*`-postfixed when the arm was
-      # exported, bare otherwise. `slotTypeName`/`bareName`/`withName`
-      # themselves stay bare — they're also used unmarked in
-      # reference position below (`contextLookup[slotTypeName, ...]`
-      # etc.), where a postfix node would be a syntax error.
+      # `*`-postfixed definition-site nodes when the arm is exported;
+      # `slotTypeName`/`bareName`/`withName` stay bare for reference
+      # positions (e.g. contextLookup[slotTypeName, ...]) where a
+      # postfix node would be a syntax error.
       let slotTypeNameDef =
         if isExported: nnkPostfix.newTree(ident"*", slotTypeName) else: slotTypeName
       let bareNameDef =
         if isExported: nnkPostfix.newTree(ident"*", bareName) else: bareName
       let withNameDef =
         if isExported: nnkPostfix.newTree(ident"*", withName) else: withName
-      # A second definition-site node for the snapshot reader overload
-      # (`name(ctx: AsyncContext)`) — built fresh rather than reusing
-      # `bareNameDef`, since that node (a postfix tree, when exported)
-      # is already spliced into the ambient reader's `quote do` below;
-      # a fresh node avoids relying on whether Nim's `quote`
-      # implementation tolerates splicing the same node object twice.
+      # Built fresh rather than reused from bareNameDef, which is
+      # already spliced into the ambient reader's quote do below.
       let bareNameCtxDef =
         if isExported: nnkPostfix.newTree(ident"*", bareName) else: bareName
       let nameLit = newLit(name)
       let typeNameLit = newLit(typExpr.repr)
       let readerProcName = ident(name & "ContextVarRender")
       let regNodeName = ident(name & "ContextVarReg")
-      # The snapshot reader's parameter, built once as an actual
-      # `NimNode` and backtick-substituted everywhere it's needed
-      # (both the template's parameter list, spliced later, and its
-      # body here). A bare (non-backtick) `chronosCtxSnap` written
-      # separately in two different `quote do` invocations does NOT
-      # reliably bind to "the same" identifier when the assembled
-      # template is later instantiated — `quote` resolves an
-      # unrecognized bare identifier as an open symbol at the
-      # template's *call site*, not necessarily against a same-named
-      # parameter declared by a sibling `quote do` call. Splicing the
-      # identical node object sidesteps that: it's unambiguously the
-      # same parameter in both places, exactly like this file's
-      # existing pattern of reusing `typExpr`/`slotTypeName` in
-      # multiple `quote do` positions.
+      # Built once and spliced into both the template's parameter list
+      # and its body: a bare `chronosCtxSnap` written separately in
+      # two `quote do` calls isn't guaranteed to bind as the same
+      # identifier once the template is instantiated.
       let chronosCtxSnapIdent = ident("chronosCtxSnap")
       # Reader bodies differ by arm kind; everything else (slot type,
       # binder, registration) is identical either way.
@@ -307,29 +278,15 @@ macro contextVar*(body: untyped): untyped =
           quote do:
             contextLookupSnapshot[`slotTypeName`, `typExpr`](
               ContextNodeBase(`chronosCtxSnapIdent`), `defaultVal`)
-      # The render proc's not-found branch: must-bind arms show a
-      # fixed placeholder (dumpContext never raises — introspection is
-      # total); defaulted arms show the default, `$`-rendered when
-      # possible, else the same "<T>" placeholder a non-`$`-able bound
-      # value would get below.
-      #
-      # The `when compiles(...)` probe is deliberately run against a
-      # freshly zero-initialized `var` of the arm's declared, concrete
-      # type — not against `defaultVal` (the raw default expression
-      # AST) directly, and not via `system.default` (a `var` gives the
-      # same "value of this exact type" disambiguation with a
-      # construct that hasn't changed meaning across Nim versions this
-      # series targets). A bare polymorphic literal default like `nil`
-      # has no fixed type of its own: `compiles($(nil))` can silently
-      # resolve `$` against an unrelated type `nil` also happens to be
-      # compatible with (e.g. `cstring`'s `$`, which calls `strlen` on
-      # it) rather than failing the way `$` genuinely does for the
-      # arm's own type (e.g. a bare `ptr T`) — and then *evaluating*
-      # that wrongly-resolved overload on the actual `nil` default is a
-      # null-pointer read. Gating on a `var` of type `typExpr`
-      # (unambiguously typed) avoids the misresolution; the render
-      # itself still uses `defaultVal` so the *value* shown is the
-      # arm's actual declared default, not `typExpr`'s zero value.
+      # must-bind arms show a fixed placeholder (dumpContext never
+      # raises); defaulted arms show the default, `$`-rendered when
+      # possible. The `compiles` probe runs against a zero-initialized
+      # `var` of `typExpr`, not against `defaultVal` directly: a
+      # polymorphic literal default like `nil` has no fixed type of
+      # its own, so probing it can resolve `$` against an unrelated
+      # compatible type (e.g. cstring's strlen-based `$`) and then
+      # evaluate that overload on the real default — a null-pointer
+      # read for something like a bare `ptr T`.
       let notFoundTuple =
         if isMustBind:
           quote do: (false, "<unbound>")
@@ -419,10 +376,8 @@ proc dumpContext*(ctx: AsyncContext): seq[ContextVarEntry] {.raises: [].} =
   ## the value it would actually read as (the rendered default); an
   ## unbound must-bind arm is shown with `bound: false` and a fixed
   ## placeholder — `dumpContext` never raises `UnboundContextVarDefect`
-  ## the way the arm's own reader would. This is the more
-  ## useful-for-debugging choice: a debugger or log dump wants to see
-  ## the whole declared universe and each var's actual state, not just
-  ## the subset that happens to be bound right now.
+  ## the way the arm's own reader would, since a debugger or log dump
+  ## wants the whole declared universe, not just what's bound now.
   ##
   ## Cost: proportional to the number of `contextVar` arms declared
   ## anywhere in the program (one allocation-free registry walk) plus

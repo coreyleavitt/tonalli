@@ -8,17 +8,9 @@
 
 ## Drift-detection guardrails for chronos's context-variable feature.
 ##
-## These tests catch regressions that would silently break the
-## architectural decisions in `docs/src/contextvars.md`. Each is
-## structured as a compile-time check (`static:` / `when`) so drift
-## fails at build time, not at runtime.
-##
-## The properties guarded here — compile-time slot identity rather
-## than a runtime tag comparison, value-owning slots rather than
-## storage reached through a box or pointer, and structurally enforced
-## capture coverage rather than a convention contributors have to
-## remember — are each easy to erode one call site at a time with no
-## compiler error to catch it.
+## Each check is a compile-time assertion (`static:` / `when compiles`)
+## pinning capture discipline, chain privacy, and struct layout so
+## regressions fail at build time rather than at runtime.
 
 import unittest2
 import ../chronos/internal/contextvars_impl
@@ -29,13 +21,8 @@ import ../chronos/contextvars
 
 # --- Guardrail 1: capture coverage is structural -----------------------------
 #
-# The three-constructor split (userCallback / bareCallback /
-# contextCallback) forces every AsyncCallback construction site to
-# pick a deliberate side. `InternalAsyncCallback`'s
-# `function`/`udata`/`context` fields are private to
-# `chronos/futures.nim` — only `userCallback`/`bareCallback`/
-# `contextCallback` can construct one, and no other module can
-# read-modify the fields after the fact.
+# InternalAsyncCallback's fields are private to chronos/futures.nim;
+# only userCallback/bareCallback/contextCallback can construct one.
 
 static:
   doAssert not compiles(InternalAsyncCallback(function: nil, udata: nil)),
@@ -53,13 +40,11 @@ static:
     "AsyncCallback's `context` field must be private — direct mutation " &
     "would let a scheduling site silently skip context capture."
 
-# --- Guardrail 2: context is a native ref, not a manually-refcounted pointer
+# --- Guardrail 2: context is a native ref, not a manually-refcounted pointer -
 #
-# A `context: pointer` field would need manual `GC_ref`/`GC_unref` and
-# an explicit release call at every drop site — a latent leak under
-# `--mm:refc`, where e.g. sequtils' `keepItIf` uses `shallowCopy` and
-# bypasses hooks. The native-ref field instead delegates refcount
-# lifecycle to Nim's MM.
+# A `pointer` field would need manual GC_ref/GC_unref at every drop
+# site — a latent leak under --mm:refc since keepItIf's shallowCopy
+# bypasses hooks. The native ref delegates lifecycle to Nim's MM.
 
 static:
   doAssert InternalAsyncCallback.context is ContextNodeBase,
@@ -75,34 +60,22 @@ static:
 # A cheap canary against accidental shape changes.
 
 static:
-  # CallbackFunc is `proc(arg: pointer) {.gcsafe, raises: [].}` — a Nim
-  # closure proc, 2 pointers (function + env). Plus `udata: pointer`
-  # (1 pointer) and `context: ContextNodeBase` (a ref, 1 pointer).
-  # Total: 4 pointers — a `ref` is a single machine word, so the
-  # native-ref field costs nothing extra over a raw `pointer` field.
+  # CallbackFunc closure proc = 2 pointers (function + env), plus
+  # udata (1) and context: ContextNodeBase (a ref, 1 pointer) = 4.
   doAssert sizeof(InternalAsyncCallback) == sizeof(pointer) * 4,
     "InternalAsyncCallback expected to be 4 pointer-sized fields " &
     "(function: 2-word closure proc, udata: pointer, context: ref); " &
     "actual size = " & $sizeof(InternalAsyncCallback)
 
 # Guardrail 4 (public surface is minimal) lives in
-# `tests/testcontextvarssurface.nim` — it needs to import
-# ONLY the public `chronos`/`chronos/contextvars` paths, which this
-# file can't do since it needs the internal modules for the white-box
-# checks above.
+# tests/testcontextvarssurface.nim, which imports only public paths.
 
 # --- Guardrail 5: the binding chain is immutable outside contextnode.nim -----
 #
-# `ContextNodeBase.next` must stay private to `chronos/internal/
-# contextnode.nim`. Keeping the base type unnameable from public imports
-# is NOT sufficient on its own: every `contextVar` declaration emits a
-# nameable subtype that inherits the field, so a public `next` would let
-# user code write `mySlot.next = mySlot` through its own slot type — a
-# cycle that hangs `contextLookup`'s walk, or a rewrite of a live chain
-# shared by reference with pending callbacks. This module imports the
-# internal modules directly and STILL must not reach the field: privacy
-# is per-module, so these checks hold everywhere outside contextnode.nim
-# itself.
+# ContextNodeBase.next must stay private: each contextVar arm emits a
+# nameable subtype inheriting the field, so a public `next` would let
+# user code write `mySlot.next = mySlot`, cycling contextLookup's walk
+# or rewriting a chain shared with pending callbacks.
 
 contextVar:
   var chainProbe: int = 0
@@ -129,12 +102,8 @@ static:
 
 # --- Guardrail 6: InternalCancelCallback --------------------------------------
 #
-# `internalCancelcb` was slimmed from the shared 4-word `InternalAsyncCallback`
-# to a dedicated 3-word type: the `udata` field it carried was provably
-# redundant (every construction site stored `cast[pointer](future)`, and
-# the fire site already has `future` in scope to derive it). Same
-# structural-privacy discipline as `InternalAsyncCallback` above, so the
-# same three checks, mirrored for the new type.
+# Same structural-privacy discipline as InternalAsyncCallback above,
+# mirrored for this 3-word type (no udata field).
 
 static:
   doAssert not compiles(InternalCancelCallback(function: nil, context: nil)),
@@ -155,9 +124,7 @@ static:
     "`ref` field) — same MM-delegated lifetime discipline as " &
     "`InternalAsyncCallback.context` (guardrail 2 above)."
 
-  # CallbackFunc is a 2-word closure proc (function + env). Plus
-  # `context: ContextNodeBase` (a ref, 1 word). Total: 3 words — 8 B
-  # smaller than InternalAsyncCallback's 4 words.
+  # CallbackFunc closure proc (2 words) + context: ContextNodeBase (1) = 3.
   doAssert sizeof(InternalCancelCallback) == sizeof(pointer) * 3,
     "InternalCancelCallback expected to be 3 pointer-sized fields " &
     "(function: 2-word closure proc, context: ref); " &
@@ -165,17 +132,10 @@ static:
 
 # --- Guardrail 7: the introspection registry is not externally mutable ------
 #
-# `ContextVarRegistration.name`/`.render` are public fields (needed so
-# the macro's generated code — which lives in the DECLARING module,
-# not this one — can construct one), but `.registered`/`.next` must
-# stay private to `chronos/internal/contextvars_impl.nim`: a reachable
-# `.next` would let arbitrary code splice registry nodes into a cycle
-# (hanging `dumpContext`'s walk) or unlink/relink entries, defeating
-# the "allocation-free, append-only, safe to read from any thread"
-# design in docs/src/contextvars.md, "Inspecting contexts". This
-# module imports `contextvars_impl` directly and still must not reach
-# those two fields — same per-module privacy discipline as Guardrail 5
-# above for `ContextNodeBase.next`.
+# `.name`/`.render` are public (the declaring module's macro-generated
+# code constructs entries), but `.registered`/`.next` must stay private
+# to contextvars_impl.nim — a reachable `.next` would let code splice
+# or unlink registry nodes, corrupting dumpContext's walk.
 
 contextVar:
   var registryProbe: int = 0
@@ -200,7 +160,6 @@ static:
 
 suite "contextvars: drift guardrails":
   test "compile-time guardrails passed":
-    # Reaching this line means every `static:` / `when` check above
-    # passed. The compile-time checks are the actual guardrails;
-    # this test exists only so the test runner reports a green dot.
+    # The static checks above are the real guardrails; this just
+    # gives the runner a green dot.
     check true

@@ -1,33 +1,27 @@
-## RFC 0001 D9-V / S11 — Layer 4: coverage-guided fuzz + GC stress + leak
-## accounting, and a dedicated Defect-unwind check.
+## Layer 4: coverage-guided fuzz + GC stress + leak accounting, and a
+## dedicated Defect-unwind check.
 ##
 ## **FORK-ONLY.** See `verify/README.md`. Run via `verify/run.sh fuzz`, once
 ## per MM (`MM=refc ./run.sh fuzz`, `MM=orc ./run.sh fuzz`).
 ##
-## Imports the REAL `chronos/internal/callbackqueue.nim` directly (S11 --
-## see `bisim_check.nim`'s module doc for why layers 3-5 do this and
-## layers 1-2 do not). This is the only layer that exercises the real
-## allocator under a real memory manager -- the standing leak check on the
-## fused-move dequeue's conservation argument (RFC 0001 D9's rejected-shapes
-## analysis: the `copyMem`-dequeue shape was rejected BECAUSE it leaks; this
-## file is what proves the ADOPTED shape does not, against the real
-## `--mm:refc`/`--mm:orc` allocators rather than S9's ghost ledger).
+## Imports the REAL `chronos/internal/callbackqueue.nim` directly (see
+## `bisim_check.nim`'s module doc for why layers 3-5 do this and layers 1-2
+## do not). This is the only layer that exercises the real allocator under
+## a real memory manager -- proving the adopted fused-move dequeue does not
+## leak, against the real `--mm:refc`/`--mm:orc` allocators rather than a
+## ghost ledger.
 ##
 ## **Coverage-guided fuzz, honestly scoped.** `proptest/fuzz`'s `fuzzWith`
-## is coverage-guided when the SUT carries `{.cover.}` instrumentation
-## (`proptest/coverage.nim`). `chronos/internal/callbackqueue.nim` is
-## upstream-bound and MUST NOT carry any fork-only pragma or import (RFC
-## 0001's segregation mandate) -- so it is never instrumented, and per
-## `fuzz.nim`'s own module doc ("An uninstrumented SUT degrades gracefully
-## to 'random fuzzing'"), this run is honestly a random IR-mutation fuzz
-## over IR-mode's structural mutators (perturb-integer, kind-boundary,
-## span-splice/delete/duplicate -- `mutateIRPerturbInteger` etc. in
-## `proptest/fuzz.nim`), not edge-coverage-directed. Still real value: the
-## IR mutators explore op-sequence SHAPE (lengths, op-kind boundaries,
-## spliced sub-sequences from other corpus entries) more effectively than
-## pure independent-draw random generation, and every `vInteresting`
-## finding (a crash OR a leak-accounting assertion, both wired into `prop`
-## below) is a genuine harness failure either way.
+## is coverage-guided when the SUT carries `{.cover.}` instrumentation.
+## `chronos/internal/callbackqueue.nim` is upstream-bound and must not
+## carry any fork-only pragma or import, so it is never instrumented, and
+## per `fuzz.nim`'s own module doc, this run degrades to a random
+## IR-mutation fuzz over IR-mode's structural mutators, not
+## edge-coverage-directed. Still real value: the IR mutators explore
+## op-sequence SHAPE (lengths, op-kind boundaries, spliced sub-sequences
+## from other corpus entries) more effectively than pure independent-draw
+## random generation, and every `vInteresting` finding (a crash or a
+## leak-accounting assertion) is a genuine harness failure either way.
 ##
 ## **Leak accounting.** Item = `ref object` (heap-allocated, GC-traced --
 ## the real allocator's own bookkeeping, not a ghost ledger). Each `prop`
@@ -35,26 +29,20 @@
 ## `CallbackQueue[LeakItem]`, force a full drain regardless of how the
 ## sequence ended, `GC_fullCollect()`, then assert `getOccupiedMem()` is
 ## within `toleranceBytes` of a baseline captured once at program start
-## (after a warm-up round -- empirically, both MMs show a one-time bump on
-## the first few GC-traced allocations as internal allocator structures
-## grow, then plateau; warming up before sampling the baseline avoids
-## mistaking that one-time bump for drift). A genuine per-op leak
-## accumulates roughly linearly with iterations and trips this assertion
-## within a handful of iterations, well before the fuzz budget is spent
-## (empirically verified against a real leak: see `verify/README.md`'s
-## ledger for the calibration numbers this tolerance was chosen against).
+## (after a warm-up round -- both MMs show a one-time bump on the first
+## few GC-traced allocations as internal allocator structures grow, then
+## plateau; warming up before sampling the baseline avoids mistaking that
+## bump for drift). A genuine per-op leak accumulates roughly linearly
+## with iterations and trips this assertion well before the fuzz budget
+## is spent.
 ##
 ## **Defect-unwind sequences.** `popFirst()` on empty and `addFirst()` on a
 ## full queue both `doAssert`, raising a `Defect`. Under this fork's
-## standing `panics:off` assumption (RFC 0001 round 2), a `Defect` remains
-## a catchable exception (not a `--panics:on` fatal abort), so both are
-## exercised directly here in `runDefectUnwindChecks` -- expressible
-## without killing the process, per the slice's own escalation clause --
-## confirming both (a) the assert fires and is catchable, and (b) the
-## queue remains fully usable for subsequent ops afterward (mirrors
-## `tests/testcallbackqueue.nim`'s "post-Defect-unwind queue integrity"
-## pin, but driven at the queue's own API boundary rather than through a
-## caller's try/except around a drain loop).
+## standing `panics:off` assumption, a `Defect` remains a catchable
+## exception, so both are exercised directly here in
+## `runDefectUnwindChecks`, confirming both (a) the assert fires and is
+## catchable, and (b) the queue remains fully usable for subsequent ops
+## afterward.
 
 import std/[times, strutils, tables, algorithm]
 import proptest
@@ -70,25 +58,17 @@ type
 const
   maxOpsPerSeq = 300
   fuzzIterations = 50_000
-    ## Budgeted for "minutes, not hours" (RFC 0001 S11 scope note).
-    ## Empirically, 4000 iterations at this op-sequence length ran in
-    ## ~1-2 seconds per MM (see verify/README.md's ledger) -- comfortable
-    ## headroom to scale up for a more thorough leak/crash sweep while
-    ## staying at low-single-digit-seconds wall-clock, nowhere near the
-    ## 90s safety-net budget below. Each iteration replays up to
+    ## Budgeted for minutes, not hours. Each iteration replays up to
     ## `maxOpsPerSeq` queue ops plus a full drain and a `GC_fullCollect()`;
     ## 50,000 iterations x up to 300 ops is up to 15M queue operations per
     ## MM run.
   fuzzTimeBudgetSeconds = 90
     ## Safety net, not the primary stop condition (iterations is).
   toleranceBytes = 1_000_000
-    ## 1 MB. Generous relative to one sequence's worst-case live set
-    ## (300 items x a `ref object` with one `int` field, on the order of a
-    ## few KB even before GC reclaims it) so runtime/allocator bookkeeping
-    ## noise across thousands of iterations never false-positives, while
-    ## still tight enough that a genuine per-op leak (each leaked
-    ## `LeakItem` several dozen bytes) trips this well within the
-    ## iteration budget -- see the module doc's calibration note.
+    ## 1 MB. Generous relative to one sequence's worst-case live set so
+    ## runtime/allocator bookkeeping noise never false-positives, while
+    ## still tight enough that a genuine per-op leak trips this well
+    ## within the iteration budget.
 
 proc mmName(): string =
   when defined(gcOrc): "orc"
@@ -97,12 +77,10 @@ proc mmName(): string =
   else: "unknown"
 
 template guardAsserts(where: string, body: untyped): untyped =
-  ## Same discipline as `bisim_check.nim`/S9's `bmc_ghost.nim`: convert an
+  ## Same discipline as `bisim_check.nim`/`bmc_ghost.nim`: convert an
   ## unexpected `doAssert`-raised `Defect` into a `CatchableError` so
-  ## `fuzzWith`'s target still reports it as a finding (`vInteresting`)
-  ## rather than merely relying on `inProcessTarget`'s own `except Defect`
-  ## catch (which also works -- this wrapper adds the `where` context to
-  ## the message for a more useful crash report).
+  ## `fuzzWith`'s target still reports it as a finding (`vInteresting`),
+  ## with `where` context added for a more useful crash report.
   try:
     body
   except Defect as chronosVerifyDefect:
@@ -117,43 +95,26 @@ proc growTargetCapShadow(cap: int): int =
 var baselineOcc: int
   ## Set once by `warmUpAndCaptureBaseline`, before the fuzz loop starts.
 
-## --- Phase 3 (B-wave) coverage accounting -------------------------------
+## --- Coverage accounting -------------------------------------------------
 ##
 ## Per-run observations, from public observations only -- no pragmas on
 ## `chronos/internal/callbackqueue.nim`, nothing reads its private fields.
-## Two of the three signals reuse machinery already present in this file:
 ##
-## - **final capacity**: the existing `cap` shadow local (already tracked
-##   per-`prop()`-call via `growTargetCapShadow`, the same shadow arithmetic
-##   `bisim_check.nim` uses and `drift_check.nim` verifies against the real
-##   private `growTargetCap`) -- its value at the end of a run IS the real
-##   queue's final capacity, with no new tracking needed.
-## - **growth events**: a new counter, incremented at each of the existing
-##   `if q.len == cap: cap = growTargetCapShadow(cap)` growth checks
-##   (`qoAddLast`'s branch) -- the exact same condition the real `addLast`
-##   uses to decide whether to call `grow()`.
+## - **final capacity**: the existing `cap` shadow local, already tracked
+##   per-`prop()`-call via `growTargetCapShadow` -- its value at the end
+##   of a run IS the real queue's final capacity.
+## - **growth events**: a counter incremented at each existing
+##   `if q.len == cap: cap = growTargetCapShadow(cap)` growth check, the
+##   same condition the real `addLast` uses to decide whether to grow.
 ## - **physical wrap**: derived, not read from any private field. `addLast`
-##   is the only op that advances the tail cursor; the real `slotIndex`
-##   folds a monotonic logical position into `[0, cap)` by `pos and
-##   (cap-1)` (`capMask`), so successive `addLast` calls land at
-##   consecutive physical slots `0, 1, 2, ..., cap-1, 0, 1, ...` UNTIL
-##   either (a) growth resets the backing array (a fresh, unwrapped `[0,
-##   n)` layout by construction -- `grow()`'s own doc: `q.head = 0`,
-##   `q.tail = uint(n)`), or (b) the physical index cycles from `cap-1`
-##   back to `0` -- which is, by definition, a physical wrap of the ring
-##   (only reachable at all if pops have freed low-index slots; without
-##   any pops, `isFull` would trigger growth before tail could ever
-##   revisit index 0). This file shadows that exact sequence with its own
-##   `shadowTail`/`lastPushPhysIdx` locals (mirroring `slotIndex`'s `pos
-##   and (cap-1)` via plain `mod cap`, valid since `cap` is always a power
-##   of two here) and flags a wrap the moment a push's physical index is
-##   LOWER than the previous push's within the same growth epoch --a
-##   precise, not merely probabilistic, signal (tighter than the
-##   `cumulative pops > 0 and cumulative pushes > initial cap` heuristic
-##   the RFC slice's own scope note floats as a fallback: that heuristic
-##   is a necessary-but-not-sufficient proxy -- e.g. many pushes after one
-##   pop does not guarantee the physical cursor actually revisited index
-##   0 -- whereas tracking the physical index sequence directly is exact).
+##   is the only op that advances the tail cursor, landing at consecutive
+##   physical slots `0, 1, 2, ..., cap-1, 0, 1, ...` until either growth
+##   resets the backing array (fresh, unwrapped) or the physical index
+##   cycles from `cap-1` back to `0` -- a physical wrap of the ring. This
+##   file shadows that sequence with its own `shadowTail`/`lastPushPhysIdx`
+##   locals and flags a wrap the moment a push's physical index is LOWER
+##   than the previous push's within the same growth epoch -- an exact
+##   signal, not a heuristic.
 type
   RunCoverage = object
     finalCap: int
@@ -179,9 +140,8 @@ proc recordCoverage(rc: RunCoverage) =
 
 proc warmUpAndCaptureBaseline() =
   # One throwaway round through the exact same code path `prop` uses below,
-  # so any one-time allocator/runtime-internal growth (observed empirically
-  # on both MMs -- see module doc) happens BEFORE the baseline is captured,
-  # not after.
+  # so any one-time allocator/runtime-internal growth happens BEFORE the
+  # baseline is captured, not after.
   var q: CallbackQueue[LeakItem]
   var cap = 0
   for i in 0 ..< 64:
@@ -195,13 +155,13 @@ proc warmUpAndCaptureBaseline() =
 
 proc prop(ops: seq[QOpKind]) =
   var q: CallbackQueue[LeakItem]
-  var cap = 0 # zero-value queue, per D9's lazy-init property
+  var cap = 0 # zero-value queue, lazy-init
   var nextId = 0
   var liveCount = 0
 
-  # Phase 3 (B-wave) coverage shadow state -- see the module-doc comment
-  # above `RunCoverage` for the derivation. `shadowTail`/`lastPushPhysIdx`
-  # only ever change inside `qoAddLast`; growth resets both, mirroring
+  # Coverage shadow state -- see the module-doc comment above
+  # `RunCoverage` for the derivation. `shadowTail`/`lastPushPhysIdx` only
+  # ever change inside `qoAddLast`; growth resets both, mirroring
   # `grow()`'s own `q.tail = uint(n)` reset exactly.
   var growthEvents = 0
   var shadowTail = 0
@@ -229,14 +189,11 @@ proc prop(ops: seq[QOpKind]) =
       # Precondition-avoid, exactly like bisim_check.nim's addFirstEnabled:
       # a full-queue addFirst is deliberately exercised separately by
       # `runDefectUnwindChecks`, not smuggled into the leak-accounting loop
-      # (which must stay clean on a correct implementation for its own
-      # crash count to be a meaningful mutation-kill signal -- see
-      # verify/README.md's Layer 5 methodology).
+      # (which must stay clean on a correct implementation for its crash
+      # count to be a meaningful mutation-kill signal).
       if q.len < cap:
         guardAsserts("addFirst"):
-          # Real name is `prependNoGrow` - see bisim_check.nim's
-          # `doAddFirstReal` for the same pre-existing, W3-unrelated
-          # rename note.
+          # Real name is `prependNoGrow` - see bisim_check.nim.
           inc nextId
           q.prependNoGrow(LeakItem(id: nextId))
           inc liveCount
@@ -246,13 +203,12 @@ proc prop(ops: seq[QOpKind]) =
           discard q.popFirst()
           dec liveCount
 
-  # Phase 3 (B-wave): record this run's coverage observations before the
-  # drain below (drain never grows the queue, so `cap`/`growthEvents`/
-  # `wrapped` are already final at this point).
+  # Record this run's coverage observations before the drain below (drain
+  # never grows the queue, so `cap`/`growthEvents`/`wrapped` are already
+  # final at this point).
   recordCoverage(RunCoverage(finalCap: cap, growthEvents: growthEvents, wrapped: wrapped))
 
-  # Force a full drain regardless of how the generated sequence ended --
-  # "N random op cycles ending with full drain" (RFC 0001 S11 scope).
+  # Force a full drain regardless of how the generated sequence ended.
   while q.len > 0:
     guardAsserts("drain"):
       discard q.popFirst()
@@ -308,7 +264,7 @@ proc runDefectUnwindChecks() =
     doAssert q.popFirst().id == 3
     echo "  addFirst() on full: raised + caught, queue usable afterward -- OK"
 
-echo "=== D9-V S11 Layer 4: coverage-guided fuzz + GC stress + leak accounting ==="
+echo "=== Layer 4: coverage-guided fuzz + GC stress + leak accounting ==="
 echo "(mm=" & mmName() & ", iterations=" & $fuzzIterations &
      ", maxOpsPerSeq=" & $maxOpsPerSeq & ", timeBudget=" & $fuzzTimeBudgetSeconds & "s)"
 
@@ -343,7 +299,7 @@ if report.irCrashes.len > 0:
   doAssert false, "Layer 4 fuzz: " & $report.irCrashes.len &
     " finding(s) -- leak-accounting or crash assertion failed (see messages above)"
 
-echo "--- Phase 3 (B-wave) coverage histogram (mm=" & mmName() & ", runs=" & $totalRuns & ") ---"
+echo "--- Coverage histogram (mm=" & mmName() & ", runs=" & $totalRuns & ") ---"
 echo "  final capacity reached:"
 var capsSeen: seq[int]
 for c in capHistogram.keys: capsSeen.add c

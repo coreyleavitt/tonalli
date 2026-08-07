@@ -1,58 +1,43 @@
-## RFC 0001 D9-V / S11 — Layer 3: bisimulation vs a std/deques reference.
+## Layer 3: bisimulation vs a std/deques reference.
 ##
 ## **FORK-ONLY.** See `verify/README.md`. Run via `verify/run.sh bisim`,
 ## once per MM (`MM=refc ./run.sh bisim`, `MM=orc ./run.sh bisim`).
 ##
-## Unlike S9's layers 1-2 (which walk hand-mirrored copies -- nothing in
-## `chronos/` existed yet to import), this file imports the REAL, shipped
-## `chronos/internal/callbackqueue.nim` directly: D9 shipped at S10, so
-## there is no more reason to duplicate it. Only the five public entry
-## points are used (`initCallbackQueue`, `addLast`, `addFirst`, `popFirst`,
-## `len`) -- exactly D9's stated interface, so no private-field access is
-## needed and no real-module changes are required to make this file work.
+## Unlike layers 1-2 (which walk hand-mirrored copies), this file imports
+## the REAL, shipped `chronos/internal/callbackqueue.nim` directly, using
+## only its five public entry points (`initCallbackQueue`, `addLast`,
+## `addFirst`, `popFirst`, `len`) -- no private-field access needed.
 ##
-## **Algorithm**: proptest's `bisimulationCheck` (#115) -- deterministic
-## lock-step BFS over `(realState, refState)` product pairs, comparing (a)
-## observations and (b) enabled-rule-name sets at every reached pair. Three
-## rules, shared names on both sides: `addLast`, `addFirst`, `popFirst`.
+## **Algorithm**: proptest's `bisimulationCheck` -- deterministic lock-step
+## BFS over `(realState, refState)` product pairs, comparing (a)
+## observations and (b) enabled-rule-name sets at every reached pair.
 ##
-## **The `cap` shadow field.** Neither side exposes a capacity accessor (the
-## real queue by design -- D9's interface is exactly five entry points,
-## nothing else; `std/deques.Deque` has no matching notion). `addFirst`'s
+## **The `cap` shadow field.** Neither side exposes a capacity accessor
+## (`std/deques.Deque` has no matching notion), but `addFirst`'s
 ## enabled-set must still agree between both sides (the real queue's
-## `addFirst` doAsserts if the queue is full; unlike `addLast` it never
-## grows -- D9's stated scope, "sole caller: sentinel re-insertion... never
-## a general push-front, so there is no growth path here"). Both harness
-## states therefore carry an identical, independently-computed shadow `cap`
-## field, updated by the exact same `growTargetCapShadow` arithmetic as the
-## real module's private `growTargetCap`, triggered by the exact same
-## precondition (`len == cap` before an `addLast`) -- deterministic and
-## driven by the SAME shared rule sequence on both sides, so the two shadow
-## `cap`s stay in lockstep by construction (proved inductively: equal at the
-## initial state; each step that updates one updates the other identically).
-## This lets `addFirst`'s enabled-ness be computed identically on both sides
-## without reading any real private field.
+## `addFirst` doAsserts if full, and unlike `addLast` never grows). Both
+## harness states carry an identical, independently-computed shadow `cap`
+## field, updated by the same `growTargetCapShadow` arithmetic as the real
+## module's private `growTargetCap`, triggered by the same precondition
+## (`len == cap` before an `addLast`) and driven by the same shared rule
+## sequence on both sides -- so the two shadow `cap`s stay in lockstep by
+## construction, letting `addFirst`'s enabled-ness be computed identically
+## on both sides without reading any real private field.
 ##
-## **Observation**: since D9's interface has no peek/iteration (by design --
-## "no caller needs them, and a narrower interface is a narrower place for a
-## slot-vacating bug to hide"), FIFO order is proved by draining a VALUE
-## COPY of the state at each reached pair (both `CallbackQueue[T]` and
-## `Deque[T]` are plain value objects with default copy semantics -- an
-## `=copy` of the seq-backed struct is a real, independent deep copy, so
-## draining the copy never disturbs the state actually carried forward by
-## the BFS). This is exactly what the D9-V table's layer-3 row promises:
-## "FIFO order, enabled-op sets" -- and explicitly NOT internal slot state
-## (layer 2's job, already done in S9 against the ghost model).
+## **Observation**: the real interface has no peek/iteration, so FIFO
+## order is proved by draining a VALUE COPY of the state at each reached
+## pair (`CallbackQueue[T]`/`Deque[T]` are plain value objects with
+## default copy semantics, so draining the copy never disturbs the state
+## carried forward by the BFS). This checks FIFO order and enabled-op
+## sets -- not internal slot state, which is layer 2's job.
 ##
-## **Defect safety**: any of the three ops firing a real `doAssert` --
-## reachable only if a bug (or a layer-5 mutant) violates the shadow-cap
-## invariant this file maintains -- is converted from an uncatchable
-## `Defect` to a `CatchableError` by `guardAsserts` (mirrors S9's
-## `bmc_ghost.nim`), so `bisimulationCheck`'s own `except CatchableError`
+## **Defect safety**: any of the three ops firing a real `doAssert` is
+## converted from an uncatchable `Defect` to a `CatchableError` by
+## `guardAsserts`, so `bisimulationCheck`'s own `except CatchableError`
 ## reports it as a distinguishing plan instead of aborting the whole run.
-## This is also what makes layer 3 usable as a mutation-testing tool (S11
-## layer 5): a mutant that trips an assert unexpectedly is caught cleanly
-## instead of crashing the harness.
+## This also makes layer 3 usable as a mutation-testing tool (layer 5): a
+## mutant that trips an assert unexpectedly is caught cleanly instead of
+## crashing the harness.
 
 import std/[deques, hashes, strutils]
 import proptest
@@ -60,10 +45,9 @@ import ../chronos/internal/callbackqueue
 
 const
   initialCap = 2
-    ## Deliberately small (mirrors S9's `bmc_ghost.nim` initialQueueCap) so
-    ## growth -- and physical wraparound of the monotonic head/tail into a
-    ## smaller backing -- is reached well inside the swept depth, not left
-    ## to chance.
+    ## Deliberately small so growth -- and physical wraparound of the
+    ## monotonic head/tail into a smaller backing -- is reached well
+    ## inside the swept depth, not left to chance.
   bisimDepth = 12
   bisimMaxStates = 20_000
   tagLo = 0
@@ -86,10 +70,9 @@ type
 
 template guardAsserts(where: string, body: untyped): untyped =
   ## `doAssert` raises a `Defect`, which `bisimulationCheck`'s own `except
-  ## CatchableError` (proptest/bisim.nim, itself built on bmc.nim's
-  ## `runStep`) does NOT catch -- converting here is what turns an
+  ## CatchableError` does NOT catch -- converting here is what turns an
   ## unexpected assert into a reported distinguishing plan instead of a
-  ## hard process abort. Same pattern as S9's `bmc_ghost.nim`.
+  ## hard process abort.
   try:
     body
   except Defect as chronosVerifyDefect:
@@ -100,8 +83,8 @@ proc growTargetCapShadow(cap: int): int =
   ## Mirrors the real module's private `growTargetCap` exactly (same
   ## doubling rule, same zero-floor) -- verified byte-identical by
   ## `drift_check.nim`. Duplicated here only because the real proc is
-  ## private (D9's interface scope); this is bookkeeping for the harness's
-  ## `addFirst`-enabled computation, not a second implementation of D9.
+  ## private; this is bookkeeping for the harness's `addFirst`-enabled
+  ## computation, not a second implementation.
   if cap == 0: 8 else: cap * 2
 
 proc mkRealInitial(): RealState =
@@ -119,13 +102,10 @@ proc doAddLastReal(s: var RealState, tag: int) =
 
 proc doAddFirstReal(s: var RealState, tag: int) =
   guardAsserts("real.addFirst"):
-    # The real module's operation is named `prependNoGrow` (renamed from
-    # D9's originally-planned `addFirst` during S10; pre-existing,
-    # unrelated to W3 - this call site had drifted out of sync with the
-    # rename, same root cause `drift_check.nim` independently caught for
-    # `callbackqueue_model.nim`'s precondition message). The rule/guard
-    # LABEL stays "addFirst" (bisim's own vocabulary, shared with the
-    # `std/deques` reference side below, which genuinely has `addFirst`).
+    # The real module's operation is named `prependNoGrow`. The
+    # rule/guard LABEL stays "addFirst" (bisim's own vocabulary, shared
+    # with the `std/deques` reference side below, which genuinely has
+    # `addFirst`).
     s.q.prependNoGrow(tag)
 
 proc addFirstEnabledReal(s: RealState): bool = s.q.len < s.cap
@@ -195,7 +175,7 @@ proc mkSmRef(): StateMachine[RefState] =
                           precondition = popFirstEnabledRef),
     ])
 
-echo "=== D9-V S11 Layer 3: bisimulation vs std/deques reference ==="
+echo "=== Layer 3: bisimulation vs std/deques reference ==="
 echo "(maxDepth=" & $bisimDepth & ", maxStates=" & $bisimMaxStates &
      ", initialCap=" & $initialCap & ", mm=" & mmName() & ")"
 

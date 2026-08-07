@@ -152,12 +152,7 @@ when chronosUseSink:
   template chronosMoveSink*(v: sink auto): untyped = move(v)
 else:
   template chronosSink*(T: type): type = T
-  # No `sink` on `v` here: this branch performs no move (see below), so
-  # `sink` buys nothing semantically — and on Nim < 2.0.6 (the only
-  # versions that take this branch), `sink auto` on a typed template
-  # parameter fails to match a lvalue seq-element argument for some
-  # instantiations (observed: `CallbackQueue[InternalAsyncCallback]`
-  # under `-d:chronosDebug` on Nim 1.6). Plain `auto` matches unconditionally
-  # and is behaviorally identical, since this branch already returns `v`
-  # unchanged rather than moving it.
+  # Plain `auto`, no `sink`: this branch returns `v` unchanged (no move
+  # happens), and on Nim < 2.0.6 `sink auto` fails to match an lvalue
+  # seq-element argument for some instantiations.
   template chronosMoveSink*(v: auto): untyped = v

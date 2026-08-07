@@ -1,17 +1,16 @@
-## RFC 0001 D9-V / S9 — Layer 2: bmcCheck ghost-ownership model.
+## Layer 2: bmcCheck ghost-ownership model.
 ##
 ## **FORK-ONLY.** See `verify/README.md`. Run via `verify/run.sh bmc`.
 ##
-## Exhaustive breadth-first plan sweep (`bmcCheck`, #113) over the real
+## Exhaustive breadth-first plan sweep (`bmcCheck`) over the real
 ## `CallbackQueue[GhostItem]` from `callbackqueue_model.nim` -- real
 ## `addLast`/`addFirst`/`popFirst`/`popFirstRejected` code runs on every
 ## step; growth's whole-region `copyMem`+`zeroMem` fires exactly as it will
 ## in the shipped queue. What is "ghost" is the ownership ledger layered
 ## around it: `GhostItem` carries no ref/destructor, so nothing here depends
 ## on the real allocator or either MM's actual barrier behavior (that is
-## layer 4's job, S11) -- the ledger is explicit bookkeeping that mirrors
-## what a real write-barrier/move/raw-memory-op WOULD do to a refcount,
-## exactly as the round-4 rejected-shapes analysis narrates it (RFC 0001 D9):
+## layer 4's job) -- the ledger is explicit bookkeeping that mirrors what a
+## real write-barrier/move/raw-memory-op WOULD do to a refcount:
 ##
 ##   * A tracked transfer (`addLast`/`addFirst`'s slot commit; `popFirst`'s
 ##     `chronosMoveSink` vacate) moves the SAME ledger entry to a new
@@ -19,27 +18,24 @@
 ##   * `popFirstRejected`'s `copyMem` creates a usable alias WITHOUT
 ##     incrementing the ledger (raw memory, no barrier), and its `zeroMem`
 ##     strips the slot's tracked claim WITHOUT decrementing it (also raw,
-##     also no barrier) -- exactly the "sole counted reference stripped
-##     without a decrement" the RFC's rejected-shapes prose describes.
+##     also no barrier).
 ##
 ## **Refcount-conservation invariant**: for every id ever captured,
 ## `trueRefCount[id]` must always equal 1 if a tracked holder currently
 ## claims it, 0 otherwise. A tracked transfer preserves this by construction
 ## (same entry, relocated). The rejected shape breaks it: after
 ## `popFirstRejected`, `trueRefCount[id] == 1` but no tracked holder claims
-## it -- an unreclaimable leak, not a double-free (matches the RFC's own
-## stated verdict; see module doc in `callbackqueue_model.nim`).
+## it -- an unreclaimable leak, not a double-free (see module doc in
+## `callbackqueue_model.nim`).
 ##
 ## Six bmcCheck runs, two ownership shapes x three invariants:
-##   1. FUSED   x refcountConserved   -> must VERIFY (the adopted shape is sound)
-##   2. FUSED   x vacatedSlotZeroed   -> must VERIFY
-##   3. FUSED   x no-assert-fires     -> must VERIFY
-##   4. REJECTED x refcountConserved  -> must FALSIFY (the model has teeth --
-##      required finding per RFC 0001 S9's exit criteria)
+##   1. FUSED    x refcountConserved  -> must VERIFY (the adopted shape is sound)
+##   2. FUSED    x vacatedSlotZeroed  -> must VERIFY
+##   3. FUSED    x no-assert-fires    -> must VERIFY
+##   4. REJECTED x refcountConserved  -> must FALSIFY (the model has teeth)
 ##   5. REJECTED x vacatedSlotZeroed  -> must VERIFY (the rejected shape's
 ##      bug is in the LEDGER, not the raw slot content -- `zeroMem` really
-##      does clear the slot; isolating this precisely is itself part of the
-##      proof that the model is measuring the right thing)
+##      does clear the slot)
 ##   6. REJECTED x no-assert-fires    -> must VERIFY (the bug is a silent
 ##      leak, not a crash -- no primitive-level doAssert ever catches it,
 ##      which is exactly why the ghost model has to exist)
@@ -50,9 +46,9 @@ import ./callbackqueue_model
 
 const
   maxPlanDepth = 12
-    ## Small, stated bound (RFC 0001 S9 budget: "minutes, harness container
-    ## only"). Every rule is O(1) table/seq work; dedup below keeps the
-    ## explored-state count in the low thousands even at this depth.
+    ## Small, deliberate bound. Every rule is O(1) table/seq work; dedup
+    ## below keeps the explored-state count in the low thousands even at
+    ## this depth.
   maxPlanStates = 20_000
   initialQueueCap = 2
     ## Deliberately small so growth (and physical wraparound of the
@@ -65,8 +61,8 @@ type
     tlCallerLocal ## a properly tracked (moved-into) caller-frame local claims it
 
   DequeueShape = enum
-    dsFused          ## the adopted D9 shape: chronosMoveSink-fused vacate
-    dsRejectedCopyMem ## the round-4 rejected shape: copyMem + zeroMem vacate
+    dsFused          ## the adopted shape: chronosMoveSink-fused vacate
+    dsRejectedCopyMem ## the rejected shape: copyMem + zeroMem vacate
 
   Ledger = object
     trueRefCount: Table[int, int]
@@ -96,15 +92,11 @@ type
 
 template guardAsserts(where: string, body: untyped): untyped =
   ## `doAssert` raises a `Defect`, which `bmcCheck`'s own `except
-  ## CatchableError` (proptest/bmc.nim) does NOT catch -- `Defect` and
-  ## `CatchableError` are siblings under `Exception`, not parent/child, so
-  ## an uncaught primitive-level assert would crash the whole BMC sweep
-  ## instead of being reported as a falsification. Converting it here to a
-  ## `CatchableError` is what makes "no assert fires" a genuine,
-  ## BMC-falsifiable claim rather than a silent assumption -- if any
-  ## primitive's precondition were ever violated by a reachable plan, this
-  ## conversion is what surfaces it as `bmcFalsified` instead of an
-  ## uncatchable process abort.
+  ## CatchableError` does NOT catch -- `Defect` and `CatchableError` are
+  ## siblings under `Exception`, not parent/child, so an uncaught
+  ## primitive-level assert would crash the whole BMC sweep instead of
+  ## being reported as a falsification. Converting it here is what makes
+  ## "no assert fires" a genuine, BMC-falsifiable claim.
   try:
     body
   except Defect as chronosVerifyDefect:
@@ -168,8 +160,7 @@ proc doDispose(s: var GhostState, _: int) =
     s.ledger.trackedHolder.del(id)
   # else: this id's only claim was an untracked alias (the rejected
   # shape). Its scope exit triggers NO decrement -- there is no hook for
-  # it to trigger, which is exactly the "unreclaimable" half of the RFC's
-  # verdict. `trueRefCount` is deliberately left untouched.
+  # it to trigger. `trueRefCount` is deliberately left untouched.
   s.ledger.untrackedAlias.excl id
 
 proc disposeEnabled(s: GhostState): bool =
@@ -201,8 +192,7 @@ proc refcountConserved(s: GhostState): bool =
   true
 
 proc vacatedSlotsZeroedWhenEmpty(s: GhostState): bool =
-  ## The chronosDebug canary D9's guardrails describe: no non-nil ghost
-  ## slots survive a full drain. Checked physically against the raw
+  ## No non-nil ghost slots survive a full drain. Checked physically against the raw
   ## backing, not the ledger -- this must hold for BOTH shapes (the
   ## rejected shape's bug is in the ledger, not the raw slot content).
   if s.queue.len == 0:
@@ -284,7 +274,7 @@ proc runBmc(label: string, shape: DequeueShape,
          $maxPlanDepth & ") -- inconclusive, raise maxStates"
     doAssert false, label & ": exhausted budget before a verdict"
 
-echo "=== D9-V Layer 2: bmcCheck ghost-ownership model ==="
+echo "=== Layer 2: bmcCheck ghost-ownership model ==="
 echo "(maxDepth=" & $maxPlanDepth & ", maxStates=" & $maxPlanStates &
      ", initialCap=" & $initialQueueCap & ")"
 

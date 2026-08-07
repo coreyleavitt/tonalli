@@ -22,26 +22,19 @@ import ../[config, effects, futures, osdefs, oserrno, osutils, timer]
 import ./[asyncmacro, callbackqueue, errors]
 when defined(windows):
   import ./contextnode
-    # For `ContextNodeBase`, naming the type of `CompletionData.context`
-    # below (Windows-only type): `futures.nim` merely `import`s it
-    # without re-exporting, so it isn't visible transitively through
-    # `futures`. Unused - so unimported - on non-Windows platforms.
+    # For `ContextNodeBase`, naming `CompletionData.context` below -
+    # `futures.nim` imports it without re-exporting.
 
 export Port
 export deques, effects, errors, timer, results
-# `CallbackQueue` backs the three privatized dispatcher queues below
-# (`callbacks`/`idlers`/`ticks`) and is not itself part of the public
-# surface, mirroring `./mpsc`'s `MpscQueue` just below.
-#
-# `userCallback`/`bareCallback`/`contextCallback`/`newCancelCallback`/
-# `currentAsyncContext`/`context`/`withRestoredContext`/`pinContext`/
-# `captureContextInto` are dispatcher-internal and excluded here so
-# plain `import chronos` doesn't expose them; `import
-# chronos/internal/asyncengine` or `import chronos/futures` still see
-# them. `InternalAsyncCallback`/`InternalCancelCallback` stay exported
-# since they're already publicly nameable via the `AsyncCallback` alias
-# and `InternalFutureBase.internalCancelcb*`; only the capturing
-# constructors need excluding.
+# `CallbackQueue` backs the privatized `callbacks`/`idlers`/`ticks`
+# queues and isn't itself public, mirroring `./mpsc`'s `MpscQueue`.
+# The capturing constructors and context primitives are excluded so
+# plain `import chronos` doesn't expose them, while `import
+# chronos/internal/asyncengine` or `chronos/futures` still can;
+# `InternalAsyncCallback`/`InternalCancelCallback` stay exported since
+# they're already nameable via `AsyncCallback` and
+# `InternalFutureBase.internalCancelcb*`.
 export futures except userCallback, bareCallback, contextCallback,
   newCancelCallback, currentAsyncContext, context, withRestoredContext,
   pinContext, captureContextInto
@@ -336,12 +329,9 @@ elif defined(windows):
       context*: ContextNodeBase
         ## Registrant's context, captured via `captureContextInto` at
         ## the site that arms the overlapped completion (e.g.
-        ## `registerWaitable`, a stream server's `start()`). Nil - the
-        ## default - unless an arm site explicitly captures, which
-        ## reproduces the historical empty-context ("fail-closed")
-        ## behavior for any completion whose arm site doesn't opt in
-        ## (cross-thread posts in `processThreadCallbacks` never carry
-        ## one; that contract is intentional, not a gap).
+        ## `registerWaitable`, a stream server's `start()`). Nil unless
+        ## an arm site explicitly captures, reproducing the
+        ## empty-context fail-closed default for the rest.
 
     CustomOverlapped* = object of OVERLAPPED
       data*: CompletionData
@@ -793,13 +783,8 @@ elif defined(windows):
               OSErrorCode(rtlNtStatusToDosError(res))
         customOverlapped.data.bytesCount = events[i].dwNumberOfBytesTransferred
         # Fire under whatever context the arm site captured into
-        # `CompletionData.context` (registerWaitable, a stream server's
-        # start()-time registration, ...) - `contextCallback` reproduces
-        # `bareCallback`'s empty-context behavior whenever that field is
-        # nil, i.e. for every completion whose arm site never opted in
-        # (cross-thread posts routed through `processThreadCallbacks`
-        # below never populate it - deliberately, see that proc's
-        # comment). See docs/src/contextvars.md.
+        # `CompletionData.context`; nil reproduces `bareCallback`'s
+        # empty-context behavior. See docs/src/contextvars.md.
         let acb = contextCallback(customOverlapped.data.cb,
                                    cast[pointer](customOverlapped),
                                    customOverlapped.data.context)

@@ -42,11 +42,9 @@ const
   mediumMessage = createMessage(MediumRequestSize)
 
 proc inSecondsFloat(d: times.Duration): float =
-  # `inNanoseconds()` returns `int64`; dividing directly against an
-  # untyped-int literal resolves to system's `/(int, int): float`, whose
-  # `int` param is 32-bit on i386 and does not unify with `int64` there.
-  # Converting explicitly to `float` sidesteps the int-width mismatch on
-  # every platform.
+  # Explicit `float()`: dividing the `int64` result of `inNanoseconds()`
+  # directly against an untyped-int literal resolves to system's
+  # `/(int, int): float`, whose `int` is 32-bit on i386.
   float(d.inNanoseconds()) / 1_000_000_000.0
 
 # Create a simple HTTP server for benchmarking
@@ -148,11 +146,7 @@ proc print(results: BenchmarkResult) =
     totalTime: results.totalTime.inSecondsFloat,
     numRequests: results.numRequests,
     reqsps: ((results.numRequests.float / results.totalTime.inSecondsFloat)),
-    # `.float` explicitly, same reasoning as `inSecondsFloat` above and
-    # `sendSpeed`/`recvSpeed` below: `totalBytesSent`/`totalBytesReceived`
-    # are `int64`, and dividing directly against an untyped-int literal
-    # resolves to system's `/(int, int): float`, whose `int` param is
-    # 32-bit on i386.
+    # `.float` explicitly, same i386 reasoning as `inSecondsFloat` above.
     sent: results.totalBytesSent.float / (1024 * 1024),
     received: results.totalBytesReceived.float / (1024 * 1024),
     sendSpeed:

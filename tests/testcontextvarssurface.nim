@@ -8,22 +8,16 @@
 
 ## Public-surface guardrail for continuation-local storage.
 ##
-## Verifies that `import chronos` plus `import chronos/contextvars` —
-## the only two imports a user ever needs — expose ONLY the intended
-## public API and none of the dispatcher-internal primitives.
-##
-## Kept in its own module rather than folded into
-## `testcontextvarsguardrails.nim`: that file imports the internal
-## modules directly (it needs them for white-box checks), which would
-## make every `declared()` check below trivially true. This module
-## imports ONLY the public paths so the checks mean what they say.
+## Verifies that `import chronos` plus `import chronos/contextvars`
+## expose only the intended public API — no dispatcher-internal
+## primitives. Kept separate from testcontextvarsguardrails.nim, which
+## imports internals directly and would make declared() checks vacuous.
 
 import unittest2
 import ../chronos
 import ../chronos/contextvars
-  # Flagged "imported and not used" by the compiler because `declared()`
-  # checks don't mark symbols as used — the import is load-bearing for
-  # every positive assert below; removing it fails them all.
+  # Looks unused to the compiler (declared() doesn't mark usage) but is
+  # load-bearing for every assert below.
 
 {.used.}
 
@@ -51,28 +45,18 @@ static:
     "UnboundContextVarDefect must be a Defect (not a CatchableError) " &
     "— see docs/src/contextvars.md, 'Required variables'"
 
-# A must-bind arm (`var name: T`, no `= default`) must be legal syntax
-# — this was a macro error before W2; this probe (module-scope, so it
-# runs at compile time regardless of whether any test below exercises
-# it) pins that the surface accepts it.
+# A must-bind arm (`var name: T`, no `= default`) must be legal syntax;
+# this probe (module-scope, so it runs regardless of which test below
+# executes) pins that the surface accepts it.
 contextVar:
   var surfaceMustBind*: int
 
 # --- Deliberately absent surface ---------------------------------------------
 #
-# An imperative token API (`setName(v): AsyncContextToken` per arm plus
-# a shared `reset(token)`) is deliberately NOT part of the frozen
-# surface: block-scoped `withName` covers binding within a single
-# logical task, and `currentContext()`/`withContext()` covers
-# independently-fired callbacks — no known shape needs a token. A token
-# API also carries costs the two shipped primitives don't: a
-# Defect-raising misuse surface (LIFO/reuse/never-bound guards), a
-# value-type reuse-guard footgun under token copies, and a semantic
-# collision with `system.reset` (which elsewhere in chronos means
-# "zero this value"). Reintroduce only with a motivating example that
-# `withName` genuinely cannot express. (`reset` itself cannot be
-# negatively asserted here — `system.reset` makes `declared(reset)`
-# true in every module.)
+# An imperative token API (setName/reset) is deliberately not part of
+# the frozen surface — withName and withContext/currentContext cover
+# every known need. (`reset` itself can't be negatively asserted here:
+# system.reset makes declared(reset) true in every module.)
 when declared(AsyncContextToken):
   {.error: "`AsyncContextToken` must not be public: the imperative " &
            "token API was deliberately dropped from the frozen surface. " &
@@ -80,15 +64,10 @@ when declared(AsyncContextToken):
 
 # --- Anti-leak: dispatcher internals must not be reachable -------------------
 #
-# `ContextNodeBase` is the base of the binding chain. Keeping it
-# unnameable here blocks `distinct` -> base conversion of an
-# `AsyncContext` snapshot; the chain's actual immutability guarantee is
-# the PRIVACY of its `next` field (see contextnode.nim's module doc and
-# the subtype probe below — unnameability alone would not stop a user's
-# own macro-emitted slot subtype from reaching an inherited public
-# field). `chronos/futures.nim` imports `ContextNodeBase` from
-# `chronos/internal/contextnode.nim` but never exports it, so `export
-# futures` (asyncengine -> asyncloop -> chronos) does not forward it.
+# ContextNodeBase must stay unnameable here; the chain's actual
+# immutability guarantee is the privacy of its `next` field (see the
+# subtype probe below — unnameability alone wouldn't stop a
+# macro-emitted slot subtype from reaching an inherited public field).
 when declared(ContextNodeBase):
   {.error: "`ContextNodeBase` must not be reachable via `import chronos` " &
            "or `import chronos/contextvars`. See docs/src/contextvars.md, " &
@@ -218,15 +197,9 @@ when declared(captureContextInto):
 
 # --- Dispatcher queue fields and their backing type ---------------------------
 #
-# `DispatcherBase.callbacks`/`idlers`/`ticks` were privatized when their
-# type swapped from `std/deques.Deque` to the move-based `CallbackQueue`
-# (`chronos/internal/callbackqueue.nim`) — the type swap grazed all three
-# fields either way, so external access is closed off at the same time
-# (all touch sites live inside `chronos/internal/asyncengine.nim` and
-# `chronos/internal/asyncfutures.nim`'s `callSoon`-routed call).
-# `getThreadDispatcher()` (this module's only way to reach a live
-# `PDispatcher`) stays public — only the three fields themselves and the
-# queue type backing them are excluded.
+# DispatcherBase.callbacks/idlers/ticks (backed by CallbackQueue) must
+# stay private to chronos/internal/asyncengine.nim; only
+# getThreadDispatcher() itself is public.
 
 static:
   doAssert not compiles(getThreadDispatcher().callbacks),
@@ -246,18 +219,10 @@ when declared(CallbackQueue):
            "— unlike `std/deques.Deque` before it, which stayed exported " &
            "only because the fields it backed were themselves public.".}
 
-# `context` is `InternalAsyncCallback`'s (and `InternalCancelCallback`'s)
-# read-only getter — both declared in
-# `chronos/futures.nim`, used by the dispatcher's `fireWithContext` and
-# `fireCancelCallback` respectively. It has no user-facing purpose: the
-# value it returns is `ContextNodeBase`, which this file already
-# establishes is unnameable here, so `.next` can't be written and the C1
-# cycle attack stays closed even without this check — but the getter
-# itself should still not be reachable via plain `import chronos`.
-# Excluding the `context` identifier in `chronos/internal/asyncengine.
-# nim`'s `export futures except ...` covers both overloads at once (the
-# exclusion is by name, not by signature) — the second assertion below
-# confirms that holds rather than assuming it.
+# `context` is InternalAsyncCallback's (and InternalCancelCallback's)
+# read-only getter, used by the dispatcher's fireWithContext/
+# fireCancelCallback. Excluded from asyncengine.nim's `export futures`
+# by name, which covers both overloads at once.
 static:
   doAssert not compiles(default(AsyncCallback).context),
     "`context` getter must not leak through the public API. It lives " &
@@ -273,7 +238,6 @@ static:
 
 suite "contextvars: public surface":
   test "compile-time guardrails passed":
-    # Reaching this line means every `static:` / `when` check above
-    # passed. The compile-time checks are the actual guardrails; this
-    # test exists only so the test runner reports a green dot.
+    # The static checks above are the real guardrails; this just
+    # gives the runner a green dot.
     check true

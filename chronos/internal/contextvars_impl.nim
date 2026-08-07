@@ -67,10 +67,7 @@ proc contextLookupChain[N: ContextNodeBase; T](
   ## else return `default`. Shared walker: `contextLookup` (ambient
   ## chain) and `contextLookupSnapshot` (caller-supplied chain) both
   ## delegate here, so the lookup semantics have exactly one
-  ## implementation. `{.inline.}` plus the two trivial one-line
-  ## callers below are expected to fold back to exactly the original
-  ## hand-written loop after inlining — verified by generated-C diff,
-  ## see the W2 commit message.
+  ## implementation; `{.inline.}` folds the indirection back out.
   var node = chain
   while node != nil:
     if node of N:
@@ -164,12 +161,11 @@ template contextBindSlot*[N: ContextNodeBase; T](v: T, body: untyped) =
 
 # --- Introspection registry -------------------------------------------------
 #
-# An intrusive, allocation-free registry of every declared `contextVar`
-# arm, so `dumpContext` (chronos/contextvars.nim) can enumerate them
-# without a global `Table` or any other GC-managed collection. Each arm
-# emits one module-level `ContextVarRegistration` global (a plain
-# `object`, not `ref`) and links it into `contextVarRegistryHead` from
-# that module's init statements — see the `contextVar` macro.
+# Intrusive, allocation-free registry of every declared `contextVar` arm,
+# so `dumpContext` can enumerate them without a GC-managed collection.
+# Each arm emits one module-level `ContextVarRegistration` global and
+# links it into `contextVarRegistryHead` from that module's init
+# statements — see the `contextVar` macro.
 
 type
   ContextVarRenderProc* = proc(chain: ContextNodeBase):
@@ -184,44 +180,25 @@ type
   ContextVarRegistration* = object
     ## Intrusive registry node for one `contextVar` arm, emitted as a
     ## module-level global by the macro. Plain `object`, not `ref`:
-    ## `name` (cstring) and `render` (a `{.nimcall.}` proc pointer,
-    ## i.e. a plain code pointer with no closure environment) involve
-    ## no GC-tracked memory, so linking one of these into the registry
-    ## allocates nothing, and reading the list from any thread after
-    ## registration has completed (see `registerContextVar`) needs no
-    ## synchronization.
+    ## `name` and `render` involve no GC-tracked memory, so linking one
+    ## of these into the registry allocates nothing.
     name*: cstring
     render*: ContextVarRenderProc
     registered: bool
     next: ptr ContextVarRegistration
 
 var contextVarRegistryHead: ptr ContextVarRegistration
-  ## Head of the global registry list. Deliberately a single
-  ## process-wide global, NOT `{.threadvar.}`: `contextVar` arms are
-  ## compile-time declarations, not per-task or per-thread state, so
-  ## there is exactly one registry regardless of how many threads run.
-  ## Written only during module init (see `registerContextVar`);
-  ## read-only for the remaining life of the process, so concurrent
-  ## reads from any thread (via `contextVarRegistry`, e.g. from inside
-  ## `dumpContext` called on a non-main thread) are safe without a
-  ## lock.
+  ## Head of the global registry list. A single process-wide global,
+  ## not `{.threadvar.}` — one registry regardless of thread count.
+  ## Thread-safety invariant: written only during module init, which
+  ## Nim runs on the main thread before any `createThread` is
+  ## possible, so it is write-once-then-read-only and needs no lock.
 
 proc registerContextVar*(node: ptr ContextVarRegistration) {.gcsafe, raises: [].} =
-  ## Link `node` into the global registry, idempotently — calling this
-  ## twice on the same node is a no-op the second time. Called once
+  ## Link `node` into the global registry, idempotently. Called once
   ## per `contextVar` arm, from that arm's module-level init
-  ## statements (`var reg = ContextVarRegistration(...);
-  ## registerContextVar(addr reg)`, emitted by the macro).
-  ##
-  ## ASSUMPTION (thread-safety): Nim runs every module's top-level
-  ## ("init") statements once, on the main thread, as part of program
-  ## startup — strictly before user code reaches a point where it
-  ## could call `createThread`. So by the time any second thread
-  ## exists, every `contextVar` arm compiled into the program has
-  ## already registered, and this proc never runs concurrently with
-  ## itself or with a `contextVarRegistry` read. If a future Nim
-  ## toolchain changes that ordering guarantee, this would need a lock
-  ## or an atomic CAS on `contextVarRegistryHead`.
+  ## statements (emitted by the macro). See `contextVarRegistryHead`
+  ## for the thread-safety invariant this relies on.
   if not node.registered:
     node.registered = true
     node.next = contextVarRegistryHead

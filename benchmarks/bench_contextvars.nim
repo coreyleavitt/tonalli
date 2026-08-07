@@ -8,59 +8,27 @@
 
 ## Continuation-local storage (contextvars) cost benchmark.
 ##
-## Self-certifying, both-worlds design: every metric below runs twice in
-## the *same* compiled binary, in the *same* process -- once with the
-## feature unused (no binder ever pushed, so the dispatcher's context
-## guard always observes a nil ambient context) and once with a
-## `contextVar` bound around the hot loop (a live binding chain the
-## guard must save and restore). Each metric prints both numbers and
-## the delta directly, so a single run shows both worlds with no
-## cross-checkout diffing needed.
+## Each metric runs twice in the same binary: once unused (no binder
+## ever pushed, nil ambient context) and once with a `contextVar` bound
+## around the hot loop. Both numbers and their delta are printed
+## together.
 ##
-## Bias controls:
-## - median-of-`Trials` per phase, computed automatically (sort the
-##   sample array, take the middle element) -- never a manual best-of-3;
-## - `GC_fullCollect()` runs before and after every phase, including the
-##   pure-timing phases, not only the two memory metrics;
-## - which world (unused vs. bound) runs first alternates metric to
-##   metric (`runBothWorlds`/`runBothWorldsInt` flip a shared toggle),
-##   so a fixed order cannot let warm-allocator or branch-predictor
-##   carryover masquerade as signal.
+## Bias controls: median-of-`Trials` per phase; `GC_fullCollect()`
+## before and after every phase; unused/bound run order alternates per
+## metric (`runBothWorlds`/`runBothWorldsInt`).
 ##
-## Chain-depth ladder: `contextVar` arms are compile-time macro
-## emissions -- there is no runtime-parametrized "chain of depth N", so
-## the ladder is a fixed, hand-declared set of arms (`chain1` ..
-## `chain16`) composed by a small compile-time unrolling macro
-## (`withChainDepth`) rather than a parametrized sweep. Reading `chain1`
-## at depth D walks D nodes: `chain1`'s binder is the outermost (and
-## therefore oldest, furthest-from-head) of the nested `with` blocks, so
-## it is the worst-case lookup for that depth.
+## Chain-depth ladder: `chain1` .. `chain16` are hand-declared
+## contextVars composed via `withChainDepth`, a compile-time unrolling
+## macro (no runtime-parametrized "chain of depth N" exists). Reading
+## `chain1` at depth D walks all D nodes -- the worst-case lookup for
+## that depth.
 ##
-## Timing method: `getMonoTime().ticks` differences are used directly as
-## nanoseconds rather than going through `Duration`. This is valid
-## because Nim's `std/monotimes` on POSIX is backed by
-## `clock_gettime(CLOCK_MONOTONIC)`, whose `ticks` field is already
-## nanoseconds. It also sidesteps a name clash between chronos's own
-## `Duration`/`milliseconds` (chronos/timer.nim, needed for
-## `sleepAsync`) and `std/times`'s identically-named symbols.
+## Timing uses `getMonoTime().ticks` differences directly as
+## nanoseconds (valid on POSIX, backed by `clock_gettime`).
 ##
-## Cross-commit protocol (base-vs-series comparison; not reproduced by
-## a single run of this file):
-##   1. Check out base commit b71392a into a second worktree, e.g.
-##      `build/base` (`build/` is gitignored, so this file header is the
-##      durable record of the procedure).
-##   2. Build and run this same bench file identically in both
-##      checkouts, once per memory manager:
-##      `nim c -d:release --mm:<orc|refc> --skipParentCfg --skipUserCfg
-##      --outdir:build --nimcache:build/nimcache/$projectName
-##      benchmarks/bench_contextvars.nim`.
-##   3. Diff the two logs by hand. This file's own "unused" arm is the
-##      intra-commit before/after datapoint; the base checkout's
-##      (single-world, no contextvars code present) numbers are the
-##      pre-substrate datapoint. Together they give the full
-##      base -> series-unused -> series-bound progression.
-## This file performs step 2 for a single checkout only; steps 1 and 3
-## are manual.
+## To compare against a base commit: build and run this file
+## identically in both checkouts, once per memory manager, and diff the
+## logs by hand.
 ##
 ## Run via `nimble benchmarks` (release, both benchmarks/bench_*.nim) or
 ## directly:
@@ -114,13 +82,9 @@ contextVar:
   var chain16: int = 0
 
 macro withChainDepth(depth: static int, body: untyped): untyped =
-  ## Compose `depth` nested `with`-blocks (`withChain1` outermost through
-  ## `withChain<depth>` innermost) around `body`. `depth` must be in
-  ## 1..16 -- the hand-declared ladder above. Because `withChain1` is
-  ## outermost, its node is pushed first and therefore sits furthest
-  ## from the chain head once all `depth` binders are active: reading
-  ## `chain1()` inside `body` is the depth-D worst case for
-  ## `contextLookup`'s O(depth) walk.
+  ## Composes `depth` nested `with`-blocks (`withChain1` outermost
+  ## through `withChain<depth>` innermost) around `body`. `depth` must
+  ## be in 1..16, the hand-declared ladder above.
   doAssert depth in 1 .. 16, "withChainDepth: depth out of the hand-declared ladder"
   result = body
   for i in countdown(depth, 1):
@@ -299,25 +263,15 @@ proc benchMemPendingFutureBound(n: int): int =
 
 # --- metric 5: mem / queued callback ------------------------------------------
 #
-# `callSoon` always schedules onto the *one* per-thread dispatcher's
-# `Deque[AsyncCallback]` (chronos/internal/asyncengine.nim) -- there is
-# no public constructor for a standalone `AsyncCallback` seq to measure
-# in isolation. A deque's backing buffer capacity only grows, never
-# shrinks, so measuring this metric repeatedly (median-of-N) or
-# back-to-back for both worlds on the same thread collapses to ~0
-# bytes/op after the first measurement warms the capacity -- an
-# artifact of amortized growth, not signal. Both worlds instead each
-# get a freshly spawned OS thread, which chronos gives its own
-# per-thread dispatcher (`{.threadvar.}`-rooted) starting from the same
-# pristine initial capacity, so the two measurements are apples-to-
-# apples. Single-shot per world (no median-of-N) is therefore the
-# correct, not merely convenient, method for this one metric.
+# callSoon always queues onto the one per-thread dispatcher's Deque,
+# whose backing buffer capacity only grows -- so median-of-N or
+# back-to-back measurement on the same thread would collapse to ~0
+# bytes/op after the first run warms the capacity. Each world instead
+# gets a fresh OS thread with its own pristine-capacity dispatcher.
 
 var queuedCallbackMemResult: int
-  ## Written by `queuedCallbackMemThread` on its own thread, read on the
-  ## main thread strictly after `joinThread` -- `joinThread` establishes
-  ## the happens-before edge, so this is race-free despite being a plain
-  ## global rather than an atomic.
+  ## Set by `queuedCallbackMemThread` on its own thread, read on the
+  ## main thread after `joinThread` establishes the happens-before edge.
 
 proc queuedCallbackMemThread(bound: bool) {.thread, nimcall.} =
   var count = 0
@@ -405,7 +359,7 @@ proc runReport() =
     sizeofProbe.complete()
   echo ""
 
-  echo "-- five Sec.1 metrics, both worlds (unused vs. one contextVar bound around the hot loop) --"
+  echo "-- five metrics, both worlds (unused vs. one contextVar bound around the hot loop) --"
   runBothWorlds("callSoon schedule+fire",
     proc(): float = benchCallSoonUnused(CallSoonN),
     proc(): float = benchCallSoonBound(CallSoonN))

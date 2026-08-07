@@ -16,11 +16,9 @@ import ".."/[asyncloop, config, handles, bipbuffer, osdefs, osutils, oserrno]
 import ../futures except userCallback, bareCallback, contextCallback,
   newCancelCallback, currentAsyncContext, context, withRestoredContext,
   pinContext
-  # Only `captureContextInto` is used here (Windows accept-machinery
-  # registration-time capture, see `start2()`/`accept()` below) - same
-  # exclusion list `asyncengine.nim` applies when re-exporting
-  # `futures`, kept in sync so this import can't accidentally widen
-  # chronos's public surface through `stream.nim`.
+  # Only `captureContextInto` is used here; exclusion list kept in sync
+  # with `asyncengine.nim`'s so this import can't widen the public
+  # surface through `stream.nim`.
 import ./[common, ipnet]
 
 export results
@@ -1859,15 +1857,10 @@ proc start2*(server: StreamServer): Result[void, OSErrorCode] =
            "unless you have processing callback configured!")
   if server.status == ServerStatus.Starting:
     when defined(windows):
-      # Registration-time capture for the accept-loop's persistent
-      # `CompletionData` (armed once at `createStreamServer()`, never
-      # rebuilt by `acceptLoop`'s re-arm on each subsequent connection -
-      # see `CompletionData.context`'s doc comment). Deliberately here,
-      # not at `createStreamServer()`: this call is the Windows
-      # equivalent of the POSIX path's `addReader2(server.sock, ...)`
-      # inside `resumeAccept()`, which is what actually captures via
-      # `userCallback` there - i.e. the registrant's context is the one
-      # bound when `start()` runs, not when the server object was built.
+      # Registration-time capture for the accept loop's persistent
+      # `CompletionData`, mirroring the POSIX path's capture inside
+      # `resumeAccept()`'s `addReader2` call - the registrant's context
+      # is the one bound when `start()` runs, not when the server was built.
       captureContextInto(server.aovl.data.context)
     ? server.resumeAccept()
     server.status = ServerStatus.Running

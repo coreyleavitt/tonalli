@@ -16,12 +16,9 @@ import ../chronos/internal/contextvars_impl  # chainLen, chainBalance
 
 {.used.}
 
-# Exercise contextVar's tolerance for arm names arriving as AST nodes
-# other than a bare identifier — a prerequisite for composing
-# contextVar from other macros. This macro builds the name via plain
-# `ident` (nnkIdent); `declareViaSym` below builds it via
-# `genSym(nskVar)` (nnkSym), the form that appears when composing
-# macros at semantic-token boundaries.
+# contextVar must accept arm names built as nnkIdent (this macro) or
+# nnkSym (declareViaSym below) — the two AST shapes produced by macro
+# composition.
 macro declareViaMacro(): untyped =
   let nameSym = ident("composedInt")  # nnkIdent — baseline
   result = newCall(bindSym"contextVar",
@@ -31,10 +28,7 @@ macro declareViaMacro(): untyped =
 
 declareViaMacro()
 
-# nnkSym path: a macro constructs the name via `genSym(nskVar)`, which
-# produces `nnkSym`. The contextVar macro must accept this form for
-# advanced composition (matching the `eqIdent`/`isIdentLike` hygiene
-# pattern common in macro-heavy downstream libraries).
+# genSym(nskVar) produces nnkSym — the macro must accept this form too.
 macro declareViaSym(): untyped =
   let nameSym = genSym(nskVar, "symInt")  # nnkSym — hygiene path
   result = newCall(bindSym"contextVar",
@@ -51,14 +45,12 @@ contextVar:
   var x: int = 0              # single-char: name[1..^1] is empty string
   var User: string = ""       # already capitalized — `toUpperAscii` no-op
 
-# No `*` marker — module-private. Reader/binder must still work from
-# within this same module (privacy only affects cross-module
-# reachability; see testcontextvarsexport.nim for that side).
+# No `*` marker — module-private; reader/binder must still work within
+# this same module.
 contextVar:
   var privateOnlyVar: int = 0
 
-# Mixed block — starred and non-starred arms in the same `contextVar`
-# block must each honor their own marker independently.
+# Mixed block: starred and non-starred arms each honor their own marker.
 contextVar:
   var mixedPublic*: int = 10
   var mixedPrivate: int = 20
@@ -96,9 +88,7 @@ suite "contextvars: declaration + scoped binding":
     check tracerInt() == 0
 
   test "sequential repeated binding of the same var":
-    # Bind X, exit, bind X again. Distinct from the nested-binding test
-    # (which proves LIFO restore for overlapping binds) — this proves
-    # that the binder is re-entrant cleanly after a full unwind.
+    # Re-entrant binding after a full unwind (distinct from nested/LIFO).
     withTracerInt(1):
       check tracerInt() == 1
     check tracerInt() == 0
@@ -120,44 +110,30 @@ suite "contextvars: declaration + scoped binding":
     check tracerStr() == "default"
 
   test "contextVar accepts macro-constructed name (nnkIdent path)":
-    # Baseline: macro-emitted contextVar with bare-ident name works
-    # end-to-end. Anchors the "composed from macro" usage pattern.
+    # Baseline: macro-emitted contextVar with a bare-ident name works end-to-end.
     withComposedInt(11):
       check composedInt() == 11
     check composedInt() == 0
 
   test "contextVar handles single-character names":
-    # The casing logic does `toUpperAscii(name[0]) & name[1 .. ^1]`.
-    # Single-char names hit the edge case where `name[1 .. ^1]` is
-    # empty. Verify the resulting `withX` binder still works.
+    # Casing logic does toUpperAscii(name[0]) & name[1..^1]; single-char
+    # names hit the edge case where name[1..^1] is empty.
     withX(123):
       check x() == 123
     check x() == 0
 
   test "contextVar handles already-capitalized names":
-    # `toUpperAscii` of an already-uppercase letter is a no-op.
-    # `User` -> `UserSlot` + `withUser`. Verify nothing collides
-    # (e.g., the macro doesn't double-capitalize).
+    # toUpperAscii on an already-uppercase letter is a no-op; verify the
+    # macro doesn't double-capitalize (User -> UserSlot + withUser).
     withUser("alice"):
       check User() == "alice"
     check User() == ""
 
   test "contextVar accepts nnkSym name from macro composition":
-    # `declareViaSym` constructs the arm name via `genSym(nskVar)`,
-    # which produces `nnkSym`. This test proves the macro tolerates
-    # the gensym path — required for advanced macro composition
-    # (matches the `eqIdent`/`isIdentLike` hygiene pattern).
-    #
-    # `$genSym(nskVar, "symInt")` returns the base name "symInt", so
-    # the emitted slot type / reader / binder all get valid Nim
-    # identifier names. Whether the reader template is reachable from
-    # this test scope depends on gensym scoping rules — and gensyms
-    # don't leak out of the producing macro by default. We don't rely
-    # on the reader here; only the `withSymInt` binder (which is
-    # constructed via `ident("with"&name)`, always a fresh exportable
-    # identifier) is exercised. This test proves the macro accepts
-    # the nnkSym AST shape at all; end-to-end machinery is covered
-    # by the nnkIdent baseline above.
+    # Proves the macro tolerates an nnkSym arm name (from genSym).
+    # Only the withSymInt binder is exercised — the reader isn't
+    # guaranteed reachable here since gensyms don't leak out of the
+    # producing macro by default.
     withSymInt(99):
       discard
     check true
@@ -177,26 +153,18 @@ suite "contextvars: declaration + scoped binding":
     check mixedPublic() == 10
 
   test "currentContext snapshot used after binder exit returns correct value":
-    # Architectural soundness invariant: a snapshot captured inside
-    # `withName(v): body` must remain usable after `body` exits and
-    # the binder unwinds. A slot that stored a pointer to a
-    # stack-local `v` instead of owning it inline would fail this —
-    # the snapshot would hold a node whose value pointer targets the
-    # now-popped stack frame of the `withName` expansion, so reading
-    # through the snapshot would dereference freed memory.
+    # A snapshot captured inside a binder must remain valid after the
+    # binder unwinds — the slot must own its value, not point at a
+    # since-popped stack frame.
     proc capture(): AsyncContext =
       withTracerStr("hello from a long-gone stack frame"):
         result = currentContext()
-      # binder exits — pointer-to-stack-local now dangles
 
-    # Force the freed stack slot to be reused with different bytes,
-    # so a UAF read returns garbage rather than the original value.
+    # Overwrite the freed stack slot so a use-after-free read would
+    # return garbage rather than the original value.
     proc clobber() =
       var buf: array[2048, byte]
       for i in 0 ..< 2048: buf[i] = 0xAB.byte
-      # `buf` lives in the same frame range that `capture`'s local
-      # occupied; if the implementation stored `addr` of that local,
-      # the snapshot now points into this buffer.
       doAssert buf[0] == 0xAB.byte  # prevent dead-code elimination
 
     let snapshot = capture()
@@ -205,29 +173,9 @@ suite "contextvars: declaration + scoped binding":
       check tracerStr() == "hello from a long-gone stack frame"
 
 # --- Binder contract + chain-state invariants ------------------------------
-#
-# `AsyncCallback.context` is a native `ref ContextNodeBase`; Nim's MM
-# refcounts the captured chain at every drop pattern. That property is
-# a language guarantee, not a chronos invariant — we inherit it from
-# the same mechanism that makes `seq[ref T]`, `Table[K, ref V]`, etc.
-# work. We do NOT test it per-drop-pattern.
-#
-# What we DO test is the chronos-side binder contract: every `with*`
-# binder pushes exactly one slot and pops it on every exit path. Two
-# deterministic, MM-portable mechanisms:
-#
-# 1. `chainLen()` — direct inspection of `currentAsyncContext`.
-#    After a balanced binder pair the chain depth must return to
-#    baseline.
-# 2. `chainBalance` — threadvar counter `inc`'d at slot push,
-#    `dec`'d at slot pop. Nonzero at suite end signals an unbalanced
-#    binder. Checked in `testutils.nim` alongside `pendingFuturesCount`.
-#
-# Both are pure sync — no dispatcher needed — so they live here in
-# `testcontextvars.nim` rather than in `testcontextvarsasync.nim`.
-# Both are debug-only (`when defined(chronosDebug)` in
-# `contextvars_impl.nim`); the chronos test build sets `-d:chronosDebug`,
-# so the tests are observable in CI.
+# Verifies every `with*` binder pushes exactly one slot and pops it on
+# every exit path, via chainLen() and the chainBalance counter. Both are
+# debug-only (when defined(chronosDebug)); the test build defines it.
 
 contextVar:
   var probeInt: int = 0
@@ -330,10 +278,8 @@ suite "contextvars: snapshot readers":
     var snap: AsyncContext
     withSnapOuter(22):
       snap = currentContext()
-    # Outside the binder: the ambient reader has reverted to the
-    # default, but the snapshot still remembers the binder's value —
-    # proving the snapshot reader walks `snap`'s own chain, not the
-    # (now-reverted) ambient one.
+    # The ambient reader has reverted, but the snapshot still walks its
+    # own captured chain rather than the (now-reverted) ambient one.
     check snapOuter() == 0
     check snapOuter(snap) == 22
 
@@ -389,10 +335,8 @@ suite "contextvars: must-bind (default-less) arms":
 # --- dumpContext / $ --------------------------------------------------------
 
 type NoDollarPtr = ptr int
-  ## Deliberately has no `$`: a plain `object` picks one up for free
-  ## from `std/objectdollar`'s generic field-by-field renderer, which
-  ## would not exercise dumpContext's placeholder path. A bare pointer
-  ## type has no such fallback.
+  ## Has no `$`: unlike an `object` (which gets one for free from
+  ## `std/objectdollar`), a bare pointer type has no such fallback.
 
 static:
   doAssert not compiles((block:
@@ -430,9 +374,8 @@ suite "contextvars: dumpContext and $":
       check found
 
   test "unbound must-bind var: bound=false, placeholder value, dumpContext does not raise":
-    # Introspection is total: dumpContext must complete normally even
-    # though `dumpMustBind()` itself would raise `UnboundContextVarDefect`
-    # right now.
+    # dumpContext must complete normally even though dumpMustBind()
+    # itself would raise UnboundContextVarDefect here.
     let entries = dumpContext(currentContext())
     var found = false
     for e in entries:

@@ -405,13 +405,10 @@ proc futureContinue*(fut: FutureBase) {.raises: [], gcsafe.} =
   # Every call to an `{.async.}` proc is redirected to call this function
   # instead with its original body captured in `fut.closure`.
 
-  # The iterator may bind contextVars internally (via macro-generated
-  # `withName` templates). If it suspends mid-binder, the binder's
-  # `finally` doesn't run (suspension is a plain `return`, not an
-  # unwind), leaving `currentAsyncContext` pointing at a partially
-  # pushed chain unless restored. `pinContext` unconditionally saves
-  # and restores `currentAsyncContext` around this call on every entry,
-  # including resumes - there is no safe fast path to skip it.
+  # A suspend inside a `withName` binder is a plain `return`, not an
+  # unwind, so the binder's `finally` doesn't run - `pinContext`
+  # unconditionally saves/restores `currentAsyncContext` here on every
+  # entry and resume; there is no safe fast path to skip it.
   {.cast(gcsafe).}:
     pinContext:
       while true:

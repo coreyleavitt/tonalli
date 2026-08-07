@@ -1,16 +1,12 @@
-## RFC 0001 D9-V / S9 — Layer 1: symex proofs of the index primitives.
-## Updated W3 for `head`/`tail`'s `int` -> `uint` wraparound-counter change.
+## Layer 1: symex proofs of the index primitives (`head`/`tail` are `uint`
+## wraparound counters).
 ##
 ## **FORK-ONLY.** See `verify/README.md`. Run via `verify/run.sh symex`.
 ##
 ## Each `checkXxx` proc assumes exactly the precondition its primitive's own
 ## `doAssert` states (via `symexAssume`, never re-derived informally), calls
-## the REAL primitive through `primitives.nim`'s thin exported `*V` wrappers
-## (`primitives.nim` `include`s `chronos/internal/callbackqueue.nim` and
-## re-exports each of the five index primitives under a `V`-suffixed name -
-## see that file's module doc for why this file goes back to plain `import
-## ./primitives` rather than a further `include`), and asserts the
-## postcondition (via `symexAssert`). `symexFind(checkXxx,
+## the REAL primitive through `primitives.nim`'s thin exported `*V` wrappers,
+## and asserts the postcondition (via `symexAssert`). `symexFind(checkXxx,
 ## tAssertionViolation())` returning `sxUnsat` is a totality+safety PROOF: no
 ## input satisfying the assumed precondition reaches ANY assertion violation
 ## -- neither the checker's own postcondition assert nor the primitive's
@@ -19,49 +15,36 @@
 ## path - the wrapper is logic-free, so this proves the real primitive, not
 ## an approximation of it).
 ##
-## Two named edges (RFC 0001 S9 exit criteria, restated for `uint`):
+## Two named edges:
 ##   * `checkSlotIndexRange` assumes NOTHING about `pos` -- proved over the
 ##     FULL `uint` domain, which subsumes the `prependNoGrow` wraparound edge
 ##     (`dec head` at `head == 0` wraps to `high(uint)` rather than going
-##     negative now; a general proof over all `pos` is strictly stronger than
-##     a proof scoped to "one decrement below zero", exactly as the old
-##     int-domain proof was).
+##     negative).
 ##   * `checkGrowSweep` mirrors `callbackqueue_model.grow`'s two-segment index
 ##     arithmetic (`startIdx`, `firstSeg`, `rest`) and proves both segments
 ##     stay in bounds and jointly cover exactly `n` items once each -- the
 ##     wrapped-region growth sweep, at the index level (heap-slot relocation
 ##     soundness itself is out of symex's reach; that is `bmc_ghost.nim`'s
-##     ghost-ownership job for the elements it can model, and the standing
-##     runtime-verified claim in D9's prose for the rest).
+##     ghost-ownership job).
 ##
-## **W3's bounds argument, replacing the pre-W3 ledger entries below:**
-## under the OLD monotonic-`int` discipline, `checkQueueLen`/`checkIsFull`
-## needed `head`/`tail` bounded to `[-2^40, 2^40]` because unconstrained
-## `tail - head` genuinely overflowed `int` (Nim's checked signed
-## arithmetic raises `OverflowDefect`) -- and `tail >= head` had to be
-## assumed outright, an ordering relationship the design relied on holding
-## forever (a latent long-run risk this whole W3 change exists to remove).
-## Under the NEW `uint` discipline, unsigned subtraction is congruent mod
-## `2^64` by definition -- it cannot overflow, and no ordering between
-## `head`/`tail` is assumed at all (meaningless under wraparound; see
-## `callbackqueue.nim`'s `queueLen` doc). The precondition that replaces
-## `tail >= head` is the REAL invariant the design actually maintains --
-## `isFull`'s own `doAssert`: the wrapped distance from `head` to `tail`
-## never exceeds capacity. `checkQueueLen`/`checkIsFull` below assume
-## exactly that (`(tail - head) <= uint(cap)`, unsigned compare) instead of
-## an ordering relationship, and are proved over the FULL `uint` domain for
-## `head`/`tail` -- no `2^40` bound needed on them at all; only `cap` still
-## carries the `realisticCapBound` scope-out (no physical queue holds 2^40
-## pending callbacks), same as `growTargetCap`'s multiplication.
+## **Bounds argument.** Unsigned subtraction is congruent mod `2^64` by
+## definition, so it cannot overflow, and no ordering between `head`/`tail`
+## is assumed at all (meaningless under wraparound; see `callbackqueue.nim`'s
+## `queueLen` doc). The precondition is the REAL invariant the design
+## actually maintains -- `isFull`'s own `doAssert`: the wrapped distance
+## from `head` to `tail` never exceeds capacity. `checkQueueLen`/
+## `checkIsFull` below assume exactly that (`(tail - head) <= uint(cap)`,
+## unsigned compare), and are proved over the FULL `uint` domain for
+## `head`/`tail` -- no bound needed on them at all; only `cap` carries the
+## `realisticCapBound` scope-out (no physical queue holds 2^40 pending
+## callbacks), same as `growTargetCap`'s multiplication.
 ##
-## **A verification-tooling finding (recorded in the ledger, not a D9
-## defect -- see `primitives.nim`'s module doc for the full isolation):**
-## `symexAssume`/`symexAssert` of the inline shape
-## `(cap and (cap - 1)) == 0` crashes the symex walker
+## **A verification-tooling finding:** `symexAssume`/`symexAssert` of the
+## inline shape `(cap and (cap - 1)) == 0` crashes the symex walker
 ## (`lowerBool: expected Bool, got svBV64`). `isPow2` below hoists the
-## subtraction to a named local exactly as the real `capMask` now does,
-## which is the confirmed workaround; every precondition assumption in this
-## file goes through it rather than re-deriving the inline shape.
+## subtraction to a named local exactly as the real `capMask` does, which
+## is the confirmed workaround; every precondition assumption in this file
+## goes through it rather than re-deriving the inline shape.
 
 import proptest/symex
 import ./primitives
@@ -105,15 +88,8 @@ proc checkSlotIndexRange(pos: uint, cap: int) =
 # ---------------------------------------------------------------------------
 
 proc checkQueueLen(head, tail: uint, cap: int) =
-  # No assumption on head/tail ordering, and no domain bound on head/tail
-  # themselves - unsigned subtraction cannot overflow, so both are
-  # unconstrained over the FULL `uint` domain. The precondition that
-  # replaces "tail >= head" is the invariant the design actually
-  # maintains: the wrapped distance from `head` to `tail` never exceeds
-  # capacity (this is `isFull`'s own `doAssert`, restated here as an
-  # assumption for `queueLen` alone). `cap` keeps the same
-  # `realisticCapBound` scope-out as `growTargetCap` (no physical queue
-  # ever holds 2^40 pending callbacks).
+  # No assumption on head/tail ordering; unconstrained over the FULL
+  # `uint` domain (see module doc's bounds argument).
   symexAssume(cap > 0 and cap <= realisticCapBound and
               (tail - head) <= uint(cap))
   let n = queueLenV(head, tail)
@@ -190,7 +166,7 @@ proc runProof(name: string, r: SymexResult) =
     echo "RAISED (unexpected non-assertion exception): " & $r.raisedTypeId
     doAssert false, name & ": symex found an unexpected raise path"
 
-echo "=== D9-V Layer 1: symex proofs of the index primitives ==="
+echo "=== Layer 1: symex proofs of the index primitives ==="
 
 runProof("capMask: totality + m == cap-1",
          symexFind(checkCapMask, tAssertionViolation()))
