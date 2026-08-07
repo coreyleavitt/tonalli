@@ -161,20 +161,30 @@ proc prependNoGrow*[T](q: var CallbackQueue[T], item: chronosSink T) =
   let idx = slotIndex(q.head, q.data.len)
   q.data[idx] = item
 
-when defined(chronosDebug):
+when defined(chronosDebug) and chronosUseSink:
+  # `chronosUseSink` (not just `chronosDebug`) gates this: the "vacated
+  # slot ends up default-valued" invariant only holds where a move
+  # actually happens. On the non-sink codepath (Nim < 2.0.6),
+  # `chronosMoveSink` is `config.nim`'s identity passthrough by design
+  # (see its own doc comment) - nothing ever clears the slot there, so
+  # this check would fail on every single `popFirst()` call, not just a
+  # genuinely bypassed fused-move discipline. Latent since `CallbackQueue`
+  # was introduced (S10): unreachable on Nim 1.6 until the `default(T)`
+  # fix immediately below let 1.6 builds reach `popFirst()` at all for
+  # the first time.
   proc chronosCheckVacatedSlot[T](item: T) {.inline.} =
     ## Debug-only guardrail: every slot `popFirst` vacates must end up
     ## default-valued, catching a slot-vacating path that bypasses the
     ## fused-move discipline below. A standalone generic `proc`, not
-    ## inlined into `popFirst`'s `when defined(chronosDebug):` body: Nim
-    ## 1.6 fails to resolve `default(T)`'s `T` as the template's generic
-    ## parameter when the call sits inside a `when` block nested in a
-    ## generic `template` (`Error: type mismatch: got <InternalAsyncCallback>`
-    ## at the call to `default`, cross-checked against a known Nim
-    ## generic-template-plus-`when` type-resolution bug of the same
-    ## shape) - a `proc`'s own generic-instantiation path does not hit
-    ## this, so hoisting the check here is the fix, not a workaround for
-    ## a real ambiguity in what's being asserted.
+    ## inlined into `popFirst`'s `when` body: Nim 1.6 fails to resolve
+    ## `default(T)`'s `T` as the template's generic parameter when the
+    ## call sits inside a `when` block nested in a generic `template`
+    ## (`Error: type mismatch: got <InternalAsyncCallback>` at the call
+    ## to `default`, cross-checked against a known Nim generic-template-
+    ## plus-`when` type-resolution bug of the same shape) - a `proc`'s
+    ## own generic-instantiation path does not hit this, so hoisting the
+    ## check here is the fix, not a workaround for a real ambiguity in
+    ## what's being asserted.
     doAssert item == default(T),
       "CallbackQueue: a vacated slot retained a non-nil ghost value after " &
       "popFirst() — a slot-vacating path bypassed the fused-move discipline"
@@ -192,7 +202,7 @@ template popFirst*[T](q: var CallbackQueue[T]): T =
   doAssert q.tail != q.head, "CallbackQueue.popFirst(): queue is empty"
   let chronosQueueIdx = slotIndex(q.head, q.data.len)
   inc q.head
-  when defined(chronosDebug):
+  when defined(chronosDebug) and chronosUseSink:
     let chronosPopped = chronosMoveSink(q.data[chronosQueueIdx])
     chronosCheckVacatedSlot(q.data[chronosQueueIdx])
     chronosPopped
