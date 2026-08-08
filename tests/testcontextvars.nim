@@ -15,7 +15,7 @@
 ## process-lifetime lock on `newContextVar` doesn't impose an import
 ## order on this file relative to the other contextvars test files.
 
-import std/[algorithm, sequtils, strutils, tables]
+import std/[algorithm, macros, sequtils, strutils, tables]
 import unittest2
 import ../chronos/contextvars
 
@@ -891,3 +891,26 @@ static:
   doAssert not compiles((let t34WrongKeyword {.contextVar.}: int)),
     "a must-bind {.contextVar.} key spelled with `let` must not compile " &
     "— must-bind keys require `var`"
+
+# --- {.contextVar.} grammar enforcement (single identifier) ------------------
+# Nim's own pragma-on-identifier syntax admits only one name per
+# `{.contextVar.}`-tagged declaration (a second name in the same
+# `IdentDefs` is already a parser-level error, before the macro ever
+# runs), so the macro's own `def.len != 1` arity check — guarding a
+# `let`/`var` *section* carrying more than one declaration — has no
+# ordinary-syntax way to reach it. `t35MultiIdentDecl` drives it
+# directly by handing the macro a hand-built two-declaration section,
+# the same macro-composition approach `t32Wrapper` above uses to reach
+# the nnkIdent/nnkSym duality.
+
+macro t35MultiIdentDecl(): untyped =
+  var multi = newNimNode(nnkLetSection)
+  multi.add newIdentDefs(ident("t35A"), newEmptyNode(), newLit(1))
+  multi.add newIdentDefs(ident("t35B"), newEmptyNode(), newLit(2))
+  getAst(contextVar(multi))
+
+static:
+  doAssert not compiles((t35MultiIdentDecl())),
+    "a {.contextVar.} section naming more than one declaration must " &
+    "not compile — the pragma supports exactly one identifier per " &
+    "declaration"

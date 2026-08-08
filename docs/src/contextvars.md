@@ -534,6 +534,13 @@ check; the test suite is its only caller today. No lock is paid on any
 path in a release build, and no check runs at all outside
 `chronosDebug`.
 
+Applications are encouraged to call `lockContextVarConstruction()` at
+their own thread-creation boundary in `chronosDebug` builds and in CI,
+rather than leaving it to the test suite alone: a construction-discipline
+violation — a key constructed after another thread already exists — is
+far cheaper to catch there than to chase down as an intermittent failure
+in production.
+
 Duplicate name strings are representable — two independently-constructed
 keys can share a `name`, matching PEP 567 — and accepted as
 cosmetic-only: `dumpContext` may show two entries with the same label, and
