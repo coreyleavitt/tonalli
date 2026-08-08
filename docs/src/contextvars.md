@@ -485,13 +485,19 @@ That invariant only holds if every node reachable through an
 which in turn requires that `AsyncContext` itself can't be fabricated
 from an arbitrary `ContextNodeBase`. `AsyncContext* = object` wraps its
 chain head in a field private to this module for exactly this reason:
-the only route to a populated value is `currentContext()`'s own capture,
-so nothing outside `chronos/contextvars.nim` — not even code that
-imports `chronos/internal/contextnode` directly — can hand `withContext`
-a snapshot whose chain wasn't built the normal way. The soundness
-argument above is therefore by construction against the entire import
-surface, not merely against callers who stick to `chronos/contextvars.nim`'s
-own exports.
+the only route to a populated value in safe Nim is `currentContext()`'s
+own capture, so no safe construction — not even from code that imports
+`chronos/internal/contextnode` directly — can hand `withContext` a
+snapshot whose chain wasn't built the normal way. This closes every
+construction route expressible in safe Nim, including from direct
+internal-module imports. It does not, and cannot, cover
+`cast[AsyncContext](node)`: a same-size bit reinterpretation bypasses
+field privacy the same way it bypasses every other Nim type's
+invariants, `cast` being the language's declared-unsafe escape hatch —
+a runtime discriminant would not help either, since the discriminant
+itself would be forgeable by the same cast. The soundness argument
+above is therefore by construction against every safe-Nim construction
+route, not against `cast`.
 
 The key field itself is stored as a raw `pointer` (`cast[pointer](cv)`),
 not a traced `ContextVarBase` reference. This is load-bearing, not a style

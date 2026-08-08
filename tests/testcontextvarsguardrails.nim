@@ -304,9 +304,12 @@ suite "contextvars guardrails: g10 private-key registration closes chain-node UA
 # --- Guardrail 11: AsyncContext cannot be forged from a bare chain node -----
 #
 # `AsyncContext` wraps its chain-head node in a private field precisely so
-# that no code outside chronos/contextvars.nim — not even code that
-# imports chronos/internal/contextnode directly, as this file does above —
-# can construct one from an arbitrary `ContextNodeBase`. Before this
+# that no safe-Nim code outside chronos/contextvars.nim — not even code
+# that imports chronos/internal/contextnode directly, as this file does
+# above — can construct one from an arbitrary `ContextNodeBase`. This
+# guardrail closes safe construction routes; it does not and cannot cover
+# `cast[AsyncContext](node)`, which remains outside the guarantee the same
+# way `cast` sits outside every other Nim type's invariants. Before this
 # guardrail existed, `AsyncContext* = distinct ContextNodeBase` let a
 # `ContextNodeBase` allocated by plain `new` convert straight into an
 # `AsyncContext` that `withContext` would accept unvalidated; the chain
