@@ -57,6 +57,14 @@ static:
     surfaceProbeKey.withValue(1):
       discard)),
     "ContextVar[T].withValue must be public and callable"
+  doAssert compiles(surfaceProbeKey in currentContext()),
+    "`contains`(AsyncContext, ContextVar[T]): bool (`cv in ctx`) must " &
+    "be public and callable"
+  doAssert compiles(surfaceProbeKey.isBound),
+    "ContextVar[T].isBound must be public and callable"
+  doAssert compiles(hash(surfaceProbeKey)),
+    "hash(cv: ContextVarBase): Hash must be public and callable, making " &
+    "ContextVar[T] usable as a Table/HashSet key"
   doAssert compiles(surfaceProbeKey.name),
     "ContextVar[T].name must be public and callable"
   doAssert compiles(currentContext() == currentContext()),

@@ -216,6 +216,27 @@ read's behavior on a miss differs. `dumpContext` is the one exception to
 "behaves like the read" — see "Inspecting contexts" for why introspection
 never raises.
 
+**Checking boundness without reading.** `cv in ctx` (`` `contains`(ctx:
+AsyncContext, cv: ContextVar[T]): bool ``) and its ambient counterpart
+`cv.isBound` answer "is this key bound here?" without raising and without
+returning a value — the non-raising complement to the Defect above, for
+callers that want to branch on boundness rather than catch a Defect or
+fall back to a default:
+
+```nim
+if traceId in currentContext():
+  logSpan(traceId.value)
+```
+
+This is identity-correct, unlike inferring boundness from `dumpContext`'s
+`bound` field: two keys can share a `name` (see "Registry and key
+lifetime"), and `dumpContext` groups its output by that name, so it
+cannot distinguish which of two same-name keys is the one actually bound.
+`in`/`isBound` test the key itself, by identity, so they answer correctly
+even in that case. Works identically for a defaulted key — `cv in ctx` is
+`false` when unbound even though `cv.value` would still return the
+default.
+
 ## Binding multiple variables
 
 There is no combined "bind several at once" form — binding multiple keys
@@ -424,12 +445,17 @@ discipline.
 A key (`ContextVar[T]`) is a `ref object` inheriting a non-generic
 `ContextVarBase`, which carries the name, the `dumpContext` render hook,
 and the registry link. Ref identity IS key identity: `ContextVar[T]`
-defines no custom `==`/`hash`, so two keys compare equal only when they're
-the same allocation — `let alias = someKey` compares equal to `someKey`
-(the intended re-export pattern), while two keys built from identical
-constructor arguments are distinct (see "Keys as values"). A
-value-`object` key was rejected for the same reason: a copy would get its
-own address and silently stop being "the same key."
+defines no custom `` `==` `` (Nim's builtin ref `==` is already identity
+comparison), and `hash*(cv: ContextVarBase): Hash` is a pointer-identity
+hash paired with that same `==` — never a custom, value-based one — so
+two keys compare and hash equal only when they're the same allocation —
+`let alias = someKey` compares equal to `someKey` (the intended re-export
+pattern), while two keys built from identical constructor arguments are
+distinct (see "Keys as values"). This identity hash is what makes
+`ContextVar[T]` usable as a genuine `Table`/`HashSet` key, not merely a
+value stored under some other key. A value-`object` key was rejected for
+the same reason as the `==`/`hash` pairing: a copy would get its own
+address and silently stop being "the same key."
 
 A context is an immutable, singly-linked chain of nodes, one per active
 binding, each carrying the key it was bound under alongside the bound
@@ -708,16 +734,20 @@ codebase already paid on its one field.
 
 - `tests/testcontextvars.nim` — key construction and registry (name/
   hasDefault/private accessors, private keys absent from dumpContext, two
-  identically-constructed keys staying distinct); ambient `.value` and
+  identically-constructed keys staying distinct, a key used as a genuine
+  `Table` *key* via its identity `hash`); ambient `.value` and
   `withValue` (unbound-returns-default, bind/restore on normal exit,
   LIFO nesting/shadowing of the same key, restore on exception, two
   same-`T` keys bound simultaneously each reading back their own value,
-  two different-`T` keys coexisting); snapshot `AsyncContext` and
-  `` `[]` `` (a snapshot outliving its binder, a snapshot unaffected by
-  a later bind, `==`/`hash` identity semantics and `Table`-key
-  usability); must-bind Defect parity on both `.value` and `ctx[cv]`
-  (unbound raise with `varName` set, bound read on both paths, no
-  raise); `dumpContext`/`` `$` `` (bound, defaulted-unbound,
+  two different-`T` keys coexisting); the `contains`/`isBound` boundness
+  probe (identity-correct on duplicate-name keys, must-bind unbound
+  returning `false` without raising, a defaulted key reading `false`
+  while unbound even though `.value` would return its default); snapshot
+  `AsyncContext` and `` `[]` `` (a snapshot outliving its binder, a
+  snapshot unaffected by a later bind, `==`/`hash` identity semantics and
+  `Table`-key usability); must-bind Defect parity on both `.value` and
+  `ctx[cv]` (unbound raise with `varName` set, bound read on both paths,
+  no raise); `dumpContext`/`` `$` `` (bound, defaulted-unbound,
   must-bind-unbound, a non-`$`-able type's placeholder path, a
   `ref`-typed key's nil-safe render, sorted-by-name order); the
   `{.contextVar.}` pragma's four declaration forms (starred/inferred,
@@ -758,7 +788,8 @@ codebase already paid on its one field.
 - `tests/testcontextvarssurface.nim` — verifies `import chronos` plus
   `import chronos/contextvars` expose only the intended public API:
   `ContextVar[T]`, `newContextVar` (both arities), the `contextVar`
-  pragma macro, `value`, `` `[]` ``, `withValue`, `name`, `AsyncContext`
+  pragma macro, `value`, `` `[]` ``, `withValue`, `name`, `contains`/
+  `isBound`, `hash(cv: ContextVarBase)`, `AsyncContext`
   + `` `==` ``/`hash`, `currentContext`, `withContext`,
   `dumpContext`/`ContextVarEntry`, `UnboundContextVarDefect` — and none
   of `ContextVarBase`'s internals (registry link, render pointer,

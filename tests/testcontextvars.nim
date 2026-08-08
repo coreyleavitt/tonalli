@@ -198,18 +198,20 @@ suite "contextvars (raw key): keys as values":
       check keys[1].value == 0
       check keys[3].value == 0
 
-  test "keys work as a Table value, looked up and compared by ref identity":
-    # `ContextVar[T]` has no `hash` of its own (only `AsyncContext` does
-    # — see docs/src/contextvars.md, "Implementation"), so a key is a
-    # Table *value*, not a hashable Table *key*, without a caller-
-    # supplied hash. `==` alone (ref identity) is enough here.
-    let a = newContextVar("tblKeyA", 1)
-    let b = newContextVar("tblKeyB", 2)
-    var t = initTable[string, ContextVar[int]]()
-    t["a"] = a
-    t["b"] = b
-    check t["a"] == a
-    check t["b"] == b
+  test "keys work as a Table key, hashed and compared by ref identity":
+    # ContextVar[T] has an identity hash (chronos/contextvars.nim), so a
+    # key works as a genuine Table *key*, not just a value. Two
+    # same-name keys are the strongest form of this claim: they compare
+    # equal on every constructor argument yet must still be distinct
+    # Table keys.
+    let a = newContextVar("tblKeyDup", 1)
+    let b = newContextVar("tblKeyDup", 1)
+    var t = initTable[ContextVar[int], string]()
+    t[a] = "first"
+    t[b] = "second"
+    check t.len == 2
+    check t[a] == "first"
+    check t[b] == "second"
     check a != b
 
   test "a proc generic over the key itself dispatches without macro expansion":
@@ -538,6 +540,37 @@ suite "contextvars (raw key): must-bind Defect parity":
     let k = newContextVar("t21Key", 11)
     check currentContext()[k] == 11
     check currentContext()[k] == k.value
+
+# --- Boundness probe: contains / isBound --------------------------------------
+
+suite "contextvars (raw key): contains / isBound":
+
+  test "duplicate-name keys: in/isBound answers by identity, not by name":
+    # dumpContext groups by name, so it cannot tell these two apart --
+    # `in`/`isBound` test the key itself and must.
+    let a = newContextVar("t31Dup", 1)
+    let b = newContextVar("t31Dup", 1)
+    a.withValue(99):
+      check a in currentContext()
+      check a.isBound
+      check b notin currentContext()
+      check not b.isBound
+
+  test "must-bind key unbound: false, does not raise":
+    let k = newContextVar[int]("t31MustBind")
+    check k notin currentContext()
+    check not k.isBound
+
+  test "must-bind key bound: true":
+    let k = newContextVar[int]("t31MustBindBound")
+    k.withValue(5):
+      check k in currentContext()
+      check k.isBound
+
+  test "defaulted key unbound: false, even though .value returns the default":
+    let k = newContextVar("t31Defaulted", 7)
+    check k notin currentContext()
+    check k.value == 7
 
 # --- dumpContext / $ ----------------------------------------------------------
 

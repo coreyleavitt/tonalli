@@ -39,6 +39,10 @@
 ##   `{.contextVar.}` pragma".
 ## - `value`, `` `[]` ``, `withValue`, `name` — the operation vocabulary
 ##   above, plus a read-only name accessor.
+## - `` `contains` ``/`cv in ctx`, `isBound` — non-raising boundness
+##   probes, identity-correct (unlike inferring boundness from
+##   `dumpContext`'s name-grouped output). See docs/src/contextvars.md,
+##   "Required variables".
 ## - `AsyncContext`, `currentContext()`, `withContext(ctx, body)`,
 ##   `` `==` ``/`hash` — snapshot/restore for callback-style code that
 ##   runs under a context captured earlier. See docs/src/contextvars.md,
@@ -135,6 +139,14 @@ proc hasDefault*(cv: ContextVarBase): bool {.inline.} =
 
 proc private*(cv: ContextVarBase): bool {.inline.} =
   cv.private
+
+proc hash*(cv: ContextVarBase): Hash {.inline, raises: [].} =
+  ## Pointer-identity hash, consistent with ref identity being key
+  ## identity (no custom `` `==` `` is ever defined for this hierarchy —
+  ## see the guardrail in tests/testcontextvarsguardrails.nim) — mirrors
+  ## `hash*(ctx: AsyncContext)` below. Safe to use `ContextVar[T]` as a
+  ## `Table`/`HashSet` key.
+  hash(cast[pointer](cv))
 
 var registryHead: ContextVarBase
   ## Head of the intrusive registry list — process-lifetime, allocation
@@ -358,6 +370,23 @@ proc findNode(chain: ContextNodeBase, cv: ContextVarBase): ContextNodeBase =
     if cast[ContextNodeKeyed](node).key == cast[pointer](cv):
       return node
     node = node.nextNode
+
+proc contains*[T](ctx: AsyncContext, cv: ContextVar[T]): bool {.raises: [].} =
+  ## `cv in ctx` — identity-correct boundness probe (PEP 567 precedent:
+  ## Python contexts support `in`). True iff `cv` has an active binding
+  ## in `ctx`, false otherwise — including for a must-bind key, which
+  ## `.value`/`` `[]` `` would raise `UnboundContextVarDefect` for
+  ## instead. Answers what a `dumpContext` name-match cannot: which of
+  ## two same-name keys is the one actually bound (see "Registry and key
+  ## lifetime" — same-name keys never alias).
+  findNode(ContextNodeBase(ctx), cv) != nil
+
+template isBound*[T](cv: ContextVar[T]): bool =
+  ## Ambient form of `contains` — mirrors `value`'s relationship to
+  ## `` `[]` ``. `{.cast(gcsafe).}`: same global-access rationale as
+  ## `value` above — `cv` inlines straight into the caller here too.
+  {.cast(gcsafe).}:
+    currentContext().contains(cv)
 
 proc dumpContext*(ctx: AsyncContext): seq[ContextVarEntry] {.raises: [].} =
   ## Introspect every registered, non-private key as of `ctx`, sorted
