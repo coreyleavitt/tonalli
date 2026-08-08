@@ -98,9 +98,14 @@ task test, "Run all tests":
     # lifetime, so it must not share a binary with any suite that
     # constructs contextvars keys at runtime.
     run args & " --mm:refc", "tests/testcontextvarslock"
+    # testcontextvarsleakguard is likewise its own step: under
+    # chronosDebug it deliberately lets an AssertionDefect escape poll(),
+    # which leaves the dispatcher unsound for any suite sharing the binary.
+    run args & " --mm:refc", "tests/testcontextvarsleakguard"
     if (NimMajor, NimMinor) >= (2, 2): # ORC on 2.0 is too broken to investigate
       run args & " --mm:orc", "tests/testall"
       run args & " --mm:orc", "tests/testcontextvarslock"
+      run args & " --mm:orc", "tests/testcontextvarsleakguard"
 
   # Make sure benchmarks compile. `--threads:on` explicitly: Nim 1.6
   # does not default it on, and bench_bulk_tcp.nim imports

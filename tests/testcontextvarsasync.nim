@@ -14,6 +14,11 @@ import unittest2
 import ../chronos
 import ../chronos/config
 import ../chronos/contextvars
+import ../chronos/futures
+  # Whitebox: capturingCallback is excluded from the public `import chronos`
+  # surface (see chronos/internal/asyncengine.nim's `export futures except
+  # ...`); the internalCallTick pin below needs it to opt a caller-supplied
+  # AsyncCallback into context capture.
 
 when not defined(windows):
   import std/posix
@@ -270,6 +275,26 @@ suite "contextvars: scheduling-site capture coverage":
 
     waitFor(driver())
     check seenBinding == 0
+
+  test "internalCallTick(capturingCallback(...)) fires with the registrant's binding":
+    # internalCallTick's AsyncCallback overload leaves the capture choice to
+    # the caller; capturingCallback() is the documented opt-in counterpart
+    # to the context-blind trampoline pinned above.
+    var seenBinding = -1
+    var fired = false
+
+    proc cb(udata: pointer) {.gcsafe, raises: [].} =
+      seenBinding = asyncInt.value
+      fired = true
+
+    proc driver(): Future[void] {.async: (raises: [CancelledError]).} =
+      asyncInt.withValue(135):
+        internalCallTick(capturingCallback(cb, nil))
+        while not fired:
+          await sleepAsync(1.milliseconds)
+
+    waitFor(driver())
+    check seenBinding == 135
 
   test "callIdle callback fires with the registrant's binding":
     var seenBinding = -1
@@ -537,6 +562,32 @@ suite "contextvars: scheduling-site capture coverage":
           await sleepAsync(1.milliseconds)
     waitFor(driver())
     check seenBinding == 321
+
+  test "cancelSoon's already-finished branch fires aftercb with the registrant's binding":
+    # When `future` is already finished at call time, cancelSoon skips the
+    # cancel-and-await path and schedules aftercb directly via
+    # callSoon(capturingCallback(aftercb, udata)) at the cancelSoon call
+    # site itself - a different capture site from the pending-future path
+    # pinned in the cancelCallback suite below.
+    var seenBinding = ""
+    var fired = false
+
+    let fut = newFuture[void]("already-finished-cancelsoon")
+    fut.complete()
+    check fut.finished()
+
+    proc aftercb(udata: pointer) {.gcsafe, raises: [].} =
+      seenBinding = asyncStr.value
+      fired = true
+
+    asyncStr.withValue("registrant"):
+      cancelSoon(fut, aftercb, nil)
+
+    asyncStr.withValue("ambient-at-fire"):
+      poll()
+
+    check fired
+    check seenBinding == "registrant"
 
 suite "contextvars: bridging independent callbacks":
 
