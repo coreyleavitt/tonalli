@@ -799,5 +799,6 @@ from a standalone driver (`tests/testcontextvarsstandalone.nim`) instead
 of `tests/testall.nim`: the construction lock is a one-way switch that
 stays engaged for the rest of the process once set, and the leak-guard
 test deliberately lets a Defect escape `poll` to prove the corruption
-check fires, so neither can safely share a binary with a suite that
-constructs keys at runtime.
+check fires, so neither can safely share a process with a suite that
+constructs keys at runtime — the driver runs each suite in its own
+subprocess.
