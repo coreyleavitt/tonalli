@@ -289,6 +289,65 @@ suite "contextkeys: dumpContext and $":
             check entries.filterIt(it.name == "t25Blob")[0].value == "<no-$>"
             check entries.filterIt(it.name == "t25Int")[0].value == "41"
 
+let t27Key* {.contextVar.} = 5
+
+let t28Hidden {.contextVar.} = "hidden"
+  ## No star -> private = true. Absence from `dumpContext` is what the
+  ## test checks; the symbol itself stays reachable within this module
+  ## (unlike cross-module unreachability, which the prototype's
+  ## two-file fixture/main split covers and isn't re-derived here).
+
+var t29MustBind* {.contextVar.}: string
+
+let t30WidgetVar* {.contextVar.}: RenderWidget = nil
+
+template t32Wrapper(nm: untyped; body: untyped): untyped =
+  ## Forwards to the sugar macro from inside another template, so the
+  ## identifier arrives as whatever node kind the wrapper's own
+  ## parameter resolves to (probing the nnkIdent/nnkSym duality
+  ## `splitContextVarNameAndPrivate` handles).
+  let nm* {.contextVar.} = body
+
+t32Wrapper(t32Wrapped, 777)
+
+suite "contextkeys: {.contextVar.} declaration sugar":
+
+  test "starred let, T inferred: name, registration, and value":
+    check t27Key.name == "t27Key"
+    check t27Key.value == 5
+    check dumpContext(currentContext()).anyIt(it.name == "t27Key")
+
+  test "unstarred: private, absent from dumpContext":
+    check t28Hidden.name == "t28Hidden"
+    check t28Hidden.private == true
+    check not dumpContext(currentContext()).anyIt(it.name == "t28Hidden")
+
+  test "must-bind var form: unbound read raises with varName":
+    check t29MustBind.hasDefault == false
+    try:
+      discard t29MustBind.value
+      check false
+    except UnboundContextVarDefect as e:
+      check e.varName == "t29MustBind"
+    t29MustBind.withValue("bound"):
+      check t29MustBind.value == "bound"
+
+  test "explicit-T-with-nil-default ref form":
+    check t30WidgetVar.name == "t30WidgetVar"
+    check t30WidgetVar.value == nil
+    check dumpContext(currentContext()).filterIt(it.name == "t30WidgetVar")[0].value == "nil"
+
+  test "one-symbol emission: no derived identifiers":
+    check declared(t27Key)
+    check not declared(withT27Key)
+    check not declared(T27KeySlot)
+    check not declared(t27KeyContextVarReg)
+    check not declared(t27KeyContextVarRender)
+
+  test "wrapper-template composition: sugar invoked through a forwarding template":
+    check t32Wrapped.name == "t32Wrapped"
+    check t32Wrapped.value == 777
+
 when defined(chronosDebug):
   suite "contextkeys: chronosDebug construction lock":
 

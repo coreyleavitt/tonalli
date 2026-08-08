@@ -15,11 +15,10 @@
 ## name at re-fold time. Covers construction, the intrusive registry,
 ## the render-proc generic-into-nimcall construction, the ambient
 ## chain-walk lookup, `withValue`, the snapshot `` `[]` ``/`AsyncContext`
-## pair, and must-bind `UnboundContextVarDefect` parity. The
-## registry-consuming `dumpContext` and the `{.contextVar.}` declaration
-## sugar are later slices.
+## pair, must-bind `UnboundContextVarDefect` parity, `dumpContext`/
+## `` `$` ``, and the `{.contextVar.}` declaration sugar.
 
-import std/[algorithm, hashes, strutils]
+import std/[algorithm, hashes, macros, strutils]
 import ../futures
 import ./contextnode
 export ContextNodeBase
@@ -258,3 +257,56 @@ proc `$`*(ctx: AsyncContext): string {.raises: [].} =
   for entry in dumpContext(ctx):
     parts.add entry.name & ": " & entry.value
   "{" & parts.join(", ") & "}"
+
+# --- `{.contextVar.}` declaration sugar --------------------------------------
+# Ported from `.claude/rfc/0002-hybrid-prototype/sugar.nim`. A pragma
+# macro, not a statement macro: `contextVar name*: T = default` doesn't
+# parse (export postfix and identdef are `let`/`var`-only parser
+# productions). Attached as `{.contextVar.}` between the star and the
+# colon-type, it lets the parser's own identdef grammar do the
+# star/type/default parsing; the macro only rewrites the RHS into a
+# `newContextVar` call and re-emits the one `let`/`var` symbol.
+
+proc splitContextVarNameAndPrivate(identNode: NimNode):
+    tuple[nameNode: NimNode, nameStr: string, private: bool] =
+  ## Star present -> exported -> private = false; absent -> private =
+  ## true. `nnkIdent`/`nnkSym` both resolve via `strVal` (a wrapper
+  ## template forwarding its own parameter arrives as `nnkSym`); only
+  ## `nnkPostfix` needs unwrapping to reach the name.
+  case identNode.kind
+  of nnkPostfix:
+    doAssert identNode.len == 2 and identNode[0].strVal == "*",
+      "contextVar: unexpected postfix form: " & identNode.repr
+    (identNode, identNode[1].strVal, false)
+  of nnkIdent, nnkSym:
+    (identNode, identNode.strVal, true)
+  else:
+    error("contextVar: expected `name` or `name*`, got " & identNode.repr, identNode)
+
+macro contextVar*(def: untyped): untyped =
+  ## `let name* {.contextVar.} = default` (T inferred), `let name*
+  ## {.contextVar.}: T = default` (explicit T), or `var name*
+  ## {.contextVar.}: T` (must-bind) — expands to exactly one symbol,
+  ## `let name* = newContextVar(...)`. See the handoff's "Declaration
+  ## sugar" for the pinned form.
+  doAssert def.kind in {nnkLetSection, nnkVarSection},
+    "contextVar must annotate a `let` or `var` statement"
+  doAssert def.len == 1, "contextVar supports exactly one identifier per statement"
+  let identDefs = def[0]
+  doAssert identDefs.kind == nnkIdentDefs and identDefs.len == 3
+  let (nameNode, nameStr, private) = splitContextVarNameAndPrivate(identDefs[0])
+  let typAnnotation = identDefs[1]
+  let value = identDefs[2]
+
+  let ctorCall =
+    if value.kind == nnkEmpty:
+      doAssert typAnnotation.kind != nnkEmpty,
+        "contextVar: must-bind keys need an explicit type, e.g. `var x*: T {.contextVar.}`"
+      quote do: newContextVar[`typAnnotation`](`nameStr`, private = `private`)
+    elif typAnnotation.kind != nnkEmpty:
+      quote do: newContextVar[`typAnnotation`](`nameStr`, `value`, private = `private`)
+    else:
+      quote do: newContextVar(`nameStr`, `value`, private = `private`)
+
+  result = newNimNode(nnkLetSection)
+  result.add newIdentDefs(nameNode, newEmptyNode(), ctorCall)
