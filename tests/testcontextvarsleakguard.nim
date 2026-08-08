@@ -8,27 +8,33 @@
 
 ## This file pins chronos's chronosDebug context-corruption detection net
 ## layer by layer: `withRestoredContext`'s identity-arm postcondition
-## assert (chronos/futures.nim, ~231-236), and the restore arm's
-## unconditional `finally` self-heal (same file, ~237-240).
+## assert (chronos/futures.nim, ~231-236), the restore arm's unconditional
+## `finally` self-heal (same file, ~237-240), and the cross-batch guard in
+## `processCallbacks` (chronos/internal/asyncengine.nim, ~262-267).
 ##
-## The cross-batch guard in `processCallbacks`
-## (chronos/internal/asyncengine.nim, ~262-267) is deliberately NOT pinned
-## here. Every per-callback dispatch path already runs through
-## `withRestoredContext`, whose two arms cover corruption completely: the
-## identity arm asserts on any divergence, the restore arm's `finally`
-## silently repairs it regardless of what the callback did. The cross-batch
-## guard is therefore unreachable from any current callback and exists
-## purely as defense-in-depth against a future dispatch path that bypasses
-## `withRestoredContext`. No test can isolate it without introducing such a
-## path, which this suite will not do.
+## The cross-batch guard is pinned indirectly, through Nim's finally-unwind
+## replacement rather than through anything the guard alone detects: a
+## callback that corrupts `currentAsyncContext` through the identity arm
+## fails both the identity arm's own postcondition assert and the batch
+## guard's assert, since both compare the same corrupted value against the
+## same pre-corruption snapshot. The batch guard's assert runs later, in
+## the `finally` unwinding the identity arm's already-propagating Defect,
+## and its own failure there replaces that Defect as the one a caller of
+## `poll()` observes. The surfaced message therefore pins the batch guard's
+## presence: delete or weaken it and the message flips to the identity
+## arm's, failing that case. It is not proof the batch guard independently
+## catches anything the identity arm misses - on every current dispatch
+## path the identity arm's own postcondition already fires first, so the
+## batch guard remains defense-in-depth against a future dispatch path that
+## bypasses `withRestoredContext`, not a second independent detector today.
 ##
 ## Split out like tests/testcontextvarslock.nim rather than folded into
-## testall.nim: the identity-arm case leaves an escaped AssertionDefect (and
-## a stray, disconnected context node) behind, which would leave the
-## dispatcher unsound for every other suite sharing that binary. It is
-## wired as its own step in chronos.nimble's `test` task instead. The net
-## itself only exists under `chronosDebug`, so every test here skips
-## cleanly without it.
+## testall.nim: the identity-arm and cross-batch cases leave an escaped
+## AssertionDefect (and a stray, disconnected context node) behind, which
+## would leave the dispatcher unsound for every other suite sharing that
+## binary. It is wired as its own step in chronos.nimble's `test` task
+## instead. The net itself only exists under `chronosDebug`, so every test
+## here skips cleanly without it.
 
 import std/strutils
 import unittest2
@@ -104,5 +110,27 @@ suite "contextvars: chronosDebug context-corruption detection net":
       poll()
       check ran
       check currentAsyncContext == preAmbient
+    else:
+      skip()
+
+  test "cross-batch guard layer: a bare nil-context callback that corrupts currentAsyncContext surfaces the batch guard's message via finally-replacement":
+    when defined(chronosDebug):
+      # Ordered last and restores currentAsyncContext itself: this case
+      # leaves the ambient corrupted for the duration of the escaping
+      # Defect (neither failed assert writes anything), so it must not run
+      # ahead of a case that assumes a clean ambient.
+      let ambient = currentAsyncContext
+      proc corruptingCb(udata: pointer) {.gcsafe, raises: [].} =
+        currentAsyncContext = ContextNodeBase()
+
+      callSoon(corruptingCb, nil)
+      var caught = false
+      try:
+        poll()
+      except AssertionDefect as e:
+        caught = true
+        check "context leaked across a callback batch" in e.msg
+      check caught
+      currentAsyncContext = ambient
     else:
       skip()
