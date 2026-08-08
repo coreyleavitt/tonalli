@@ -849,6 +849,20 @@ suite "contextvars (raw key): {.contextVar.} declaration sugar":
     check t32Wrapped.name == "t32Wrapped"
     check t32Wrapped.value == 777
 
+# --- {.contextVar.} grammar enforcement (var/let) ----------------------------
+# The pragma macro rejects the wrong keyword rather than silently
+# accepting it: a defaulted key (has `= default`) must be a `let`; a
+# must-bind key (no default) must be a `var`. `when not compiles` proves
+# the rejection is a compile error, not a runtime check.
+
+static:
+  doAssert not compiles((var t33WrongKeyword {.contextVar.} = 5)),
+    "a defaulted {.contextVar.} key spelled with `var` must not compile " &
+    "— defaulted keys require `let`"
+  doAssert not compiles((let t34WrongKeyword {.contextVar.}: int)),
+    "a must-bind {.contextVar.} key spelled with `let` must not compile " &
+    "— must-bind keys require `var`"
+
 # --- chronosDebug construction lock ------------------------------------------
 # MUST stay last in this file: one-way for the process's lifetime, by
 # design (mirrors real thread creation) — see chronos/contextvars.nim.

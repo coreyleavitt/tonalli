@@ -432,8 +432,8 @@ proc splitContextVarNameAndPrivate(identNode: NimNode):
   ## `nnkPostfix` needs unwrapping to reach the name.
   case identNode.kind
   of nnkPostfix:
-    doAssert identNode.len == 2 and identNode[0].strVal == "*",
-      "contextVar: unexpected postfix form: " & identNode.repr
+    if identNode.len != 2 or identNode[0].strVal != "*":
+      error("contextVar: unexpected postfix form: " & identNode.repr, identNode)
     (identNode, identNode[1].strVal, false)
   of nnkIdent, nnkSym:
     (identNode, identNode.strVal, true)
@@ -445,20 +445,39 @@ macro contextVar*(def: untyped): untyped =
   ## {.contextVar.}: T = default` (explicit T), or `var name*
   ## {.contextVar.}: T` (must-bind) — expands to exactly one symbol,
   ## `let name* = newContextVar(...)`. See docs/src/contextvars.md,
-  ## "The `{.contextVar.}` pragma".
-  doAssert def.kind in {nnkLetSection, nnkVarSection},
-    "contextVar must annotate a `let` or `var` statement"
-  doAssert def.len == 1, "contextVar supports exactly one identifier per statement"
+  ## "The `{.contextVar.}` pragma". The `let`/`var` choice is enforced
+  ## here, not just documented: a defaulted key must be a `let`, a
+  ## must-bind key must be a `var` — the same arity split
+  ## `newContextVar`'s two overloads make at the call site, moved to the
+  ## declaration site.
+  if def.kind notin {nnkLetSection, nnkVarSection}:
+    error("contextVar must annotate a `let` or `var` statement", def)
+  if def.len != 1:
+    error("contextVar supports exactly one identifier per statement", def)
   let identDefs = def[0]
-  doAssert identDefs.kind == nnkIdentDefs and identDefs.len == 3
+  if identDefs.kind != nnkIdentDefs or identDefs.len != 3:
+    error("contextVar: expected a single `name[*][: T] [= default]` " &
+          "identifier definition, got " & identDefs.repr, identDefs)
   let (nameNode, nameStr, private) = splitContextVarNameAndPrivate(identDefs[0])
   let typAnnotation = identDefs[1]
   let value = identDefs[2]
 
+  if value.kind == nnkEmpty:
+    if typAnnotation.kind == nnkEmpty:
+      error("contextVar: must-bind keys need an explicit type, e.g. " &
+            "`var " & nameStr & "*: T {.contextVar.}`", identDefs)
+    if def.kind != nnkVarSection:
+      error("contextVar: a must-bind key (no `= default`) needs `var`, " &
+            "not `let` — spell it `var " & nameStr & "*: " &
+            typAnnotation.repr & " {.contextVar.}`", def)
+  elif def.kind != nnkLetSection:
+    error("contextVar: a defaulted key (`= default`) needs `let`, not " &
+          "`var` — spell it `let " & nameStr & "*" &
+          (if typAnnotation.kind != nnkEmpty: ": " & typAnnotation.repr
+           else: "") & " {.contextVar.} = " & value.repr & "`", def)
+
   let ctorCall =
     if value.kind == nnkEmpty:
-      doAssert typAnnotation.kind != nnkEmpty,
-        "contextVar: must-bind keys need an explicit type, e.g. `var x*: T {.contextVar.}`"
       quote do: newContextVar[`typAnnotation`](`nameStr`, private = `private`)
     elif typAnnotation.kind != nnkEmpty:
       quote do: newContextVar[`typAnnotation`](`nameStr`, `value`, private = `private`)

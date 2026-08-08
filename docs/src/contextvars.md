@@ -83,6 +83,13 @@ All four forms expand to exactly one symbol — a `let`/`var` binding a
 {.contextVar.}` (pragma after the type) is not accepted; `x* {.contextVar.}: T`
 is the only order the grammar admits.
 
+The `let`/`var` choice above is not just convention — the macro rejects
+the wrong one at compile time: a defaulted key (has `= default`) must be
+declared `let`; a must-bind key (no default) must be declared `var`.
+`var requestId* {.contextVar.} = ""` and `let traceId* {.contextVar.}: string`
+both fail to compile, with an error naming the correct spelling, rather
+than silently accepting a keyword that doesn't match the key's arity.
+
 The star controls two things at once, both derived from the same marker:
 whether the symbol itself is exported (ordinary Nim visibility), and
 whether the key registers with `dumpContext` (star -> `private = false`,
@@ -752,8 +759,10 @@ codebase already paid on its one field.
   `ref`-typed key's nil-safe render, sorted-by-name order); the
   `{.contextVar.}` pragma's four declaration forms (starred/inferred,
   explicit-`T`, unstarred/private, must-bind), one-symbol emission (no
-  derived identifiers reachable after expansion), and wrapper-macro
-  composition (the pragma invoked through a forwarding template).
+  derived identifiers reachable after expansion), wrapper-macro
+  composition (the pragma invoked through a forwarding template), and
+  its `let`/`var` grammar enforcement (a defaulted key spelled with
+  `var`, a must-bind key spelled with `let` — both compile errors).
 - `tests/testcontextvarsasync.nim` — async propagation (isolation across
   interleaved tasks, survival across sequential awaits, exception and
   cancellation paths, spawn-time inheritance), per-scheduling-site
