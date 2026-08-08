@@ -465,9 +465,13 @@ static, module-level-global design would have gotten for free.
 `newContextVar` is supported only *before* any `createThread` call — the
 same write-once-then-read-only discipline the registry already needs, now
 a documented convention rather than something the compiler enforces
-structurally. Under a `chronosDebug` build, a guard flag flips at first
-thread creation, and every `newContextVar` call after that point asserts;
-no lock is paid on any path in a release build, and no check runs at all
+structurally. chronos does not wrap or intercept thread creation, so
+nothing flips this automatically: under a `chronosDebug` build,
+`lockContextVarConstruction()` is an opt-in debug hook that engages the
+guard by hand, and every `newContextVar` call after that point asserts.
+Call it yourself at your program's own construction/thread-creation
+boundary to get the check; the test suite is its only caller today. No
+lock is paid on any path in a release build, and no check runs at all
 outside `chronosDebug`.
 
 Duplicate name strings are representable — two independently-constructed
