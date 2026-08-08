@@ -13,7 +13,7 @@
 import unittest2
 import ../chronos
 import ../chronos/config
-import ../chronos/contextvars
+import ../chronos/internal/contextkeys
 
 when not defined(windows):
   import std/posix
@@ -25,10 +25,9 @@ when not defined(windows):
 
 {.used.}
 
-contextVar:
-  var asyncInt: int = 0
-  var asyncStr: string = ""
-  var asyncReq: int    # must-bind: no default
+let asyncInt {.contextVar.} = 0
+let asyncStr {.contextVar.} = ""
+var asyncReq {.contextVar.}: int    # must-bind: no default
 
 suite "contextvars: async propagation":
 
@@ -42,24 +41,24 @@ suite "contextvars: async propagation":
       tickB = newFuture[void]("tickB")
 
     proc taskA(): Future[int] {.async: (raises: [Exception]).} =
-      withAsyncInt(100):
+      asyncInt.withValue(100):
         await tickA
-        check asyncInt() == 100
+        check asyncInt.value == 100
         tickB.complete()  # hand off to B
         resetTicks()
         await tickA
-        check asyncInt() == 100
+        check asyncInt.value == 100
         tickB.complete()
-        return asyncInt()
+        return asyncInt.value
 
     proc taskB(): Future[int] {.async: (raises: [Exception]).} =
-      withAsyncInt(200):
+      asyncInt.withValue(200):
         await tickB
-        check asyncInt() == 200
+        check asyncInt.value == 200
         tickA.complete()  # hand off to A
         await tickB
-        check asyncInt() == 200
-        return asyncInt()
+        check asyncInt.value == 200
+        return asyncInt.value
 
     proc driver(): Future[(int, int)] {.async: (raises: [Exception]).} =
       resetTicks()
@@ -78,45 +77,45 @@ suite "contextvars: async propagation":
     # Both vars must remain visible after an await regardless of type or
     # position on the chain.
     proc work(): Future[(int, string)] {.async: (raises: [CancelledError]).} =
-      check asyncInt() == 42
-      check asyncStr() == "tracer"
+      check asyncInt.value == 42
+      check asyncStr.value == "tracer"
       await sleepAsync(1.milliseconds)
-      check asyncInt() == 42
-      check asyncStr() == "tracer"
-      return (asyncInt(), asyncStr())
+      check asyncInt.value == 42
+      check asyncStr.value == "tracer"
+      return (asyncInt.value, asyncStr.value)
 
     proc driver(): Future[(int, string)] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(42):
-        withAsyncStr("tracer"):
+      asyncInt.withValue(42):
+        asyncStr.withValue("tracer"):
           return await work()
 
     check waitFor(driver()) == (42, "tracer")
 
   test "binding survives multiple sequential awaits":
     proc work(): Future[int] {.async: (raises: [CancelledError]).} =
-      check asyncInt() == 11
+      check asyncInt.value == 11
       await sleepAsync(1.milliseconds)
-      check asyncInt() == 11
+      check asyncInt.value == 11
       await sleepAsync(1.milliseconds)
-      check asyncInt() == 11
+      check asyncInt.value == 11
       await sleepAsync(1.milliseconds)
-      return asyncInt()
+      return asyncInt.value
 
     proc driver(): Future[int] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(11):
+      asyncInt.withValue(11):
         return await work()
 
     check waitFor(driver()) == 11
 
   test "child task inherits parent's context at spawn":
     proc child(): Future[int] {.async: (raises: [CancelledError]).} =
-      check asyncInt() == 42     # inherited from parent's binding
+      check asyncInt.value == 42     # inherited from parent's binding
       await sleepAsync(1.milliseconds)
-      check asyncInt() == 42
-      return asyncInt()
+      check asyncInt.value == 42
+      return asyncInt.value
 
     proc parent(): Future[int] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(42):
+      asyncInt.withValue(42):
         return await child()
 
     check waitFor(parent()) == 42
@@ -126,38 +125,38 @@ suite "contextvars: async propagation":
     # work, then awaits it later. Parent's binding must survive across
     # the intervening dispatcher returns.
     proc child(): Future[int] {.async: (raises: [CancelledError]).} =
-      check asyncInt() == 42      # parent's binding inherited
+      check asyncInt.value == 42      # parent's binding inherited
       await sleepAsync(1.milliseconds)
-      withAsyncInt(999):           # child rebinds locally
+      asyncInt.withValue(999):           # child rebinds locally
         await sleepAsync(1.milliseconds)
-        check asyncInt() == 999
-      check asyncInt() == 42      # back to inherited
-      return asyncInt()
+        check asyncInt.value == 999
+      check asyncInt.value == 42      # back to inherited
+      return asyncInt.value
 
     proc parent(): Future[int] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(42):
+      asyncInt.withValue(42):
         let f = child()           # spawn
-        check asyncInt() == 42
+        check asyncInt.value == 42
         await sleepAsync(1.milliseconds)  # parent yields, child runs
-        check asyncInt() == 42    # parent still sees its own
+        check asyncInt.value == 42    # parent still sees its own
         let r = await f
         check r == 42
-        check asyncInt() == 42    # post-await, parent's binding intact
-        return asyncInt()
+        check asyncInt.value == 42    # post-await, parent's binding intact
+        return asyncInt.value
 
     check waitFor(parent()) == 42
 
   test "child's nested binding does not leak back to parent":
     proc child(): Future[void] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(999):
+      asyncInt.withValue(999):
         await sleepAsync(1.milliseconds)
-        check asyncInt() == 999
-      check asyncInt() == 42    # back to parent's binding
+        check asyncInt.value == 999
+      check asyncInt.value == 42    # back to parent's binding
 
     proc parent(): Future[int] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(42):
+      asyncInt.withValue(42):
         await child()
-        return asyncInt()       # parent still sees its own 42
+        return asyncInt.value       # parent still sees its own 42
 
     check waitFor(parent()) == 42
 
@@ -168,13 +167,13 @@ suite "contextvars: async propagation":
 
     proc driver(): Future[int] {.async: (raises: [Exception]).} =
       try:
-        withAsyncInt(77):
-          check asyncInt() == 77
+        asyncInt.withValue(77):
+          check asyncInt.value == 77
           await work()
           check false           # unreachable
       except ValueError:
         discard
-      return asyncInt()         # binding reverted
+      return asyncInt.value         # binding reverted
 
     check waitFor(driver()) == 0
 
@@ -186,8 +185,8 @@ suite "contextvars: async propagation":
       let f = longSleep()
       var observed = -1
       try:
-        withAsyncInt(55):
-          check asyncInt() == 55
+        asyncInt.withValue(55):
+          check asyncInt.value == 55
           # Cancel the inner future from a sibling timer so cancellation
           # propagates through our `await f`.
           discard setTimer(Moment.now() + 1.milliseconds,
@@ -196,9 +195,9 @@ suite "contextvars: async propagation":
           await f
           check false           # unreachable — cancel must propagate
       except CancelledError:
-        observed = asyncInt()
-      check observed == 0       # CancelledError unwound withAsyncInt(55)
-      return asyncInt()
+        observed = asyncInt.value
+      check observed == 0       # CancelledError unwound asyncInt.withValue(55)
+      return asyncInt.value
 
     check waitFor(driver()) == 0
 
@@ -211,8 +210,8 @@ suite "contextvars: async propagation":
     proc driver(): Future[int] {.async: (raises: [CancelledError]).} =
       let f = longSleep()
       var observedInsideHandler = -1
-      withAsyncInt(88):
-        check asyncInt() == 88
+      asyncInt.withValue(88):
+        check asyncInt.value == 88
         discard setTimer(Moment.now() + 1.milliseconds,
                          proc(_: pointer) {.gcsafe, raises: [].} =
                            f.cancelSoon())
@@ -220,9 +219,9 @@ suite "contextvars: async propagation":
           await f
           check false           # unreachable
         except CancelledError:
-          observedInsideHandler = asyncInt()   # binder still active
+          observedInsideHandler = asyncInt.value   # binder still active
       check observedInsideHandler == 88
-      return asyncInt()         # binder reverted on normal exit
+      return asyncInt.value         # binder reverted on normal exit
 
     check waitFor(driver()) == 0
 
@@ -233,11 +232,11 @@ suite "contextvars: scheduling-site capture coverage":
     var fired = false
 
     proc cb(udata: pointer) {.gcsafe, raises: [].} =
-      seenBinding = asyncInt()
+      seenBinding = asyncInt.value
       fired = true
 
     proc driver(): Future[void] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(789):
+      asyncInt.withValue(789):
         callSoon(cb, nil)
         while not fired:
           await sleepAsync(1.milliseconds)
@@ -248,23 +247,23 @@ suite "contextvars: scheduling-site capture coverage":
   test "sleepAsync callback fires with the registrant's binding":
     # Pinned explicitly as a regression guard on setTimer's construction site.
     proc driver(): Future[int] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(456):
+      asyncInt.withValue(456):
         await sleepAsync(1.milliseconds)
-        return asyncInt()
+        return asyncInt.value
     check waitFor(driver()) == 456
 
   test "internalCallTick is context-blind (internal trampoline)":
     # Internal scheduling sites use bareCallback (no context capture), so a
-    # callback scheduled from inside withAsyncInt(123) must see the default.
+    # callback scheduled from inside asyncInt.withValue(123) must see the default.
     var seenBinding = -1
     var fired = false
 
     proc cb(udata: pointer) {.gcsafe, raises: [].} =
-      seenBinding = asyncInt()
+      seenBinding = asyncInt.value
       fired = true
 
     proc driver(): Future[void] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(123):
+      asyncInt.withValue(123):
         internalCallTick(cb, nil)
         while not fired:
           await sleepAsync(1.milliseconds)
@@ -277,11 +276,11 @@ suite "contextvars: scheduling-site capture coverage":
     var fired = false
 
     proc idleCb(udata: pointer) {.gcsafe, raises: [].} =
-      seenBinding = asyncInt()
+      seenBinding = asyncInt.value
       fired = true
 
     proc driver(): Future[void] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(321):
+      asyncInt.withValue(321):
         callIdle(idleCb, nil)
         while not fired:
           await sleepAsync(1.milliseconds)
@@ -298,11 +297,11 @@ suite "contextvars: scheduling-site capture coverage":
       var fired = false
       let (rfd, wfd) = createAsyncPipe()
       proc onReadable(udata: pointer) {.gcsafe, raises: [].} =
-        seenBinding = asyncInt()
+        seenBinding = asyncInt.value
         fired = true
 
       proc driver(): Future[void] {.async: (raises: [Exception]).} =
-        withAsyncInt(654):
+        asyncInt.withValue(654):
           register(rfd)
           addReader(rfd, onReadable)
           # Poke the write end to make the read end readable.
@@ -323,11 +322,11 @@ suite "contextvars: scheduling-site capture coverage":
       var fired = false
       let (rfd, wfd) = createAsyncPipe()
       proc onWritable(udata: pointer) {.gcsafe, raises: [].} =
-        seenBinding = asyncInt()
+        seenBinding = asyncInt.value
         fired = true
 
       proc driver(): Future[void] {.async: (raises: [Exception]).} =
-        withAsyncInt(655):
+        asyncInt.withValue(655):
           register(wfd)
           addWriter(wfd, onWritable)
           while not fired:
@@ -346,7 +345,7 @@ suite "contextvars: scheduling-site capture coverage":
         var sigFd: SignalHandle
         let handlerFut = newFuture[void]("ctx.signal.handler")
         proc signalHandler(udata: pointer) {.gcsafe.} =
-          seenBinding = asyncInt()
+          seenBinding = asyncInt.value
           let res = removeSignal2(sigFd)
           if res.isErr():
             handlerFut.fail(newException(ValueError, osErrorMsg(res.error())))
@@ -354,7 +353,7 @@ suite "contextvars: scheduling-site capture coverage":
             handlerFut.complete()
 
         proc driver(): Future[void] {.async: (raises: [Exception]).} =
-          withAsyncInt(456):
+          asyncInt.withValue(456):
             sigFd =
               block:
                 let res = addSignal2(SIGUSR1, signalHandler)
@@ -372,7 +371,7 @@ suite "contextvars: scheduling-site capture coverage":
         let handlerFut = newFuture[void]("ctx.process.handler")
         var process: AsyncProcessRef
         proc processHandler(udata: pointer) {.gcsafe.} =
-          seenBinding = asyncInt()
+          seenBinding = asyncInt.value
           let res = removeProcess2(pidFd)
           if res.isErr():
             handlerFut.fail(newException(ValueError, osErrorMsg(res.error())))
@@ -383,7 +382,7 @@ suite "contextvars: scheduling-site capture coverage":
           process = await startProcess("sleep 0.3",
                                        options = {AsyncProcessOption.EvalCommand})
           try:
-            withAsyncInt(789):
+            asyncInt.withValue(789):
               pidFd =
                 block:
                   let res = addProcess2(process.pid(), processHandler)
@@ -398,16 +397,16 @@ suite "contextvars: scheduling-site capture coverage":
 
   test "race() resolver fires with the awaiter's binding":
     proc child(value: int, delayMs: int): Future[int] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(value):
+      asyncInt.withValue(value):
         await sleepAsync(delayMs.milliseconds)
         return value
 
     proc driver(): Future[int] {.async: (raises: [Exception]).} =
-      withAsyncInt(111):
+      asyncInt.withValue(111):
         let fa = child(222, 1)
         let fb = child(333, 50)
         discard await race(FutureBase(fa), FutureBase(fb))
-        let observed = asyncInt()
+        let observed = asyncInt.value
         # Drain the loser so it doesn't leak into testutils' pending check.
         await fb.cancelAndWait()
         return observed
@@ -416,74 +415,74 @@ suite "contextvars: scheduling-site capture coverage":
 
   test "allFutures() continuation fires with the awaiter's binding":
     proc child(value: int): Future[int] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(value):
+      asyncInt.withValue(value):
         await sleepAsync(1.milliseconds)
         return value
 
     proc driver(): Future[int] {.async: (raises: [Exception]).} =
-      withAsyncInt(222):
+      asyncInt.withValue(222):
         let fa = child(444)
         let fb = child(555)
         await allFutures(fa, fb)
-        return asyncInt()
+        return asyncInt.value
 
     check waitFor(driver()) == 222
 
   test "wait(duration) resumes the awaiter under its own binding":
     proc child(value: int): Future[int] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(value):
+      asyncInt.withValue(value):
         await sleepAsync(1.milliseconds)
         return value
 
     proc driver(): Future[int] {.async: (raises: [Exception]).} =
-      withAsyncInt(31):
+      asyncInt.withValue(31):
         check (await child(32).wait(1.seconds)) == 32
-        return asyncInt()
+        return asyncInt.value
 
     check waitFor(driver()) == 31
 
   test "wait(deadline future) resumes the awaiter under its own binding":
     # Routes through waitUntilImpl, a separate path from the duration variant.
     proc child(value: int): Future[int] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(value):
+      asyncInt.withValue(value):
         await sleepAsync(1.milliseconds)
         return value
 
     proc driver(): Future[int] {.async: (raises: [Exception]).} =
-      withAsyncInt(36):
+      asyncInt.withValue(36):
         let deadline = sleepAsync(1.seconds)
         check (await child(37).wait(deadline)) == 37
         await deadline.cancelAndWait()
-        return asyncInt()
+        return asyncInt.value
 
     check waitFor(driver()) == 36
 
   test "withTimeout() resumes the awaiter under its own binding":
     proc child(value: int): Future[int] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(value):
+      asyncInt.withValue(value):
         await sleepAsync(1.milliseconds)
         return value
 
     proc driver(): Future[int] {.async: (raises: [Exception]).} =
-      withAsyncInt(41):
+      asyncInt.withValue(41):
         let fut = child(42)
         check (await fut.withTimeout(1.seconds)) == true
         check fut.read() == 42
-        return asyncInt()
+        return asyncInt.value
 
     check waitFor(driver()) == 41
 
   test "`or` resumes the awaiter under its own binding":
     proc child(value: int, delayMs: int): Future[void] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(value):
+      asyncInt.withValue(value):
         await sleepAsync(delayMs.milliseconds)
 
     proc driver(): Future[int] {.async: (raises: [Exception]).} =
-      withAsyncInt(51):
+      asyncInt.withValue(51):
         let fa = child(52, 1)
         let fb = child(53, 50)
         await fa or fb
-        let observed = asyncInt()
+        let observed = asyncInt.value
         # Drain the loser so it doesn't trip testutils' pending check.
         await fb.cancelAndWait()
         return observed
@@ -492,16 +491,16 @@ suite "contextvars: scheduling-site capture coverage":
 
   test "join() resumes the awaiter under its own binding":
     proc child(value: int): Future[int] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(value):
+      asyncInt.withValue(value):
         await sleepAsync(1.milliseconds)
         return value
 
     proc driver(): Future[int] {.async: (raises: [Exception]).} =
-      withAsyncInt(61):
+      asyncInt.withValue(61):
         let fut = child(62)
         await fut.join()
         check fut.read() == 62
-        return asyncInt()
+        return asyncInt.value
 
     check waitFor(driver()) == 61
 
@@ -512,10 +511,10 @@ suite "contextvars: scheduling-site capture coverage":
     var fired = false
     let (rfd, wfd) = createAsyncPipe()
     proc cb(udata: pointer) {.gcsafe, raises: [].} =
-      seenBinding = asyncInt()
+      seenBinding = asyncInt.value
       fired = true
     proc driver(): Future[void] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(987):
+      asyncInt.withValue(987):
         closeHandle(rfd, cb)
         closeHandle(wfd)
         while not fired:
@@ -528,10 +527,10 @@ suite "contextvars: scheduling-site capture coverage":
     var fired = false
     let (rfd, wfd) = createAsyncPipe()
     proc cb(udata: pointer) {.gcsafe, raises: [].} =
-      seenBinding = asyncInt()
+      seenBinding = asyncInt.value
       fired = true
     proc driver(): Future[void] {.async: (raises: [CancelledError]).} =
-      withAsyncInt(321):
+      asyncInt.withValue(321):
         closeSocket(rfd, cb)
         closeSocket(wfd)
         while not fired:
@@ -550,13 +549,13 @@ suite "contextvars: bridging independent callbacks":
     var exitObserved = -1
 
     proc enterCb(udata: pointer) {.gcsafe, raises: [].} =
-      withAsyncInt(42):
+      asyncInt.withValue(42):
         snapshot = currentContext()
       enterRan = true
 
     proc exitCb(udata: pointer) {.gcsafe, raises: [].} =
       withContext(snapshot):
-        exitObserved = asyncInt()
+        exitObserved = asyncInt.value
 
     callSoon(enterCb, nil)
     poll()
@@ -573,12 +572,12 @@ suite "contextvars: cancelCallback capture":
     var fired = false
 
     let fut = newFuture[void]("owner-future")
-    withAsyncStr("owner"):
+    asyncStr.withValue("owner"):
       fut.cancelCallback = proc(_: pointer) {.gcsafe, raises: [].} =
-        seenBinding = asyncStr()
+        seenBinding = asyncStr.value
         fired = true
 
-    withAsyncStr("canceller"):
+    asyncStr.withValue("canceller"):
       discard tryCancel(fut)
 
     check fired
@@ -594,15 +593,15 @@ suite "contextvars: cancelCallback capture":
                               {FutureFlag.OwnCancelSchedule})
 
     proc onCancel(_: pointer) {.gcsafe, raises: [].} =
-      observed.add asyncStr()
+      observed.add asyncStr.value
       if observed.len >= 2:
         fut.cancelAndSchedule()
 
-    withAsyncStr("owner"):
+    asyncStr.withValue("owner"):
       fut.cancelCallback = onCancel
 
     proc driver(): Future[void] {.async: (raises: [CancelledError]).} =
-      withAsyncStr("canceller"):
+      asyncStr.withValue("canceller"):
         cancelSoon(fut)
         while not fut.finished():
           await sleepAsync(1.milliseconds)
@@ -628,23 +627,23 @@ suite "contextvars: cancelCallback capture":
     var parkedObserved = -2
 
     proc parked(): Future[void] {.async: (raises: [Exception]).} =
-      withAsyncInt(777):
+      asyncInt.withValue(777):
         await parkedWaiter          # suspends INSIDE the binder
-        parkedObserved = asyncInt()
+        parkedObserved = asyncInt.value
 
     let parkedFut = parked()        # suspends mid-binder; ambient restored to nil
-    check asyncInt() == 0           # confirms no leak from `parked`'s entry
+    check asyncInt.value == 0           # confirms no leak from `parked`'s entry
 
     var fired = false
     let fut = newFuture[void]("cancel-future")
     fut.cancelCallback = proc(_: pointer) {.gcsafe, raises: [].} =
-      check asyncInt() == 0         # own captured (nil) context, not 777
+      check asyncInt.value == 0         # own captured (nil) context, not 777
       fired = true
 
     check tryCancel(fut)            # fires while `parked` sits suspended
     check fired
     check fut.cancelled()
-    check asyncInt() == 0           # still clean after the cancel fires
+    check asyncInt.value == 0           # still clean after the cancel fires
 
     parkedWaiter.complete()
     waitFor parkedFut
@@ -660,15 +659,15 @@ suite "contextvars: fast-path pins":
     var seen: seq[int]
 
     proc recordCb(udata: pointer) {.gcsafe, raises: [].} =
-      seen.add asyncInt()
+      seen.add asyncInt.value
 
     callSoon(recordCb, nil)          # nil capture -> fast arm (nil == nil)
-    withAsyncInt(11):
+    asyncInt.withValue(11):
       callSoon(recordCb, nil)        # 11 capture  -> slow arm
     callSoon(recordCb, nil)          # nil capture -> fast arm
-    withAsyncInt(22):
+    asyncInt.withValue(22):
       callSoon(recordCb, nil)        # 22 capture  -> slow arm
-    withAsyncInt(33):
+    asyncInt.withValue(33):
       callSoon(recordCb, nil)        # 33 capture  -> slow arm
     callSoon(recordCb, nil)          # nil capture -> fast arm
 
@@ -677,10 +676,10 @@ suite "contextvars: fast-path pins":
 
   test "bind-and-raise on the fast arm leaves the ambient context clean after the batch":
     # The callback binds then raises a Defect (CallbackFunc is raises: []).
-    # contextBindSlot's own finally must still unwind the binding even
+    # withValue's own finally must still unwind the binding even
     # though the fast arm itself never wrote/restored currentAsyncContext.
     proc raiser(udata: pointer) {.gcsafe, raises: [].} =
-      withAsyncInt(999):
+      asyncInt.withValue(999):
         doAssert false, "contextvars: intentional Defect to " &
                          "exercise the fast-arm raise path"
 
@@ -691,21 +690,21 @@ suite "contextvars: fast-path pins":
     except Defect:
       caught = true
     check caught
-    check asyncInt() == 0
+    check asyncInt.value == 0
 
   test "bind-and-raise on the slow arm restores the prior ambient context after the batch (fireWithContext)":
     # Captured (111) and ambient (222) contexts differ at fire time, forcing
-    # the slow arm; the callback asserting asyncInt() == 111 before raising
+    # the slow arm; the callback asserting asyncInt.value == 111 before raising
     # proves the write ran.
     proc raiser(udata: pointer) {.gcsafe, raises: [].} =
-      check asyncInt() == 111       # proves the slow arm's write executed
+      check asyncInt.value == 111       # proves the slow arm's write executed
       doAssert false, "contextvars: intentional Defect to " &
                        "exercise the slow-arm restore path (fireWithContext)"
 
-    withAsyncInt(111):
+    asyncInt.withValue(111):
       callSoon(raiser, nil)         # captured context = 111
 
-    withAsyncInt(222):               # ambient at fire time = 222 != 111
+    asyncInt.withValue(222):               # ambient at fire time = 222 != 111
       var caught = false
       try:
         poll()
@@ -714,30 +713,30 @@ suite "contextvars: fast-path pins":
       check caught
       # The finally must restore the ambient context to 222, not leave it
       # at the callback's captured value (111).
-      check asyncInt() == 222
-    check asyncInt() == 0
+      check asyncInt.value == 222
+    check asyncInt.value == 0
 
   test "bind-and-raise on the slow arm restores the prior ambient context after cancellation (fireCancelCallback)":
     # Same slow-arm restore contract as above, through the cancelCallback
     # fire site instead of the regular callback fire site.
     let fut = newFuture[void]("slow-arm-cancel")
     proc raiserCancel(_: pointer) {.gcsafe, raises: [].} =
-      check asyncInt() == 333       # proves the slow arm's write executed
+      check asyncInt.value == 333       # proves the slow arm's write executed
       doAssert false, "contextvars: intentional Defect to " &
                        "exercise the slow-arm restore path (fireCancelCallback)"
 
-    withAsyncInt(333):
+    asyncInt.withValue(333):
       fut.cancelCallback = raiserCancel   # captured context = 333
 
-    withAsyncInt(444):               # ambient at fire time = 444 != 333
+    asyncInt.withValue(444):               # ambient at fire time = 444 != 333
       var caught = false
       try:
         discard tryCancel(fut)
       except Defect:
         caught = true
       check caught
-      check asyncInt() == 444
-    check asyncInt() == 0
+      check asyncInt.value == 444
+    check asyncInt.value == 0
 
     # The Defect from raiserCancel escapes before cancelAndSchedule runs, so
     # fut is left permanently Pending, inflating testutils' future-count
@@ -745,7 +744,7 @@ suite "contextvars: fast-path pins":
     fut.complete()
 
   test "nil-captured resume through a suspended binder leaves the ambient context clean for a later same-batch callback":
-    # A yield inside withName is a plain return, so contextBindSlot's finally
+    # A yield inside withValue is a plain return, so withValue's finally
     # does not run for it; the resume must still restore currentAsyncContext
     # so callbacks queued behind it in the same batch don't see a leaked binding.
     let outerWaiter = newFuture[void]("leak-repro.outer")
@@ -756,13 +755,13 @@ suite "contextvars: fast-path pins":
 
     proc leaky(): Future[void] {.async: (raises: [Exception]).} =
       await outerWaiter               # captured with nil ambient context
-      withAsyncInt(999):
-        await innerWaiter             # the suspend point is inside withAsyncInt's
+      asyncInt.withValue(999):
+        await innerWaiter             # the suspend point is inside withValue's
                                        # dynamic extent, not before it
-        innerObserved = asyncInt()
+        innerObserved = asyncInt.value
 
     proc laterCb(udata: pointer) {.gcsafe, raises: [].} =
-      laterSeenBinding = asyncInt()
+      laterSeenBinding = asyncInt.value
       laterFired = true
 
     let fut = leaky()                 # synchronous run to `await outerWaiter`
@@ -779,10 +778,10 @@ suite "contextvars: fast-path pins":
     check fut.finished()
 
   test "await inside withContext survives suspension and leaves ambient restored for a later same-batch callback":
-    # Same suspend hazard as the withName pin above, but through the public
-    # currentContext()/withContext() bridge instead of the macro-generated binder.
+    # Same suspend hazard as the withValue pin above, but through the public
+    # currentContext()/withContext() bridge instead of the withValue binder.
     var boundCtx: AsyncContext
-    withAsyncInt(999):
+    asyncInt.withValue(999):
       boundCtx = currentContext()
 
     let outerWaiter = newFuture[void]("wc-leak-repro.outer")
@@ -795,10 +794,10 @@ suite "contextvars: fast-path pins":
       await outerWaiter               # captured with nil ambient context
       withContext(boundCtx):
         await innerWaiter             # suspends INSIDE withContext's body
-        innerObserved = asyncInt()
+        innerObserved = asyncInt.value
 
     proc laterCb(udata: pointer) {.gcsafe, raises: [].} =
-      laterSeenBinding = asyncInt()
+      laterSeenBinding = asyncInt.value
       laterFired = true
 
     let fut = leaky()                 # synchronous run to `await outerWaiter`
@@ -836,22 +835,22 @@ suite "contextvars: scheduling scenario pins":
       var laterFired = false
 
       proc innerWork(): Future[int] {.async: (raises: [CancelledError]).} =
-        withAsyncInt(999):
+        asyncInt.withValue(999):
           await sleepAsync(1.milliseconds)
-          return asyncInt()
+          return asyncInt.value
 
       proc laterCb(udata: pointer) {.gcsafe, raises: [].} =
-        laterSeenBinding = asyncInt()
+        laterSeenBinding = asyncInt.value
         laterFired = true
 
       proc outerCb(udata: pointer) {.gcsafe, raises: [].} =
-        withAsyncInt(500):
-          check asyncInt() == 500
+        asyncInt.withValue(500):
+          check asyncInt.value == 500
           try:
             innerObserved = waitFor(innerWork())
           except CancelledError:
             discard
-          outerAfterNested = asyncInt()
+          outerAfterNested = asyncInt.value
         outerFired = true
 
       callSoon(outerCb, nil)   # nil capture == nil ambient at fire -> fast arm
@@ -873,16 +872,16 @@ suite "contextvars: scheduling scenario pins":
       var outerFired = false
 
       proc innerWork(): Future[int] {.async: (raises: [CancelledError]).} =
-        withAsyncInt(999):
+        asyncInt.withValue(999):
           await sleepAsync(1.milliseconds)
-          return asyncInt()
+          return asyncInt.value
 
       proc outerCb(udata: pointer) {.gcsafe, raises: [].} =
-        withAsyncInt(500):
-          check asyncInt() == 500
+        asyncInt.withValue(500):
+          check asyncInt.value == 500
           expect(Defect):
             discard waitFor(innerWork())
-          outerAfterRaise = asyncInt()
+          outerAfterRaise = asyncInt.value
         outerFired = true
 
       callSoon(outerCb, nil)   # nil capture == nil ambient at fire -> fast arm
@@ -903,10 +902,10 @@ suite "contextvars: scheduling scenario pins":
       readyPtr: ptr bool
 
     proc threadProc(arg: ThreadArg) {.thread, nimcall.} =
-      withAsyncInt(arg.boundValue):
+      asyncInt.withValue(arg.boundValue):
         proc work(): Future[int] {.async: (raises: [CancelledError]).} =
           await sleepAsync(1.milliseconds)
-          return asyncInt()
+          return asyncInt.value
         arg.resultPtr[] = waitFor(work())
       arg.readyPtr[] = true
 
@@ -938,7 +937,7 @@ suite "contextvars: scheduling scenario pins":
 
     proc crossThreadCb(udata: pointer) {.nimcall, gcsafe, raises: [].} =
       let r = cast[ptr CrossThreadResult](udata)
-      r.seenBinding = asyncInt()
+      r.seenBinding = asyncInt.value
       r.fired = true
 
     type ThreadArg = (DispatcherHandle, ptr CrossThreadResult)
@@ -948,7 +947,7 @@ suite "contextvars: scheduling scenario pins":
     var res: CrossThreadResult
     let disp = getThreadDispatcher()
 
-    withAsyncInt(555):
+    asyncInt.withValue(555):
       var thread: Thread[ThreadArg]
       createThread(thread, threadProc, (disp.handle(), addr res))
       # Bounded-retry rather than a single poll(): a leftover non-empty
@@ -967,10 +966,10 @@ suite "contextvars: scheduling scenario pins":
 
       check res.fired
       check res.seenBinding == 0     # DEFAULT - not leaked from the origin's 555
-      check asyncInt() == 555        # origin thread's own binding undisturbed
+      check asyncInt.value == 555        # origin thread's own binding undisturbed
       joinThreads(thread)
 
-    check asyncInt() == 0
+    check asyncInt.value == 0
 
   test "addCallback on an already-finished future captures the caller's binding, not the completer's":
     # An already-finished future's addCallback takes the immediate-dispatch
@@ -979,14 +978,14 @@ suite "contextvars: scheduling scenario pins":
     var fired = false
 
     let fut = newFuture[void]("already-finished")
-    withAsyncInt(111):
+    asyncInt.withValue(111):
       fut.complete()               # completed under binding 111
 
     check fut.finished()
 
-    withAsyncInt(222):
+    asyncInt.withValue(222):
       fut.addCallback(proc(udata: pointer) {.gcsafe, raises: [].} =
-        seenBinding = asyncInt()
+        seenBinding = asyncInt.value
         fired = true
       )
 
@@ -1006,21 +1005,21 @@ suite "contextvars: scheduling scenario pins":
 
     proc handler(server: StreamServer,
                  transp: StreamTransport) {.async: (raises: []).} =
-      seenBinding = asyncInt()
+      seenBinding = asyncInt.value
       handlerFired = true
       transp.close()
       handlerDone.complete()
 
     let ta = initTAddress("127.0.0.1:0")
     var server: StreamServer
-    withAsyncInt(111):
+    asyncInt.withValue(111):
       server = createStreamServer(ta, handler, {ReuseAddr})  # creation-time: 111
 
-    withAsyncInt(222):
+    asyncInt.withValue(222):
       server.start()                                         # registration-time: 222
 
     proc driver(): Future[void] {.async: (raises: [Exception]).} =
-      withAsyncInt(333):                                     # connection-time: 333
+      asyncInt.withValue(333):                                     # connection-time: 333
         var transp = await connect(server.localAddress())
         await handlerDone.wait(5.seconds)
         transp.close()
@@ -1040,13 +1039,13 @@ suite "contextvars: must-bind async propagation":
     # Must-bind arms use the same binder/dispatcher plumbing as asyncInt/
     # asyncStr; only the reader differs (raise vs. default on a miss).
     proc work(): Future[int] {.async: (raises: [CancelledError]).} =
-      check asyncReq() == 17
+      check asyncReq.value == 17
       await sleepAsync(1.milliseconds)
-      check asyncReq() == 17
-      return asyncReq()
+      check asyncReq.value == 17
+      return asyncReq.value
 
     proc driver(): Future[int] {.async: (raises: [CancelledError]).} =
-      withAsyncReq(17):
+      asyncReq.withValue(17):
         return await work()
 
     check waitFor(driver()) == 17
@@ -1055,7 +1054,7 @@ suite "contextvars: must-bind async propagation":
     proc work(): Future[void] {.async: (raises: [CancelledError]).} =
       await sleepAsync(1.milliseconds)
       expect(UnboundContextVarDefect):
-        discard asyncReq()
+        discard asyncReq.value
 
     waitFor(work())
 

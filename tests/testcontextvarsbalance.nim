@@ -14,6 +14,7 @@
 
 import unittest2
 import ../chronos/internal/contextvars_impl
+import ../chronos/internal/contextkeys
 
 {.used.}
 
@@ -28,5 +29,18 @@ suite "contextvars: suite-final binder balance":
       # Chain must also be empty at top-level (no test left a leaked
       # binding in `currentAsyncContext`).
       check chainLen() == 0
+    else:
+      skip()
+
+  test "contextkeys binder balance (no leaked bindings)":
+    when defined(chronosDebug):
+      # `withValue` increments `keyChainBalance` at push, decrements at
+      # pop — same contract as `chainBalance` above, for the new key
+      # binder. A nonzero count at suite end means some `withValue`
+      # pushed a node without popping.
+      check keyChainBalance == 0
+      # Chain must also be empty at top-level (no test left a leaked
+      # binding in `currentAsyncContext`).
+      check keyChainLen() == 0
     else:
       skip()

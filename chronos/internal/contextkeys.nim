@@ -55,7 +55,29 @@ type
     ## needs, one level below it. `ContextNode[T]` is the only type
     ## ever built on this layer, so `key`'s presence at this offset
     ## is sound by construction, not by runtime tag.
-    key: ContextVarBase
+    ##
+    ## Stored as a raw `pointer`, not `ContextVarBase`: a key is a
+    ## module-level `let` constructed before any `createThread` (RFC
+    ## "Registry and key lifetime") and kept alive for the process's
+    ## life either by the registry's intrusive list or, for a private
+    ## key, by the module-level global itself — never by a chain node,
+    ## so an untraced pointer is sound (the pointee outlives every
+    ## node that could reference it). This is load-bearing, not
+    ## cosmetic: `withValue` can run on any thread once a key is
+    ## constructed, and under `--mm:refc` the GC heap is per-thread
+    ## (`gch` is `{.rtlThreadVar.}`), so a traced `ContextVarBase`
+    ## field here would incref a foreign-thread-allocated key through
+    ## the wrong thread's heap bookkeeping on every bind — reproduced
+    ## as a `[GCASSERT] incRef: interiorPtr` crash under
+    ## `-d:useGcAssert` (two threads, each `withValue`-binding the same
+    ## key). `{.cursor.}` was tried first and does NOT fix this: this
+    ## codebase's own precedent (`asyncfutures.nim`'s `cbc2 {.cursor.}`
+    ## sites) documents it as an orc/arc cycle-avoidance device, and
+    ## empirically refc still emits the write barrier for a cursor
+    ## field here. A raw `pointer` sidesteps ref-counting entirely, on
+    ## every MM, matching the old registry's own `ptr
+    ## ContextVarRegistration` precedent for the same class of hazard.
+    key: pointer
 
   ContextNode[T] = ref object of ContextNodeKeyed
     ## One chain node: the key it was bound under, plus the owned
@@ -181,6 +203,18 @@ proc currentContext*(): AsyncContext {.gcsafe, raises: [].} =
   {.cast(gcsafe).}:
     AsyncContext(currentAsyncContext)
 
+template withContext*(ctx: AsyncContext, body: untyped) =
+  ## Run `body` with `ctx` as the current async context; restore the
+  ## prior context on every exit path (normal, exception, including
+  ## `CancelledError`). Ported from `chronos/contextvars.nim`'s
+  ## `withContext` — same semantics, unchanged.
+  let chronosCtxPrev = currentAsyncContext
+  currentAsyncContext = ContextNodeBase(ctx)
+  try:
+    body
+  finally:
+    currentAsyncContext = chronosCtxPrev
+
 type
   UnboundContextVarDefect* = object of Defect
     ## Raised by a must-bind key's read (`.value` or `ctx[cv]`) when no
@@ -196,7 +230,7 @@ type
 proc `[]`*[T](ctx: AsyncContext, cv: ContextVar[T]): T {.raises: [].} =
   var node = ContextNodeBase(ctx)
   while node != nil:
-    if cast[ContextNodeKeyed](node).key == ContextVarBase(cv):
+    if cast[ContextNodeKeyed](node).key == cast[pointer](cv):
       return cast[ContextNode[T]](node).value
     node = node.nextNode
   if cv.hasDefault:
@@ -209,24 +243,57 @@ proc `[]`*[T](ctx: AsyncContext, cv: ContextVar[T]): T {.raises: [].} =
     raise e
 
 template value*[T](cv: ContextVar[T]): T =
-  currentContext()[cv]
+  ## `{.cast(gcsafe).}`: `cv` is typically a module-level `let` key (a
+  ## `ref`), and this template inlines directly into its caller — so
+  ## without the cast, the caller (often a `{.gcsafe.}`-required async
+  ## proc) would be flagged for "accessing a global using GC'ed
+  ## memory". Sound: keys are write-once at construction (see
+  ## "Registry and key lifetime" in the RFC) and never mutated after.
+  {.cast(gcsafe).}:
+    currentContext()[cv]
+
+when defined(chronosDebug):
+  var keyChainBalance* {.threadvar.}: int
+    ## Debug-only bind/unbind balance counter for `withValue` (the new
+    ## key binder) — mirrors `contextvars_impl.nim`'s `chainBalance`
+    ## exactly (increment at push, decrement at pop), under a distinct
+    ## name so both modules can be imported together without ambiguity
+    ## during the strangler phase. Nonzero at test-suite end signals a
+    ## `withValue` leak.
+
+  proc keyChainLen*(): int {.inline, raises: [].} =
+    ## Debug-only chain-depth probe, mirroring `chainLen()`. Walks
+    ## `currentAsyncContext` and returns the number of nodes.
+    var n = currentAsyncContext
+    while n != nil:
+      inc result
+      n = n.nextNode
 
 template withValue*[T](cv: ContextVar[T], v: T, body: untyped): untyped =
   ## Push a `ContextNode[T]` bound to `cv` onto the ambient chain for
   ## the dynamic extent of `body`; restore the prior head on every
   ## exit path. Mirrors `contextBindSlot`'s ordering: allocate before
   ## mutating `currentAsyncContext`, so a failed allocation can't leave
-  ## a half-pushed chain. Debug-mode `chainBalance` accounting stays
-  ## with the old binder in `contextvars_impl.nim` for this slice —
-  ## carried over at the port slice, not duplicated here.
+  ## a half-pushed chain. Debug-mode accounting mirrors
+  ## `contextBindSlot`'s `chainBalance`/`chainLen`, under the distinct
+  ## `keyChainBalance`/`keyChainLen` names above.
+  ##
+  ## `{.cast(gcsafe).}`: same global-access rationale as `value` above —
+  ## `cv` inlines straight into the caller here too.
   let chronosCtxPrev = currentAsyncContext
-  let chronosCtxNode = ContextNode[T](key: cv, value: v)
+  var chronosCtxNode: ContextNode[T]
+  {.cast(gcsafe).}:
+    chronosCtxNode = ContextNode[T](key: cast[pointer](cv), value: v)
   linkNode(chronosCtxNode, chronosCtxPrev)
   currentAsyncContext = chronosCtxNode
+  when defined(chronosDebug):
+    inc keyChainBalance
   try:
     body
   finally:
     currentAsyncContext = chronosCtxPrev
+    when defined(chronosDebug):
+      dec keyChainBalance
 
 # --- Introspection ------------------------------------------------------------
 # CONTRACT PARITY with `chronos/contextvars.nim`'s `dumpContext`/`` `$` ``:
@@ -246,7 +313,7 @@ type
 proc findNode(chain: ContextNodeBase, cv: ContextVarBase): ContextNodeBase =
   var node = chain
   while node != nil:
-    if cast[ContextNodeKeyed](node).key == cv:
+    if cast[ContextNodeKeyed](node).key == cast[pointer](cv):
       return node
     node = node.nextNode
 
