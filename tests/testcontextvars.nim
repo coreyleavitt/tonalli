@@ -914,3 +914,51 @@ static:
     "a {.contextVar.} section naming more than one declaration must " &
     "not compile — the pragma supports exactly one identifier per " &
     "declaration"
+
+# --- {.contextVar.} pragma-argument override (dump-visibility) --------------
+# `{.contextVar: (private: <bool>).}` decouples a declaration's
+# dumpContext visibility from its own export marker — see
+# docs/src/contextvars.md, "The `{.contextVar.}` pragma", "Overriding
+# dump-visibility". Default (no argument) behavior is unchanged and
+# covered above; these tests cover both override directions, the
+# argument's interaction with the let/var grammar enforcement, and a
+# `not compiles` pin for a malformed argument.
+
+let t36ExportedPrivate* {.contextVar: (private: true).} = 1
+  ## Exported (star) but overridden private -> absent from dumpContext
+  ## despite the star.
+
+let t37UnexportedVisible {.contextVar: (private: false).} = 2
+  ## Unexported (no star) but overridden non-private -> present in
+  ## dumpContext despite the missing star.
+
+var t38MustBindOverride* {.contextVar: (private: true).}: int
+  ## must-bind + override: the argument form must still enforce the
+  ## var/must-bind pairing.
+
+suite "contextvars (raw key): {.contextVar.} pragma-argument override":
+
+  test "exported + private=true override: absent from dumpContext despite the star":
+    check t36ExportedPrivate.value == 1
+    check not dumpContext(currentContext()).anyIt(it.name == "t36ExportedPrivate")
+
+  test "unexported + private=false override: present in dumpContext despite no star":
+    check t37UnexportedVisible.value == 2
+    check dumpContext(currentContext()).anyIt(it.name == "t37UnexportedVisible")
+
+  test "override argument composes with must-bind (var) grammar":
+    check t38MustBindOverride.hasDefault == false
+    expect UnboundContextVarDefect:
+      discard t38MustBindOverride.value
+    t38MustBindOverride.withValue(9):
+      check t38MustBindOverride.value == 9
+    check not dumpContext(currentContext()).anyIt(it.name == "t38MustBindOverride")
+
+static:
+  doAssert not compiles((var t39WrongKeyword {.contextVar: (private: true).} = 5)),
+    "a defaulted {.contextVar: (private: ...).} key spelled with `var` " &
+    "must not compile — the argument form keeps the same let/var " &
+    "enforcement the default form has"
+  doAssert not compiles((let t40BadArg {.contextVar: (private: 1).} = 5)),
+    "a malformed {.contextVar: (private: ...).} argument (a non-bool " &
+    "value) must not compile"

@@ -99,6 +99,29 @@ literal (`nil`) or absent entirely (must-bind); `let requestId*
 {.contextVar.} = ""` and `var traceId* {.contextVar.}: string` both settle
 `T` without it.
 
+**Overriding dump-visibility.** The star-derived default covers the
+common case, but export and dump-visibility are two different axes, and
+occasionally a declaration genuinely needs them to disagree — an
+exported key whose value is still too sensitive for a debug dump, or an
+unexported key a maintainer wants surfaced in `dumpContext` for local
+debugging without changing its export marker. `{.contextVar: (private:
+true|false).}` breaks the derivation for that one declaration, leaving
+every other declaration's default unaffected:
+
+```nim
+let requestId* {.contextVar: (private: true).} = ""     # exported, still dump-private
+let internalCounter {.contextVar: (private: false).} = 0  # unexported, still dumped
+```
+
+The argument form composes with everything above it — explicit `[T]`,
+the must-bind `var` form, the `let`/`var` grammar enforcement — it only
+ever changes which `private` value reaches the underlying constructor
+call. Omitting the argument (plain `{.contextVar.}`) keeps the
+star-derived default; reach for the override only when a declaration's
+export marker and its intended dump-visibility genuinely need to differ,
+not as a habit — an override that always agrees with the star is just
+the default spelled out.
+
 **The raw constructors.** The pragma is sugar over two public, documented
 primitives — a distinct name per arity, not two overloads of one name,
 because a bool-typed default would otherwise collide with the must-bind
@@ -793,9 +816,12 @@ codebase already paid on its one field.
   `{.contextVar.}` pragma's four declaration forms (starred/inferred,
   explicit-`T`, unstarred/private, must-bind), one-symbol emission (no
   derived identifiers reachable after expansion), wrapper-macro
-  composition (the pragma invoked through a forwarding template), and
-  its `let`/`var` grammar enforcement (a defaulted key spelled with
-  `var`, a must-bind key spelled with `let` — both compile errors).
+  composition (the pragma invoked through a forwarding template), its
+  `let`/`var` grammar enforcement (a defaulted key spelled with `var`, a
+  must-bind key spelled with `let` — both compile errors), and the
+  `{.contextVar: (private: ...).}` override argument (both override
+  directions, its composition with the must-bind `var` form, and a
+  malformed argument as a `not compiles` pin).
 - `tests/testcontextvarsasync.nim` — async propagation (isolation across
   interleaved tasks, survival across sequential awaits, exception and
   cancellation paths, spawn-time inheritance), per-scheduling-site
