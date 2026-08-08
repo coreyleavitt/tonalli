@@ -45,7 +45,7 @@ type
 
 # --- index primitives ---------------------------------------------------
 
-proc capMask(cap: int): uint {.inline.} =
+func capMask(cap: int): uint {.inline.} =
   # `let`-bound rather than inlined into the `and` below: identical
   # codegen, but keeps the operand resolvable by symbolic-execution
   # tooling verifying this module's index arithmetic.
@@ -54,7 +54,7 @@ proc capMask(cap: int): uint {.inline.} =
     "CallbackQueue.capMask(): capacity must be a positive power of two"
   uint(capMinusOne)
 
-proc slotIndex(pos: uint, cap: int): int {.inline.} =
+func slotIndex(pos: uint, cap: int): int {.inline.} =
   ## Fold a monotonic (possibly-wrapped) logical position into
   ## `[0, cap)`. `cap` being a power of two makes this correct across a
   ## `pos` wrap too, which `prependNoGrow`'s `dec head` relies on when
@@ -63,20 +63,20 @@ proc slotIndex(pos: uint, cap: int): int {.inline.} =
   let mask = capMask(cap)
   int(pos and mask)
 
-proc queueLen(head, tail: uint): int {.inline.} =
+func queueLen(head, tail: uint): int {.inline.} =
   ## `tail - head`, unsigned: congruent mod `2^wordsize`, so this is the
   ## true logical length regardless of wraps — no ordering comparison
   ## between `head`/`tail` is meaningful any more.
   int(tail - head)
 
-proc isFull(head, tail: uint, cap: int): bool {.inline.} =
+func isFull(head, tail: uint, cap: int): bool {.inline.} =
   let n = queueLen(head, tail)
   doAssert n >= 0 and n <= cap,
     "CallbackQueue.isFull(): length invariant violated - `tail - head` " &
     "(mod 2^wordsize) must never exceed capacity"
   n >= cap
 
-proc growTargetCap(cap: int): int {.inline.} =
+func growTargetCap(cap: int): int {.inline.} =
   doAssert cap >= 0, "CallbackQueue.growTargetCap(): capacity must not be negative"
   if cap == 0: 8 else: cap * 2
 

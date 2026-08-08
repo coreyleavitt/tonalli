@@ -15,10 +15,11 @@ import results
 import ".."/[asyncloop, config, handles, bipbuffer, osdefs, osutils, oserrno]
 import ../futures except capturingCallback, bareCallback, contextCallback,
   capturingCancelCallback, currentAsyncContext, context, withRestoredContext,
-  pinContext
-  # Only `captureContextInto` is used here; exclusion list kept in sync
-  # with `asyncengine.nim`'s so this import can't widen the public
-  # surface through `stream.nim`.
+  pinContext, captureContextInto
+  # `captureContextInto` is excluded here too: every call site in this
+  # file resolves to the Windows-only `captureContextInto(var
+  # CompletionData)` overload, reached instead through the direct
+  # `asyncengine` import below.
 import ./[common, ipnet]
 
 when defined(windows):

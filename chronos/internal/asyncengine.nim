@@ -1006,7 +1006,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     let loop = getThreadDispatcher()
     var newEvents: set[Event]
     withData(loop.selector, cint(fd), adata) do:
-      # Assignment fires =destroy on the prior reader → context released.
+      # Assignment fires =destroy on the prior reader - context released.
       adata.reader.reset()
       if not(isNil(adata.writer.function)):
         newEvents.incl(Event.Write)
@@ -1036,6 +1036,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     let loop = getThreadDispatcher()
     var newEvents: set[Event]
     withData(loop.selector, cint(fd), adata) do:
+      # Same as removeReader2 above: assignment fires =destroy on the
+      # prior writer, releasing its captured context.
       adata.writer.reset()
       if not(isNil(adata.reader.function)):
         newEvents.incl(Event.Read)
@@ -1191,6 +1193,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
 
     proc removeProcess2*(procHandle: ProcessHandle): Result[void, OSErrorCode] =
       ## Remove process' watching using process' descriptor ``procfd``.
+      # Same as removeSignal2 above: SelectorData drop on unregister2
+      # cascades =destroy onto adata.reader's AsyncCallback, releasing
+      # its captured context.
       getThreadDispatcher().selector.unregister2(cint(procHandle))
 
     proc addSignal*(signal: int, cb: CallbackFunc,

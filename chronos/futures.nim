@@ -228,7 +228,7 @@ template withRestoredContext*(newCtx: ContextNodeBase, body: untyped) =
   ## cannot dangle the binder chain across a suspend — i.e. body is not
   ## a continuation pump, or the pump's entry re-pins (`pinContext`).
   let chronosCtxPrev = currentAsyncContext        # one TLS read
-  if newCtx == chronosCtxPrev:                    # identity ⇒ no writes,
+  if newCtx == chronosCtxPrev:                    # identity - no writes,
     body                                          # no try/finally
     when defined(chronosDebug):
       doAssert currentAsyncContext == newCtx,
