@@ -287,6 +287,11 @@ proc `[]`*[T](ctx: AsyncContext, cv: ContextVar[T]): T {.raises: [].} =
   var node = ContextNodeBase(ctx)
   while node != nil:
     if cast[ContextNodeKeyed](node).key == cast[pointer](cv):
+      when defined(chronosDebug):
+        doAssert node of ContextNode[T],
+          "contextvars internal error: a chain node whose key matched " &
+          "cv is not a ContextNode[T] — see the construction invariant " &
+          "in docs/src/contextvars.md, \"Implementation\""
       return cast[ContextNode[T]](node).value
     node = node.nextNode
   if cv.hasDefault:

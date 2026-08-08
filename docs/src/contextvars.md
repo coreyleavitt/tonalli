@@ -497,7 +497,12 @@ pointer comparison per node — and, on a match, reads the value out via
 `cast[ContextNode[T]](node)`. `.value` is not a second read path: it's
 `template value(cv) = currentContext()[cv]`, so the ambient spelling and
 the snapshot spelling (`ctx[cv]`) are two spellings of this one walk, not
-parallel implementations.
+parallel implementations. Under a `chronosDebug` build, the cast is
+preceded by `doAssert node of ContextNode[T]` — a checked downcast
+verifying the construction invariant the paragraph above argues for by
+construction, the same debug-only discipline `chainBalance` and the
+construction lock below already use elsewhere in this module; release
+builds pay nothing for it.
 
 **Registry and key lifetime.** Every key — private or not — links itself
 into a process-wide intrusive list at construction — a private
