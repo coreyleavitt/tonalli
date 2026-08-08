@@ -230,24 +230,35 @@ suite "contextvars: async propagation":
 
     check waitFor(driver()) == 0
 
-suite "contextvars: scheduling-site capture coverage":
-
-  test "callSoon callback fires with the registrant's binding":
+template pinsCaptureSite(testName: string, bindValue: int, expected: int,
+                          registration: untyped) =
+  ## Owns the seenBinding/fired/driver scaffolding shared by the
+  ## scheduling-site capture-coverage tests below, which differ only in
+  ## their registration statement and the value bound at the registrant's
+  ## call site (and, for the context-blind trampoline, in the expected
+  ## value observed at fire time).
+  test testName:
     var seenBinding = -1
     var fired = false
 
-    proc cb(udata: pointer) {.gcsafe, raises: [].} =
+    proc cb(udata: pointer) {.gcsafe, raises: [], inject.} =
       seenBinding = asyncInt.value
       fired = true
 
     proc driver(): Future[void] {.async: (raises: [CancelledError]).} =
-      asyncInt.withValue(789):
-        callSoon(cb, nil)
+      asyncInt.withValue(bindValue):
+        registration
         while not fired:
           await sleepAsync(1.milliseconds)
 
     waitFor(driver())
-    check seenBinding == 789
+    check seenBinding == expected
+
+suite "contextvars: scheduling-site capture coverage":
+
+  pinsCaptureSite("callSoon callback fires with the registrant's binding",
+                   789, 789):
+    callSoon(cb, nil)
 
   test "sleepAsync callback fires with the registrant's binding":
     # Pinned explicitly as a regression guard on setTimer's construction site.
@@ -257,61 +268,23 @@ suite "contextvars: scheduling-site capture coverage":
         return asyncInt.value
     check waitFor(driver()) == 456
 
-  test "internalCallTick is context-blind (internal trampoline)":
+  pinsCaptureSite("internalCallTick is context-blind (internal trampoline)",
+                   123, 0):
     # Internal scheduling sites use bareCallback (no context capture), so a
     # callback scheduled from inside asyncInt.withValue(123) must see the default.
-    var seenBinding = -1
-    var fired = false
+    internalCallTick(cb, nil)
 
-    proc cb(udata: pointer) {.gcsafe, raises: [].} =
-      seenBinding = asyncInt.value
-      fired = true
-
-    proc driver(): Future[void] {.async: (raises: [CancelledError]).} =
-      asyncInt.withValue(123):
-        internalCallTick(cb, nil)
-        while not fired:
-          await sleepAsync(1.milliseconds)
-
-    waitFor(driver())
-    check seenBinding == 0
-
-  test "internalCallTick(capturingCallback(...)) fires with the registrant's binding":
+  pinsCaptureSite(
+      "internalCallTick(capturingCallback(...)) fires with the registrant's binding",
+      135, 135):
     # internalCallTick's AsyncCallback overload leaves the capture choice to
     # the caller; capturingCallback() is the documented opt-in counterpart
     # to the context-blind trampoline pinned above.
-    var seenBinding = -1
-    var fired = false
+    internalCallTick(capturingCallback(cb, nil))
 
-    proc cb(udata: pointer) {.gcsafe, raises: [].} =
-      seenBinding = asyncInt.value
-      fired = true
-
-    proc driver(): Future[void] {.async: (raises: [CancelledError]).} =
-      asyncInt.withValue(135):
-        internalCallTick(capturingCallback(cb, nil))
-        while not fired:
-          await sleepAsync(1.milliseconds)
-
-    waitFor(driver())
-    check seenBinding == 135
-
-  test "callIdle callback fires with the registrant's binding":
-    var seenBinding = -1
-    var fired = false
-
-    proc idleCb(udata: pointer) {.gcsafe, raises: [].} =
-      seenBinding = asyncInt.value
-      fired = true
-
-    proc driver(): Future[void] {.async: (raises: [CancelledError]).} =
-      asyncInt.withValue(321):
-        callIdle(idleCb, nil)
-        while not fired:
-          await sleepAsync(1.milliseconds)
-
-    waitFor(driver())
-    check seenBinding == 321
+  pinsCaptureSite("callIdle callback fires with the registrant's binding",
+                   321, 321):
+    callIdle(cb, nil)
 
   when not defined(windows):
     # addReader/addWriter/addSignal2/addProcess2 are POSIX-selector APIs;
@@ -529,39 +502,19 @@ suite "contextvars: scheduling-site capture coverage":
 
     check waitFor(driver()) == 61
 
-  test "closeHandle aftercb fires with the registrant's binding":
+  pinsCaptureSite("closeHandle aftercb fires with the registrant's binding",
+                   987, 987):
     # Tested separately from closeSocket: closeHandle has its own IOCP
     # path on Windows.
-    var seenBinding = -1
-    var fired = false
     let (rfd, wfd) = createAsyncPipe()
-    proc cb(udata: pointer) {.gcsafe, raises: [].} =
-      seenBinding = asyncInt.value
-      fired = true
-    proc driver(): Future[void] {.async: (raises: [CancelledError]).} =
-      asyncInt.withValue(987):
-        closeHandle(rfd, cb)
-        closeHandle(wfd)
-        while not fired:
-          await sleepAsync(1.milliseconds)
-    waitFor(driver())
-    check seenBinding == 987
+    closeHandle(rfd, cb)
+    closeHandle(wfd)
 
-  test "closeSocket aftercb fires with the registrant's binding":
-    var seenBinding = -1
-    var fired = false
+  pinsCaptureSite("closeSocket aftercb fires with the registrant's binding",
+                   321, 321):
     let (rfd, wfd) = createAsyncPipe()
-    proc cb(udata: pointer) {.gcsafe, raises: [].} =
-      seenBinding = asyncInt.value
-      fired = true
-    proc driver(): Future[void] {.async: (raises: [CancelledError]).} =
-      asyncInt.withValue(321):
-        closeSocket(rfd, cb)
-        closeSocket(wfd)
-        while not fired:
-          await sleepAsync(1.milliseconds)
-    waitFor(driver())
-    check seenBinding == 321
+    closeSocket(rfd, cb)
+    closeSocket(wfd)
 
   test "cancelSoon's already-finished branch fires aftercb with the registrant's binding":
     # When `future` is already finished at call time, cancelSoon skips the
@@ -569,7 +522,7 @@ suite "contextvars: scheduling-site capture coverage":
     # callSoon(capturingCallback(aftercb, udata)) at the cancelSoon call
     # site itself - a different capture site from the pending-future path
     # pinned in the cancelCallback suite below.
-    var seenBinding = ""
+    var seenBinding = -1
     var fired = false
 
     let fut = newFuture[void]("already-finished-cancelsoon")
@@ -577,17 +530,17 @@ suite "contextvars: scheduling-site capture coverage":
     check fut.finished()
 
     proc aftercb(udata: pointer) {.gcsafe, raises: [].} =
-      seenBinding = asyncStr.value
+      seenBinding = asyncInt.value
       fired = true
 
-    asyncStr.withValue("registrant"):
+    asyncInt.withValue(741):
       cancelSoon(fut, aftercb, nil)
 
-    asyncStr.withValue("ambient-at-fire"):
+    asyncInt.withValue(742):
       poll()
 
     check fired
-    check seenBinding == "registrant"
+    check seenBinding == 741
 
   test "cancelSoon(AsyncCallback) fires under the callback's own captured binding":
     # Unlike the CallbackFunc/pointer overload above, this overload takes

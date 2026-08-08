@@ -21,6 +21,19 @@ import ../chronos/contextvars
 
 {.used.}
 
+# --- Test helpers --------------------------------------------------------------
+
+proc entryFor(entries: seq[ContextVarEntry], name: string): ContextVarEntry =
+  ## Looks up the one dumpContext entry with the given name. Every by-name
+  ## probe in this file goes through here rather than a bare
+  ## `filterIt(...)[0]`, which raises an uncaught IndexDefect (aborting the
+  ## whole binary) on a missing name instead of failing just the one check.
+  let matches = entries.filterIt(it.name == name)
+  doAssert matches.len == 1,
+    "expected exactly one dumpContext entry named '" & name & "', found " &
+    $matches.len
+  matches[0]
+
 # --- Scoped binding fixtures --------------------------------------------------
 
 let tracerInt {.contextVar.} = 0
@@ -139,6 +152,9 @@ proc `$`(w: RenderWidget): string = "Widget(" & $w.id & ")"
   ## Deterministic rendering for the "ref-with-$" fixture below.
 
 suite "contextvars (raw key): key construction and registry":
+  # Fixture names below follow a running `tN...` counter across this file;
+  # gaps (t17, t26) are tests that were removed rather than renumbered, so
+  # a number is never reused for an unrelated fixture.
 
   test "defaulted key stores name, hasDefault, and registers":
     let k = newContextVar("t1Key", 42, private = false)
@@ -159,23 +175,25 @@ suite "contextvars (raw key): key construction and registry":
     check k.hasDefault == false
 
   test "dumpContext renders defaults and bound values across T shapes":
+    # Early smoke check for per-T dumpContext rendering; t25 below is the
+    # authoritative render-parity case over the same T shapes.
     let intKey = newContextVar("t4Int", 7, private = false)
     let widgetKey = newContextVar[RenderWidget]("t4Widget", nil, private = false)
     let blobKey = newContextVar("t4Blob", RenderBlob(3), private = false)
 
     block:
       let entries = dumpContext(currentContext())
-      check entries.filterIt(it.name == "t4Int")[0].value == "7"
-      check entries.filterIt(it.name == "t4Widget")[0].value == "nil"
-      check entries.filterIt(it.name == "t4Blob")[0].value == "<no-$>"
+      check entries.entryFor("t4Int").value == "7"
+      check entries.entryFor("t4Widget").value == "nil"
+      check entries.entryFor("t4Blob").value == "<no-$>"
 
     intKey.withValue(99):
       widgetKey.withValue(RenderWidget(id: 5)):
         blobKey.withValue(RenderBlob(11)):
           let entries = dumpContext(currentContext())
-          check entries.filterIt(it.name == "t4Int")[0].value == "99"
-          check entries.filterIt(it.name == "t4Widget")[0].value == "Widget(5)"
-          check entries.filterIt(it.name == "t4Blob")[0].value == "<no-$>"
+          check entries.entryFor("t4Int").value == "99"
+          check entries.entryFor("t4Widget").value == "Widget(5)"
+          check entries.entryFor("t4Blob").value == "<no-$>"
 
   test "two same-T keys are distinct":
     let k1 = newContextVar("t5Key", 1)
@@ -632,47 +650,31 @@ suite "contextvars: dumpContext and $":
 
   test "unbound defaulted key: bound=false, value is the rendered default":
     let entries = dumpContext(currentContext())
-    var found = false
-    for e in entries:
-      if e.name == "dumpDefaulted":
-        found = true
-        check e.bound == false
-        check e.value == "7"
-    check found
+    let e = entries.entryFor("dumpDefaulted")
+    check e.bound == false
+    check e.value == "7"
 
   test "bound defaulted key: bound=true, value is the bound value":
     dumpDefaulted.withValue(99):
       let entries = dumpContext(currentContext())
-      var found = false
-      for e in entries:
-        if e.name == "dumpDefaulted":
-          found = true
-          check e.bound == true
-          check e.value == "99"
-      check found
+      let e = entries.entryFor("dumpDefaulted")
+      check e.bound == true
+      check e.value == "99"
 
   test "unbound must-bind key: bound=false, placeholder value, dumpContext does not raise":
     # dumpContext must complete normally even though dumpMustBind.value
     # itself would raise UnboundContextVarDefect here.
     let entries = dumpContext(currentContext())
-    var found = false
-    for e in entries:
-      if e.name == "dumpMustBind":
-        found = true
-        check e.bound == false
-        check e.value == "<unbound>"
-    check found
+    let e = entries.entryFor("dumpMustBind")
+    check e.bound == false
+    check e.value == "<unbound>"
 
   test "bound must-bind key: bound=true, value is the bound value":
     dumpMustBind.withValue("hello"):
       let entries = dumpContext(currentContext())
-      var found = false
-      for e in entries:
-        if e.name == "dumpMustBind":
-          found = true
-          check e.bound == true
-          check e.value == "hello"
-      check found
+      let e = entries.entryFor("dumpMustBind")
+      check e.bound == true
+      check e.value == "hello"
 
   test "a type with no `$` renders as the <no-$> placeholder":
     # The generic render hook has no per-T type-name string to splice
@@ -680,13 +682,9 @@ suite "contextvars: dumpContext and $":
     # the type expression's `repr` at macro-expansion time) — a fixed
     # placeholder replaces the old `<TypeName>` form. See t4/t25 above.
     let entries = dumpContext(currentContext())
-    var found = false
-    for e in entries:
-      if e.name == "dumpNoDollar":
-        found = true
-        check e.bound == false
-        check e.value == "<no-$>"
-    check found
+    let e = entries.entryFor("dumpNoDollar")
+    check e.bound == false
+    check e.value == "<no-$>"
 
   test "`$`(ctx) renders {name: value, ...} via the same machinery as dumpContext":
     dumpDefaulted.withValue(55):
@@ -695,24 +693,16 @@ suite "contextvars: dumpContext and $":
 
   test "ref-typed key with nil value renders as \"nil\" without calling $ (would crash otherwise)":
     let entries = dumpContext(currentContext())
-    var found = false
-    for e in entries:
-      if e.name == "dumpRefNilDefault":
-        found = true
-        check e.bound == false
-        check e.value == "nil"
-    check found
+    let e = entries.entryFor("dumpRefNilDefault")
+    check e.bound == false
+    check e.value == "nil"
 
   test "bound ref-typed key with a non-nil value renders via $":
     dumpRefNilDefault.withValue(DerefDollarRef(field: 42)):
       let entries = dumpContext(currentContext())
-      var found = false
-      for e in entries:
-        if e.name == "dumpRefNilDefault":
-          found = true
-          check e.bound == true
-          check e.value == "field=42"
-      check found
+      let e = entries.entryFor("dumpRefNilDefault")
+      check e.bound == true
+      check e.value == "field=42"
 
   test "entries are sorted by name":
     let entries = dumpContext(currentContext())
@@ -729,15 +719,13 @@ suite "contextvars (raw key): dumpContext and $":
 
     let entries = dumpContext(currentContext())
 
-    let defaultedEntries = entries.filterIt(it.name == "t22Defaulted")
-    check defaultedEntries.len == 1
-    check defaultedEntries[0].bound == false
-    check defaultedEntries[0].value == "5"
+    let defaultedEntry = entries.entryFor("t22Defaulted")
+    check defaultedEntry.bound == false
+    check defaultedEntry.value == "5"
 
-    let mustBindEntries = entries.filterIt(it.name == "t22MustBind")
-    check mustBindEntries.len == 1
-    check mustBindEntries[0].bound == false
-    check mustBindEntries[0].value == "<unbound>"
+    let mustBindEntry = entries.entryFor("t22MustBind")
+    check mustBindEntry.bound == false
+    check mustBindEntry.value == "<unbound>"
 
     check not entries.anyIt(it.name == "t22Private")
     check defaultedKey.value == 5
@@ -747,11 +735,11 @@ suite "contextvars (raw key): dumpContext and $":
     let k = newContextVar("t23Key", 1, private = false)
     var boundEntry: ContextVarEntry
     k.withValue(77):
-      boundEntry = dumpContext(currentContext()).filterIt(it.name == "t23Key")[0]
+      boundEntry = dumpContext(currentContext()).entryFor("t23Key")
     check boundEntry.bound == true
     check boundEntry.value == "77"
 
-    let freshEntry = dumpContext(currentContext()).filterIt(it.name == "t23Key")[0]
+    let freshEntry = dumpContext(currentContext()).entryFor("t23Key")
     check freshEntry.bound == false
     check freshEntry.value == "1"
 
@@ -778,6 +766,8 @@ suite "contextvars (raw key): dumpContext and $":
           check names == sorted(names)
 
   test "render parity: ref-with-$, ref nil default, $-less distinct, plain int":
+    # Authoritative render-parity case for these T shapes; t4 above is
+    # only the early smoke check.
     let refKey = newContextVar[RenderWidget]("t25Ref", RenderWidget(id: 3), private = false)
     let nilKey = newContextVar[RenderWidget]("t25Nil", nil, private = false)
     let blobKey = newContextVar("t25Blob", RenderBlob(4), private = false)
@@ -785,20 +775,20 @@ suite "contextvars (raw key): dumpContext and $":
 
     block:
       let entries = dumpContext(currentContext())
-      check entries.filterIt(it.name == "t25Ref")[0].value == "Widget(3)"
-      check entries.filterIt(it.name == "t25Nil")[0].value == "nil"
-      check entries.filterIt(it.name == "t25Blob")[0].value == "<no-$>"
-      check entries.filterIt(it.name == "t25Int")[0].value == "8"
+      check entries.entryFor("t25Ref").value == "Widget(3)"
+      check entries.entryFor("t25Nil").value == "nil"
+      check entries.entryFor("t25Blob").value == "<no-$>"
+      check entries.entryFor("t25Int").value == "8"
 
     refKey.withValue(RenderWidget(id: 9)):
       nilKey.withValue(RenderWidget(id: 1)):
         blobKey.withValue(RenderBlob(2)):
           intKey.withValue(41):
             let entries = dumpContext(currentContext())
-            check entries.filterIt(it.name == "t25Ref")[0].value == "Widget(9)"
-            check entries.filterIt(it.name == "t25Nil")[0].value == "Widget(1)"
-            check entries.filterIt(it.name == "t25Blob")[0].value == "<no-$>"
-            check entries.filterIt(it.name == "t25Int")[0].value == "41"
+            check entries.entryFor("t25Ref").value == "Widget(9)"
+            check entries.entryFor("t25Nil").value == "Widget(1)"
+            check entries.entryFor("t25Blob").value == "<no-$>"
+            check entries.entryFor("t25Int").value == "41"
 
 # --- Empty (default/nil) AsyncContext ----------------------------------------
 
@@ -865,7 +855,7 @@ suite "contextvars (raw key): {.contextVar.} declaration sugar":
   test "explicit-T-with-nil-default ref form":
     check t30WidgetVar.name == "t30WidgetVar"
     check t30WidgetVar.value == nil
-    check dumpContext(currentContext()).filterIt(it.name == "t30WidgetVar")[0].value == "nil"
+    check dumpContext(currentContext()).entryFor("t30WidgetVar").value == "nil"
 
   test "one-symbol emission: no derived identifiers":
     check declared(t27Key)
