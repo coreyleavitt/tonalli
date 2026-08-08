@@ -202,6 +202,31 @@ when defined(chronosDebug):
       "lockContextVarConstruction() — keys must be constructed before " &
       "any thread creation"
 
+  var contextVarConstructionThreadRecorded = false
+  var contextVarConstructionThreadId: int
+    ## Automatic counterpart to `lockContextVarConstruction()` above: no
+    ## opt-in call is needed for this one. The first registration on any
+    ## thread records that thread's id; every later registration
+    ## doAsserts it is running on that same thread. See
+    ## docs/src/contextvars.md, "Registry and key lifetime" for the
+    ## `--mm:refc` GC hazard a cross-thread construction reopens (a chain
+    ## node's `key` field is an untraced raw pointer into whichever
+    ## thread built its key). Debug-only, like the lock above.
+
+  proc checkContextVarConstructionThread() {.inline.} =
+    let tid = getThreadId()
+    if not contextVarConstructionThreadRecorded:
+      contextVarConstructionThreadRecorded = true
+      contextVarConstructionThreadId = tid
+    else:
+      doAssert tid == contextVarConstructionThreadId,
+        "newContextVar/newRequiredContextVar called from a different " &
+        "thread than the one that constructed the first context " &
+        "variable key — under --mm:refc this corrupts the GC heap (see " &
+        "docs/src/contextvars.md, \"Registry and key lifetime\"); " &
+        "construct every context variable key on a single thread, " &
+        "before any createThread call"
+
 proc registerVar(base: ContextVarBase) =
   base.nextRegistered = registryHead
   registryHead = base
@@ -212,7 +237,9 @@ proc newContextVar*[T](name: string, default: T, private = true): ContextVar[T] 
   ## docs/src/contextvars.md for why registration is now the key's only
   ## lifetime guarantee. `private` governs `dumpContext` visibility only,
   ## and defaults to `true` — see "Privacy and the raw constructors".
-  when defined(chronosDebug): checkContextVarConstructionAllowed()
+  when defined(chronosDebug):
+    checkContextVarConstructionAllowed()
+    checkContextVarConstructionThread()
   result = ContextVar[T](name: name, hasDefault: true, private: private,
                           default: default)
   result.render = renderGeneric[T]
@@ -224,7 +251,9 @@ proc newRequiredContextVar*[T](name: string, private = true): ContextVar[T] =
   ## registration and `private` default as `newContextVar` above; a
   ## distinct name rather than a second overload of `newContextVar` —
   ## see docs/src/contextvars.md, "The raw constructors".
-  when defined(chronosDebug): checkContextVarConstructionAllowed()
+  when defined(chronosDebug):
+    checkContextVarConstructionAllowed()
+    checkContextVarConstructionThread()
   result = ContextVar[T](name: name, hasDefault: false, private: private)
   result.render = renderGeneric[T]
   registerVar(result)

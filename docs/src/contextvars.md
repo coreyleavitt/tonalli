@@ -564,23 +564,38 @@ only `dumpContext`'s enumeration filter, never a key's lifetime.
 
 `newContextVar`/`newRequiredContextVar` are supported only *before* any
 `createThread` call — the same write-once-then-read-only discipline the
-registry already needs, now a documented convention rather than
-something the compiler enforces structurally. chronos does not wrap or
-intercept thread creation, so nothing flips this automatically: under a
-`chronosDebug` build, `lockContextVarConstruction()` is an opt-in debug
-hook that engages the guard by hand, and every `newContextVar`/
-`newRequiredContextVar` call after that point asserts. Call it yourself
-at your program's own construction/thread-creation boundary to get the
-check; the test suite is its only caller today. No lock is paid on any
-path in a release build, and no check runs at all outside
-`chronosDebug`.
+registry already needs, enforced two ways under a `chronosDebug` build.
+
+The first is automatic and needs no setup: on a key's first registration,
+chronos records the constructing thread's id (`getThreadId()`); every
+later registration doAsserts it is running on that same thread, before
+either constructor's registry mutation ever runs, so a violation leaves
+the registry exactly as it was. This is the specific hazard the
+write-once discipline exists for — a second thread constructing a key
+corrupts the GC heap under `--mm:refc`, since a chain node's `key` field
+is an untraced raw pointer into whichever thread built its key (see
+"Implementation" above) — and it fires the moment that hazard actually
+occurs, unconditionally.
+
+The second is `lockContextVarConstruction()`, a stricter opt-in boundary:
+chronos does not wrap or intercept thread creation, so nothing flips this
+lock automatically. Call it yourself at your program's own
+construction/thread-creation boundary — the test suite is its only
+caller today — and every `newContextVar`/`newRequiredContextVar` call
+after that point asserts, on any thread, not just a different one from
+the first. Neither check is a substitute for the other: the automatic
+check catches the cross-thread case with no setup but tolerates further
+same-thread construction after other threads already exist, while the
+lock catches that too, but only once an application opts in. No lock is
+paid on any path in a release build, and neither check runs at all
+outside `chronosDebug`.
 
 Applications are encouraged to call `lockContextVarConstruction()` at
 their own thread-creation boundary in `chronosDebug` builds and in CI,
-rather than leaving it to the test suite alone: a construction-discipline
-violation — a key constructed after another thread already exists — is
-far cheaper to catch there than to chase down as an intermittent failure
-in production.
+rather than relying on the automatic check alone: a construction-
+discipline violation — a key constructed after another thread already
+exists — is far cheaper to catch there than to chase down as an
+intermittent failure in production.
 
 Duplicate name strings are representable — two independently-constructed
 keys can share a `name`, matching PEP 567 — and accepted as
