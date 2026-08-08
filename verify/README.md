@@ -10,6 +10,17 @@ this directory. That is expected, not a loss: `verify/` exists to give
 *this* repository confidence in D9's design before S10 spends implementation
 and matrix cycles on it, not to ship.
 
+## Shape dependency on `capMask`/`slotIndex`
+
+`chronos/internal/callbackqueue.nim`'s `capMask` and `slotIndex` bind their
+sub-expression/call-result operands to a named `let` rather than inlining
+them into the surrounding bitwise expression. That shape is required by
+this harness's Layer 1 symex walker (see Finding 2 below): inlining either
+operand reintroduces a walker crash, not a proof failure, so the harness
+would stop running rather than fail loudly. If a future edit to those two
+procs removes the `let` binding, restore it (or update the walker) before
+relying on `./run.sh symex` again.
+
 Hard segregation rules (from RFC 0001 §3 D9-V, enforced by construction):
 
 - `chronos.nimble` gains no dependency and no task from this directory —

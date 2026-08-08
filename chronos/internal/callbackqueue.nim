@@ -47,8 +47,8 @@ type
 
 proc capMask(cap: int): uint {.inline.} =
   # `let`-bound rather than inlined into the `and` below: identical
-  # codegen, but verify/'s symex walker (fork-only) cannot resolve a
-  # bitwise-`and` whose operand is an inline sub-expression of itself.
+  # codegen, but keeps the operand resolvable by symbolic-execution
+  # tooling verifying this module's index arithmetic.
   let capMinusOne = cap - 1
   doAssert cap > 0 and (cap and capMinusOne) == 0,
     "CallbackQueue.capMask(): capacity must be a positive power of two"
@@ -58,8 +58,8 @@ proc slotIndex(pos: uint, cap: int): int {.inline.} =
   ## Fold a monotonic (possibly-wrapped) logical position into
   ## `[0, cap)`. `cap` being a power of two makes this correct across a
   ## `pos` wrap too, which `prependNoGrow`'s `dec head` relies on when
-  ## `head == 0`. `mask` is `let`-bound for the same symex-walkability
-  ## reason as `capMask` above.
+  ## `head == 0`. `mask` is `let`-bound for the same symbolic-execution
+  ## resolvability reason as `capMask` above.
   let mask = capMask(cap)
   int(pos and mask)
 

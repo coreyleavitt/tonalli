@@ -217,11 +217,13 @@ template processTimers(loop: untyped) =
 
 template processIdlers(loop: untyped) =
   if len(loop.idlers) > 0:
-    loop.callbacks.addLast(loop.idlers.popFirst())
+    let callable = loop.idlers.popFirst()
+    loop.callbacks.addLast(callable)
 
 template processTicks(loop: untyped) =
   while len(loop.ticks) > 0:
-    loop.callbacks.addLast(loop.ticks.popFirst())
+    let callable = loop.ticks.popFirst()
+    loop.callbacks.addLast(callable)
 
 template fireWithContext(callable: untyped) =
   # Restore the context captured at the callback's scheduling site
@@ -798,7 +800,7 @@ elif defined(windows):
         customOverlapped.data.bytesCount = events[i].dwNumberOfBytesTransferred
         # Fire under whatever context the arm site captured into
         # `CompletionData.context`; nil reproduces `bareCallback`'s
-        # empty-context behavior. See docs/src/contextvars.md.
+        # empty-context behavior. See the contextvars user documentation.
         let acb = contextCallback(customOverlapped.data.cb,
                                    cast[pointer](customOverlapped),
                                    customOverlapped.data.context)
