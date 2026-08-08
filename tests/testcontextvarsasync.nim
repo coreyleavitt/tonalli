@@ -571,6 +571,38 @@ suite "contextvars: scheduling-site capture coverage":
     check fired
     check seenBinding == 111
 
+  test "cancelSoon(AsyncCallback)'s pending branch fires under the callback's own captured binding":
+    # Sibling of the already-finished pin above: here `future` is still
+    # pending when cancelSoon() registers `acb`, so it travels through the
+    # cancel-and-await path (internalCallback/tryCancel) rather than the
+    # direct callSoon() the already-finished branch takes. `acb`'s own
+    # captured binding must still be what fires, not the binding live at
+    # the cancelSoon() call site or at poll() time.
+    var seenBinding = -1
+    var fired = false
+
+    proc aftercb(udata: pointer) {.gcsafe, raises: [].} =
+      seenBinding = asyncInt.value
+      fired = true
+
+    var acb: AsyncCallback
+    asyncInt.withValue(211):
+      acb = capturingCallback(aftercb, nil)
+
+    let fut = newFuture[void]("pending-cancelsoon-acb")
+    check not fut.finished()
+
+    asyncInt.withValue(322):
+      cancelSoon(fut, acb)
+
+    asyncInt.withValue(433):
+      while not fired:
+        poll()
+
+    check fired
+    check seenBinding == 211
+    check fut.cancelled()
+
 suite "contextvars: bridging independent callbacks":
 
   test "currentContext()/withContext() bridges independent callbacks":

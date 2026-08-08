@@ -807,14 +807,10 @@ proc `or`*[T, Y](fut1: Future[T], fut2: Future[Y]): Future[void] =
   var retFuture = newFuture[void]("chronos.or()")
   orImpl(fut1, fut2)
 
-proc cancelSoon(future: FutureBase, aftercb: CallbackFunc, udata: pointer,
-                loc: ptr SrcLoc) {.raises: [].} =
-  ## Perform cancellation ``future`` and call ``aftercb`` callback when
-  ## ``future`` become finished (completed with value, failed or cancelled).
-  ##
-  ## NOTE: Compared to the `tryCancel()` call, this procedure call guarantees
-  ## that ``future``will be finished (completed with value, failed or cancelled)
-  ## as quickly as possible.
+proc scheduleCancelRetry(future: FutureBase, loc: ptr SrcLoc) {.raises: [].} =
+  ## Initiate cancellation of ``future``, retrying delivery of the
+  ## cancellation signal once per tick until it succeeds or ``future``
+  ## becomes finished on its own.
   proc checktick(udata: pointer) {.gcsafe, raises: [].} =
     # We trying to cancel Future on more time, and if `cancel()` succeeds we
     # return early.
@@ -826,6 +822,21 @@ proc cancelSoon(future: FutureBase, aftercb: CallbackFunc, udata: pointer,
     if not(future.finished()):
       internalCallTick(checktick)
 
+  if not(tryCancel(future, loc)):
+    # Cancellation signal was not delivered, so we trying to deliver it one
+    # more time after async tick. But we need to check case, when future was
+    # finished but our completion callback is not yet invoked.
+    if not(future.finished()):
+      internalCallTick(checktick)
+
+proc cancelSoon(future: FutureBase, aftercb: CallbackFunc, udata: pointer,
+                loc: ptr SrcLoc) {.raises: [].} =
+  ## Perform cancellation ``future`` and call ``aftercb`` callback when
+  ## ``future`` become finished (completed with value, failed or cancelled).
+  ##
+  ## NOTE: Compared to the `tryCancel()` call, this procedure call guarantees
+  ## that ``future``will be finished (completed with value, failed or cancelled)
+  ## as quickly as possible.
   proc continuation(udata: pointer) {.gcsafe.} =
     # We do not use `callSoon` here because we was just scheduled from `poll()`.
     if not(isNil(aftercb)):
@@ -840,12 +851,7 @@ proc cancelSoon(future: FutureBase, aftercb: CallbackFunc, udata: pointer,
 
   future.addCallback(continuation)
   # Initiate cancellation process.
-  if not(tryCancel(future, loc)):
-    # Cancellation signal was not delivered, so we trying to deliver it one
-    # more time after async tick. But we need to check case, when future was
-    # finished but our completion callback is not yet invoked.
-    if not(future.finished()):
-      internalCallTick(checktick)
+  scheduleCancelRetry(future, loc)
 
 proc cancelSoon(future: FutureBase, acb: AsyncCallback,
                 loc: ptr SrcLoc) {.raises: [].} =
@@ -855,12 +861,6 @@ proc cancelSoon(future: FutureBase, acb: AsyncCallback,
   ## is what fires, not whatever happens to be ambient at the
   ## `cancelSoon` call site or whenever cancellation eventually
   ## completes.
-  proc checktick(udata: pointer) {.gcsafe, raises: [].} =
-    if tryCancel(future, loc):
-      return
-    if not(future.finished()):
-      internalCallTick(checktick)
-
   if future.finished():
     if not(isNil(acb.function)):
       callSoon(acb)
@@ -872,9 +872,7 @@ proc cancelSoon(future: FutureBase, acb: AsyncCallback,
     else:
       future.internalCallbacks.add acb
 
-  if not(tryCancel(future, loc)):
-    if not(future.finished()):
-      internalCallTick(checktick)
+  scheduleCancelRetry(future, loc)
 
 template cancelSoon*(fut: FutureBase, cb: CallbackFunc, udata: pointer) =
   cancelSoon(fut, cb, udata, getSrcLocation())

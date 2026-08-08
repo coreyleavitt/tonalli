@@ -390,15 +390,15 @@ compile-time check.
 
 ## Inspecting contexts
 
-Three primitives exist purely for debugging and don't participate in the
-hot paths at all — they cost nothing unless a program actually calls them.
-
 A default-initialized `AsyncContext` (`var ctx: AsyncContext`, never
 assigned from `currentContext()`) is the *empty* context — the same one
 every task starts with before any key is ever bound. Running under it via
 `withContext` installs no bindings at all: a defaulted key reads its own
 default, exactly as if no binder were ever entered, and a must-bind key
 raises `UnboundContextVarDefect`, same as an unbound ambient read.
+
+Three primitives exist purely for debugging and don't participate in the
+hot paths at all — they cost nothing unless a program actually calls them.
 
 ### Identity
 
@@ -544,13 +544,13 @@ managers; these come from the capture/restore substrate, which this
 redesign left untouched.
 
 Where the redesign *does* change measured cost is the per-node lookup
-inside a bound chain walk — the prior design dispatched per node with an
-`of` RTTI test against a distinct per-declaration slot subtype; the
-current design compares a raw pointer instead. Reading a key bound at
-chain depth 16 (the benchmark's worst case — the read walks every
-intervening binding) is where the difference is clearest:
+inside a bound chain walk. An RTTI-based per-node dispatch (an `of` test
+against a distinct per-declaration subtype) was evaluated and rejected in
+favor of the raw pointer compare used today; the difference is clearest
+reading a key bound at chain depth 16 (the benchmark's worst case — the
+read walks every intervening binding) under refc:
 
-| metric (container median, 4 runs/leg)                       | result |
+| metric (median, 4 runs/leg)                                  | result |
 |----------------------------------------------------------------|--------|
 | refc, chain read @ depth 16, `of` dispatch -> pointer dispatch | 44-57 ns -> 8-10 ns (~5-6x) |
 | orc, chain read, all depths                                    | overlapping old/new ranges -- noise-neutral |

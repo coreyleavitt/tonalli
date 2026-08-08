@@ -317,6 +317,7 @@ func hash*(ctx: AsyncContext): Hash {.gcsafe, raises: [].} =
 
 proc currentContext*(): AsyncContext {.gcsafe, raises: [].} =
   ## Capture the current task's binding chain as an opaque snapshot.
+  # `proc`, not `func`: reading the `{.threadvar.}` trips effect analysis.
   {.cast(gcsafe).}:
     AsyncContext(node: currentAsyncContext)
 
@@ -384,6 +385,7 @@ when defined(chronosDebug):
     ## Debug-only chain-depth probe. Walks `currentAsyncContext` and
     ## returns the number of nodes. Used by binder-contract tests to
     ## verify push/pop balance without relying on finalizer timing.
+    # `proc`, not `func`: reading the `{.threadvar.}` trips effect analysis.
     var n = currentAsyncContext
     while n != nil:
       inc result
