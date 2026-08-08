@@ -9,7 +9,7 @@
 ## Spike coverage for the first-class `ContextVar[T]` key runtime. See
 ## .claude/rfc/0002-contextvars-firstclass-keys.handoff.md.
 
-import std/tables
+import std/[algorithm, sequtils, strutils, tables]
 import unittest2
 import ../chronos/internal/contextkeys
 
@@ -25,6 +25,9 @@ type
     ## object type, so `when compiles($v)` is unconditionally true for
     ## record-style fixtures. A `distinct` type without a borrowed `$`
     ## is what actually exercises the placeholder branch.
+
+proc `$`(w: RenderWidget): string = "Widget(" & $w.id & ")"
+  ## Gives t4/t25's "ref-with-$" fixture a deterministic rendering.
 
 suite "contextkeys: key construction and registry":
 
@@ -51,15 +54,24 @@ suite "contextkeys: key construction and registry":
     let k = newContextVar[int]("t3Key")
     check k.hasDefault == false
 
-  test "render hook renders defaults across T shapes":
+  test "dumpContext renders defaults and bound values across T shapes":
     let intKey = newContextVar("t4Int", 7)
-    check renderDefault(intKey) == "7"
-
     let widgetKey = newContextVar[RenderWidget]("t4Widget", nil)
-    check renderDefault(widgetKey) == "nil"
-
     let blobKey = newContextVar("t4Blob", RenderBlob(3))
-    check renderDefault(blobKey) == "<no-$>"
+
+    block:
+      let entries = dumpContext(currentContext())
+      check entries.filterIt(it.name == "t4Int")[0].value == "7"
+      check entries.filterIt(it.name == "t4Widget")[0].value == "nil"
+      check entries.filterIt(it.name == "t4Blob")[0].value == "<no-$>"
+
+    intKey.withValue(99):
+      widgetKey.withValue(RenderWidget(id: 5)):
+        blobKey.withValue(RenderBlob(11)):
+          let entries = dumpContext(currentContext())
+          check entries.filterIt(it.name == "t4Int")[0].value == "99"
+          check entries.filterIt(it.name == "t4Widget")[0].value == "Widget(5)"
+          check entries.filterIt(it.name == "t4Blob")[0].value == "<no-$>"
 
   test "two same-T keys are distinct":
     let k1 = newContextVar("t5Key", 1)
@@ -196,3 +208,91 @@ suite "contextkeys: must-bind Defect parity":
     let k = newContextVar("t21Key", 11)
     check currentContext()[k] == 11
     check currentContext()[k] == k.value
+
+suite "contextkeys: dumpContext and $":
+
+  test "dumpContext on empty context: defaulted, must-bind, private semantics":
+    let defaultedKey = newContextVar("t22Defaulted", 5)
+    let mustBindKey = newContextVar[int]("t22MustBind")
+    discard newContextVar("t22Private", 9, private = true)
+
+    let entries = dumpContext(currentContext())
+
+    let defaultedEntries = entries.filterIt(it.name == "t22Defaulted")
+    check defaultedEntries.len == 1
+    check defaultedEntries[0].bound == false
+    check defaultedEntries[0].value == "5"
+
+    let mustBindEntries = entries.filterIt(it.name == "t22MustBind")
+    check mustBindEntries.len == 1
+    check mustBindEntries[0].bound == false
+    check mustBindEntries[0].value == "<unbound>"
+
+    check not entries.anyIt(it.name == "t22Private")
+    check defaultedKey.value == 5
+    check mustBindKey.hasDefault == false
+
+  test "dumpContext on a bound snapshot: bound=true, value rendered; fresh snapshot reverts to default":
+    let k = newContextVar("t23Key", 1)
+    var boundEntry: ContextVarEntry
+    k.withValue(77):
+      boundEntry = dumpContext(currentContext()).filterIt(it.name == "t23Key")[0]
+    check boundEntry.bound == true
+    check boundEntry.value == "77"
+
+    let freshEntry = dumpContext(currentContext()).filterIt(it.name == "t23Key")[0]
+    check freshEntry.bound == false
+    check freshEntry.value == "1"
+
+  test "`$` format parity and sorted order":
+    let zKey = newContextVar("t24Zeta", 1)
+    let aKey = newContextVar("t24Alpha", 2)
+    let mKey = newContextVar("t24Mid", 3)
+    zKey.withValue(10):
+      aKey.withValue(20):
+        mKey.withValue(30):
+          let ctx = currentContext()
+          let s = $ctx
+          check s[0] == '{'
+          check s[^1] == '}'
+          check s.contains("t24Alpha: 20")
+          check s.contains("t24Mid: 30")
+          check s.contains("t24Zeta: 10")
+          check s.find("t24Alpha") < s.find("t24Mid")
+          check s.find("t24Mid") < s.find("t24Zeta")
+
+          var names: seq[string]
+          for entry in dumpContext(ctx):
+            names.add entry.name
+          check names == sorted(names)
+
+  test "render parity: ref-with-$, ref nil default, $-less distinct, plain int":
+    let refKey = newContextVar[RenderWidget]("t25Ref", RenderWidget(id: 3))
+    let nilKey = newContextVar[RenderWidget]("t25Nil", nil)
+    let blobKey = newContextVar("t25Blob", RenderBlob(4))
+    let intKey = newContextVar("t25Int", 8)
+
+    block:
+      let entries = dumpContext(currentContext())
+      check entries.filterIt(it.name == "t25Ref")[0].value == "Widget(3)"
+      check entries.filterIt(it.name == "t25Nil")[0].value == "nil"
+      check entries.filterIt(it.name == "t25Blob")[0].value == "<no-$>"
+      check entries.filterIt(it.name == "t25Int")[0].value == "8"
+
+    refKey.withValue(RenderWidget(id: 9)):
+      nilKey.withValue(RenderWidget(id: 1)):
+        blobKey.withValue(RenderBlob(2)):
+          intKey.withValue(41):
+            let entries = dumpContext(currentContext())
+            check entries.filterIt(it.name == "t25Ref")[0].value == "Widget(9)"
+            check entries.filterIt(it.name == "t25Nil")[0].value == "Widget(1)"
+            check entries.filterIt(it.name == "t25Blob")[0].value == "<no-$>"
+            check entries.filterIt(it.name == "t25Int")[0].value == "41"
+
+when defined(chronosDebug):
+  suite "contextkeys: chronosDebug construction lock":
+
+    test "newContextVar after lockContextVarConstruction() asserts":
+      lockContextVarConstruction()
+      expect AssertionDefect:
+        discard newContextVar("t26AfterLock", 1)

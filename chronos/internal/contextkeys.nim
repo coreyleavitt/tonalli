@@ -19,7 +19,7 @@
 ## registry-consuming `dumpContext` and the `{.contextVar.}` declaration
 ## sugar are later slices.
 
-import std/hashes
+import std/[algorithm, hashes, strutils]
 import ../futures
 import ./contextnode
 export ContextNodeBase
@@ -34,7 +34,11 @@ type
     name*: string
     hasDefault*: bool
     private*: bool
-    render*: proc(node: ContextNodeBase): string {.nimcall, gcsafe, raises: [].}
+    render*: proc(cv: ContextVarBase, node: ContextNodeBase): string
+      {.nimcall, gcsafe, raises: [].}
+      ## `node == nil` renders the key's stored default instead of a
+      ## bound node's value — the one instantiation `dumpContext`
+      ## needs for both the bound and the unbound-but-defaulted case.
     nextRegistered: ContextVarBase
 
   ContextVar*[T] = ref object of ContextVarBase
@@ -60,8 +64,7 @@ var registryHead: ContextVarBase
   ## free. Registration keeps a key alive for the life of the process,
   ## matching the old macro design's static-global semantics.
 
-proc renderGeneric[T](node: ContextNodeBase): string {.nimcall, gcsafe, raises: [].} =
-  let v = cast[ContextNode[T]](node).value
+proc renderValue[T](v: T): string {.raises: [].} =
   when T is ref:
     if v == nil:
       "nil"
@@ -82,12 +85,42 @@ proc renderGeneric[T](node: ContextNodeBase): string {.nimcall, gcsafe, raises: 
     else:
       "<no-$>"
 
+proc renderGeneric[T](cv: ContextVarBase, node: ContextNodeBase): string
+    {.nimcall, gcsafe, raises: [].} =
+  if node != nil:
+    renderValue(cast[ContextNode[T]](node).value)
+  else:
+    renderValue(ContextVar[T](cv).default)
+
+when defined(chronosDebug):
+  var contextVarConstructionLocked = false
+    ## Guard flag for the write-once-then-read-only registry discipline
+    ## the RFC documents ("Registry and key lifetime"): keys are
+    ## constructed only before any `createThread`. Flipped by
+    ## `lockContextVarConstruction()`; chronos's own thread-creation
+    ## path does not call it yet — wiring that in is deferred to final
+    ## assembly. Debug-only: no lock is paid on any path in a release
+    ## build.
+
+  proc lockContextVarConstruction*() {.inline.} =
+    ## Engage the construction guard. Any `newContextVar` call after
+    ## this point asserts. One-way for the process's lifetime — there
+    ## is no matching unlock, mirroring the real thread-creation event
+    ## it stands in for.
+    contextVarConstructionLocked = true
+
+  proc checkContextVarConstructionAllowed() {.inline.} =
+    doAssert not contextVarConstructionLocked,
+      "newContextVar called after lockContextVarConstruction() — keys " &
+      "must be constructed before any thread creation"
+
 proc registerVar(base: ContextVarBase) =
   base.nextRegistered = registryHead
   registryHead = base
 
 proc newContextVar*[T](name: string, default: T, private = false): ContextVar[T] =
   ## Defaulted-arm constructor.
+  when defined(chronosDebug): checkContextVarConstructionAllowed()
   result = ContextVar[T](name: name, hasDefault: true, private: private,
                           default: default)
   result.render = renderGeneric[T]
@@ -96,6 +129,7 @@ proc newContextVar*[T](name: string, default: T, private = false): ContextVar[T]
 
 proc newContextVar*[T](name: string, private = false): ContextVar[T] =
   ## Must-bind arm constructor — no default supplied.
+  when defined(chronosDebug): checkContextVarConstructionAllowed()
   result = ContextVar[T](name: name, hasDefault: false, private: private)
   result.render = renderGeneric[T]
   if not private:
@@ -106,14 +140,6 @@ iterator registeredVars*(): ContextVarBase =
   while node != nil:
     yield node
     node = node.nextRegistered
-
-proc renderDefault*[T](cv: ContextVar[T]): string =
-  ## Test-support helper: render `cv`'s stored default through its
-  ## render hook without a bound chain node — there is no binder in
-  ## this slice. Exercises the generic-instantiated-into-nimcall
-  ## construction end-to-end.
-  let node = ContextNode[T](key: cv, value: cv.default)
-  cv.render(node)
 
 # --- Snapshot type and the one chain-walk lookup -----------------------------
 # `.value` re-expresses as `currentContext()[cv]` below, on top of this
@@ -183,3 +209,52 @@ template withValue*[T](cv: ContextVar[T], v: T, body: untyped): untyped =
     body
   finally:
     currentAsyncContext = chronosCtxPrev
+
+# --- Introspection ------------------------------------------------------------
+# CONTRACT PARITY with `chronos/contextvars.nim`'s `dumpContext`/`` `$` ``:
+# same `ContextVarEntry` shape, same bound-flag semantics (an unbound
+# defaulted key still shows its rendered default; an unbound must-bind
+# key shows the `<unbound>` placeholder), same sorted-by-name order,
+# same `{name: value, ...}` `$` format. Private keys never register
+# (see `newContextVar`), so they are structurally absent here — no
+# filtering needed at this layer.
+
+type
+  ContextVarEntry* = object
+    name*: string
+    bound*: bool
+    value*: string
+
+proc findNode(chain: ContextNodeBase, cv: ContextVarBase): ContextNodeBase =
+  var node = chain
+  while node != nil:
+    if cast[ContextNodeKeyed](node).key == cv:
+      return node
+    node = node.nextNode
+
+proc dumpContext*(ctx: AsyncContext): seq[ContextVarEntry] {.raises: [].} =
+  ## Introspect every registered (non-private) key as of `ctx`, sorted
+  ## by name. Never raises — render failures are caught inside each
+  ## key's render hook.
+  {.cast(gcsafe).}:
+    let chain = ContextNodeBase(ctx)
+    for cv in registeredVars():
+      let node = findNode(chain, cv)
+      if node != nil:
+        result.add ContextVarEntry(name: cv.name, bound: true,
+                                    value: cv.render(cv, node))
+      elif cv.hasDefault:
+        result.add ContextVarEntry(name: cv.name, bound: false,
+                                    value: cv.render(cv, nil))
+      else:
+        result.add ContextVarEntry(name: cv.name, bound: false,
+                                    value: "<unbound>")
+  result.sort(proc(a, b: ContextVarEntry): int = cmp(a.name, b.name))
+
+proc `$`*(ctx: AsyncContext): string {.raises: [].} =
+  ## Render `ctx` as `{name: value, ...}`, via the same registry walk
+  ## as `dumpContext`. Debugging/logging only — not a stable format.
+  var parts: seq[string]
+  for entry in dumpContext(ctx):
+    parts.add entry.name & ": " & entry.value
+  "{" & parts.join(", ") & "}"
