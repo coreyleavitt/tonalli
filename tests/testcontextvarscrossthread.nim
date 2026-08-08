@@ -10,11 +10,13 @@
 ## (chronos/contextvars.nim, `newContextVar`/`newRequiredContextVar`'s
 ## unconditional thread-generation check) — split out like
 ## tests/testcontextvarslock.nim and tests/testcontextvarsleakguard.nim,
-## and imported between them from tests/testcontextvarsstandalone.nim:
-## after the leak-guard suites (this file's own construction must not run
-## inside a dispatcher a prior suite already left unsound), and before
-## the lock suite (once engaged, the lock makes every construction in the
-## process assert, including this file's own control construction).
+## and run alongside them from tests/testcontextvarsstandalone.nim:
+## isolated per-process in CI via the driver's orchestrate mode, so it no
+## longer matters whether this file's construction runs inside a
+## dispatcher a prior suite left unsound, or ahead of the lock suite.
+## Import order among the three only matters for the driver's no-args
+## single-process mode, where this file must still run between the
+## other two for the same reasons.
 ##
 ## Actually constructing a context variable key from a second thread is
 ## a genuine `--mm:refc` GC hazard (see docs/src/contextvars.md,
@@ -27,16 +29,17 @@ import ../chronos/contextvars
 
 {.used.}
 
-suite "contextvars (raw key): cross-thread construction detection":
+const contextVarsCrossThreadSuiteName* =
+  "contextvars (raw key): cross-thread construction detection"
+
+suite contextVarsCrossThreadSuiteName:
 
   test "newContextVar on a second thread trips the automatic thread-generation guard; registry stays intact":
     # Construct on the main thread first: the guard records whichever
-    # thread constructs first as "the" thread, so without this, running
-    # this file on its own (rather than after
-    # tests/testcontextvarsleakguard.nim's own main-thread construction,
-    # as happens in tests/testcontextvarsstandalone.nim) would race the
-    # child thread below for that role instead of reliably exercising
-    # it as the violator.
+    # thread constructs first as "the" thread. In the driver's orchestrate
+    # mode this suite runs alone in its own child process, so without
+    # this seed the child thread below would race the main thread for
+    # that role instead of reliably exercising it as the violator.
     discard newContextVar("crossThreadMainThreadSeed", 0)
 
     var fired = false

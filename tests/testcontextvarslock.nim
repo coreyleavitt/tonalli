@@ -12,9 +12,12 @@
 ## impose an import order on the other contextvars test files: every
 ## other file constructs keys at runtime and would hit the lock if it
 ## ran after this one in the same binary. Not imported from
-## tests/testall.nim (see chronos.nimble's own `testcontextvarslock`
-## step) for the same reason — the lock must not be live for any other
-## suite in that binary.
+## tests/testall.nim for the same reason — the lock must not be live for
+## any other suite in that binary. In CI,
+## tests/testcontextvarsstandalone.nim's orchestrate mode gives this
+## suite its own process, so the lock's one-way nature can no longer
+## affect another suite; import order only matters for the driver's
+## no-args single-process mode, where this file must still run last.
 ##
 ## `when defined(chronosDebug)` guards the lock itself, mirroring
 ## tests/testcontextvarsbalance.nim: this file compiles on every leg but
@@ -25,7 +28,10 @@ import ../chronos/contextvars
 
 {.used.}
 
-suite "contextvars (raw key): chronosDebug construction lock":
+const contextVarsLockSuiteName* =
+  "contextvars (raw key): chronosDebug construction lock"
+
+suite contextVarsLockSuiteName:
 
   test "newContextVar after lockContextVarConstruction() asserts":
     when defined(chronosDebug):

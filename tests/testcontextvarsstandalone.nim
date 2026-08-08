@@ -6,35 +6,57 @@
 #  Apache License, version 2.0, (LICENSE-APACHEv2)
 #              MIT license (LICENSE-MIT)
 
-## Single-binary driver for the contextvars suites that cannot share a
-## process with tests/testall.nim, or with each other in the wrong order:
+## Driver for the contextvars suites that cannot share a process with
+## tests/testall.nim, or with each other:
 ##
 ## - tests/testcontextvarsleakguard.nim lets an AssertionDefect escape
 ##   poll() under chronosDebug, leaving the dispatcher unsound for any
 ##   suite sharing that binary afterward.
 ## - tests/testcontextvarscrossthread.nim constructs a key from a second
-##   thread and must run before the lock is engaged, since the lock
+##   thread and must not run after the lock is engaged, since the lock
 ##   makes every construction in the process assert, including its own
 ##   control construction on the main thread.
 ## - tests/testcontextvarslock.nim's chronosDebug construction lock is
 ##   one-way for the process's lifetime: once engaged, every later
-##   `newContextVar`/`newRequiredContextVar` call in the process asserts,
-##   so it must run last.
+##   `newContextVar`/`newRequiredContextVar` call in the process asserts.
 ##
-## Importing all three here — rather than three separate nimble steps —
-## collects them into one binary while keeping each a readable,
-## independently-runnable unit. unittest2 defers a `test`'s body to
-## program-exit time, run suite-by-suite in the order each suite's first
-## `test` was *registered* — and registration happens as each imported
-## module's own top-level code runs. For three sibling imports with no
-## dependency between them, that registration runs in the imports'
-## textual order below (confirmed empirically: a `suite`/`test` written
-## inline in *this* file, rather than in an imported module, always
-## registers after every import above it, regardless of source position —
-## Nim runs a program's direct imports to completion before any of the
-## importing module's own top-level statements, which is why the ordering
-## contract here is expressed entirely through import order, not through
-## interleaved local code).
+## Three invocation modes, selected by argv:
+##
+## - No arguments: all three suites run in one process, in the import
+##   order below (dev convenience). Import order is load-bearing only in
+##   this mode.
+## - `orchestrate`: this process becomes a parent that spawns itself once
+##   per suite, each child given `"<suite name>::*"` as its sole argument
+##   — a unittest2 filter that runs only that suite — so isolation is by
+##   construction (separate processes) rather than by import order.
+##   `orchestrate` also doubles as a unittest2 filter in the parent's own
+##   process: no test is named "orchestrate" and it contains neither `::`
+##   nor `*`, so it matches nothing, and the parent's own exit-time test
+##   run is an empty no-op that leaves the aggregate exit code to the
+##   `quit` call below.
+## - Any other argument: passed through to unittest2 unchanged, e.g. to
+##   run a single suite directly (`<binary> "<suite name>::*"`).
+import std/[os, osproc]
 import ./testcontextvarsleakguard
 import ./testcontextvarscrossthread
 import ./testcontextvarslock
+
+const orchestrateArg = "orchestrate"
+
+if paramCount() >= 1 and paramStr(1) == orchestrateArg:
+  let suiteNames = [
+    contextVarsLeakGuardSuiteName,
+    contextVarsCrossThreadSuiteName,
+    contextVarsLockSuiteName,
+  ]
+  var allOk = true
+  for suiteName in suiteNames:
+    let child = startProcess(
+      getAppFilename(), args = [suiteName & "::*"], options = {poParentStreams}
+    )
+    let code = waitForExit(child)
+    close(child)
+    echo "[testcontextvarsstandalone] ", suiteName, ": exit ", code
+    if code != 0:
+      allOk = false
+  quit(if allOk: 0 else: 1)

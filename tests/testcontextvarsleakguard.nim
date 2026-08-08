@@ -32,9 +32,12 @@
 ## testall.nim: the identity-arm and cross-batch cases leave an escaped
 ## AssertionDefect (and a stray, disconnected context node) behind, which
 ## would leave the dispatcher unsound for every other suite sharing that
-## binary. It is wired as its own step in chronos.nimble's `test` task
-## instead. The net itself only exists under `chronosDebug`, so every test
-## here skips cleanly without it.
+## binary. In CI this file is isolated per-process via
+## tests/testcontextvarsstandalone.nim's orchestrate mode; sharing a
+## binary with another suite is only possible in that driver's no-args
+## single-process mode, where this file must still run first for the
+## same reason. The net itself only exists under `chronosDebug`, so
+## every test here skips cleanly without it.
 
 import std/strutils
 import unittest2
@@ -53,7 +56,10 @@ import ../chronos
 
 let leakGuardVar {.contextVar.} = 0
 
-suite "contextvars: chronosDebug context-corruption detection net":
+const contextVarsLeakGuardSuiteName* =
+  "contextvars: chronosDebug context-corruption detection net"
+
+suite contextVarsLeakGuardSuiteName:
 
   test "control: a callback that binds and unwinds through withValue trips nothing":
     when defined(chronosDebug):
