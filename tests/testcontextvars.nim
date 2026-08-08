@@ -137,7 +137,7 @@ type
 proc `$`(w: RenderWidget): string = "Widget(" & $w.id & ")"
   ## Deterministic rendering for the "ref-with-$" fixture below.
 
-suite "contextkeys: key construction and registry":
+suite "contextvars (raw key): key construction and registry":
 
   test "defaulted key stores name, hasDefault, and registers":
     let k = newContextVar("t1Key", 42)
@@ -186,7 +186,7 @@ suite "contextkeys: key construction and registry":
 # since there was never a runtime value to pass around. See
 # docs/src/contextvars.md, "Keys as values".
 
-suite "contextkeys: keys as values":
+suite "contextvars (raw key): keys as values":
 
   test "keys stored in a seq dispatch independently when read back":
     var keys = newSeq[ContextVar[int]]()
@@ -221,7 +221,7 @@ suite "contextkeys: keys as values":
 
 # --- Ambient value and withValue ---------------------------------------------
 
-suite "contextkeys: ambient value and withValue":
+suite "contextvars (raw key): ambient value and withValue":
 
   test "unbound defaulted read returns default":
     let k = newContextVar("t6Key", 11)
@@ -399,7 +399,7 @@ suite "contextvars: AsyncContext identity (==)":
 
 let snapOuter {.contextVar.} = 0
 
-suite "contextkeys: snapshot AsyncContext and []":
+suite "contextvars (raw key): snapshot AsyncContext and []":
 
   test "snapshot sees the bound value without needing to be installed":
     snapOuter.withValue(11):
@@ -509,7 +509,7 @@ suite "contextvars: must-bind (default-less) keys":
       let snap = currentContext()
       check snap[mustBindVar] == 9
 
-suite "contextkeys: must-bind Defect parity (raw key)":
+suite "contextvars (raw key): must-bind Defect parity":
 
   test "unbound must-bind .value raises UnboundContextVarDefect with varName":
     let k = newContextVar[int]("t18Key")
@@ -658,7 +658,7 @@ suite "contextvars: dumpContext and $":
     for e in entries: names.add e.name
     check names == sorted(names)
 
-suite "contextkeys: dumpContext and $ (raw key)":
+suite "contextvars (raw key): dumpContext and $":
 
   test "dumpContext on empty context: defaulted, must-bind, private semantics":
     let defaultedKey = newContextVar("t22Defaulted", 5)
@@ -778,7 +778,7 @@ template t32Wrapper(nm: untyped; body: untyped): untyped =
 
 t32Wrapper(t32Wrapped, 777)
 
-suite "contextkeys: {.contextVar.} declaration sugar":
+suite "contextvars (raw key): {.contextVar.} declaration sugar":
 
   test "starred let, T inferred: name, registration, and value":
     check t27Key.name == "t27Key"
@@ -824,7 +824,7 @@ suite "contextkeys: {.contextVar.} declaration sugar":
 # keys at runtime and must run before this suite locks construction.
 
 when defined(chronosDebug):
-  suite "contextkeys: chronosDebug construction lock":
+  suite "contextvars (raw key): chronosDebug construction lock":
 
     test "newContextVar after lockContextVarConstruction() asserts":
       lockContextVarConstruction()
