@@ -93,8 +93,14 @@ task test, "Run all tests":
   for args in testArguments:
     # First run tests with `refc` memory manager.
     run args & " --mm:refc", "tests/testall"
+    # testcontextvarslock is its own step, not part of testall: its
+    # chronosDebug construction lock is one-way for the process's
+    # lifetime, so it must not share a binary with any suite that
+    # constructs contextvars keys at runtime.
+    run args & " --mm:refc", "tests/testcontextvarslock"
     if (NimMajor, NimMinor) >= (2, 2): # ORC on 2.0 is too broken to investigate
       run args & " --mm:orc", "tests/testall"
+      run args & " --mm:orc", "tests/testcontextvarslock"
 
   # Make sure benchmarks compile. `--threads:on` explicitly: Nim 1.6
   # does not default it on, and bench_bulk_tcp.nim imports

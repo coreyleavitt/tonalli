@@ -10,9 +10,10 @@
 ## the `ContextVar[T]` key runtime. See chronos/contextvars.nim and
 ## docs/src/contextvars.md.
 ##
-## Must run LAST among the contextvars test files (see tests/testall.nim):
-## its `chronosDebug` construction-lock suite, at the bottom of this file,
-## permanently locks `newContextVar` for the rest of the process.
+## The one-way `chronosDebug` construction-lock suite lives in its own
+## file, tests/testcontextvarslock.nim, precisely so that a permanent,
+## process-lifetime lock on `newContextVar` doesn't impose an import
+## order on this file relative to the other contextvars test files.
 
 import std/[algorithm, sequtils, strutils, tables]
 import unittest2
@@ -862,18 +863,3 @@ static:
   doAssert not compiles((let t34WrongKeyword {.contextVar.}: int)),
     "a must-bind {.contextVar.} key spelled with `let` must not compile " &
     "— must-bind keys require `var`"
-
-# --- chronosDebug construction lock ------------------------------------------
-# MUST stay last in this file: one-way for the process's lifetime, by
-# design (mirrors real thread creation) — see chronos/contextvars.nim.
-# This is also why this file must be the LAST contextvars test file
-# testall.nim imports: every other contextvars test file constructs
-# keys at runtime and must run before this suite locks construction.
-
-when defined(chronosDebug):
-  suite "contextvars (raw key): chronosDebug construction lock":
-
-    test "newContextVar after lockContextVarConstruction() asserts":
-      lockContextVarConstruction()
-      expect AssertionDefect:
-        discard newContextVar("t26AfterLock", 1)

@@ -824,3 +824,9 @@ codebase already paid on its one field.
   check (bind/unbind counters staying at zero at suite end), split out
   of `testutils.nim` so it runs on every engine, including `poll` (see
   `tests/testall.nim`).
+- `tests/testcontextvarslock.nim` — the one-way `chronosDebug`
+  construction lock (`newContextVar` asserting after
+  `lockContextVarConstruction()`), kept out of `tests/testall.nim` and
+  run as its own step in `chronos.nimble`'s `test` task, so its
+  permanent lock never shares a binary with a suite that constructs
+  keys at runtime.

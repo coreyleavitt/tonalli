@@ -19,14 +19,10 @@ import
 import
   ./[testcontextvarsasync, testcontextvarsguardrails,
      testcontextvarssurface, testcontextvarsexport, testcontextvars]
-  # testcontextvars must import last among these: its chronosDebug suite
-  # permanently locks `newContextVar` for the rest of the process
-  # (mirrors real thread-creation, one-way by design — see
-  # chronos/contextvars.nim). Any runtime `newContextVar` call after it,
-  # in this binary, would hit the lock; testcontextvarsguardrails
-  # constructs keys at runtime inside several `test` bodies, so it must
-  # run first. The other files construct only module-level keys, which
-  # complete at program init, before the lock can ever engage.
+  # Import order among these five is not load-bearing: the one-way
+  # chronosDebug construction lock lives in its own file
+  # (tests/testcontextvarslock.nim, its own step in chronos.nimble's
+  # test task), never imported here.
 
 when (chronosEventEngine in ["epoll", "kqueue"]) or defined(windows):
   # `poll` engine does not support signals and processes.
