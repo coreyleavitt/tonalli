@@ -113,7 +113,7 @@ suite "contextvars: chronosDebug context-corruption detection net":
     else:
       skip()
 
-  test "cross-batch guard layer: a bare nil-context callback that corrupts currentAsyncContext surfaces the batch guard's message via finally-replacement":
+  test "cross-batch guard layer: a callback captured at nil ambient context that corrupts currentAsyncContext surfaces the batch guard's message via finally-replacement":
     when defined(chronosDebug):
       # Ordered last and restores currentAsyncContext itself: this case
       # leaves the ambient corrupted for the duration of the escaping
