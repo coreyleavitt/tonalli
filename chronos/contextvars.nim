@@ -54,7 +54,7 @@
 ##   (`.value` or `ctx[cv]`) when read while unbound; carries the key's
 ##   name in `varName`.
 
-import std/[algorithm, hashes, macros, strutils]
+import std/[algorithm, atomics, hashes, macros, strutils]
 import ./config
 import ./futures
 import ./internal/contextnode
@@ -199,40 +199,57 @@ when defined(chronosDebug):
       "lockContextVarConstruction() — keys must be constructed before " &
       "any thread creation"
 
-  var contextVarConstructionThreadRecorded = false
-  var contextVarConstructionThreadId: int
-    ## Automatic counterpart to `lockContextVarConstruction()` above: no
-    ## opt-in call is needed for this one. The first registration on any
-    ## thread records that thread's id; every later registration
-    ## doAsserts it is running on that same thread. See
-    ## docs/src/contextvars.md, "Registry and key lifetime" for the
-    ## `--mm:refc` GC hazard a cross-thread construction reopens (a chain
-    ## node's `key` field is an untraced raw pointer into whichever
-    ## thread built its key). Debug-only, like the lock above.
+var contextVarThreadGenCounter: Atomic[uint]
+  ## Source of the never-recycled per-thread identity the guard below
+  ## checks against, in place of `getThreadId()`: an OS thread id is
+  ## reused once its thread exits, which would let a later, unrelated
+  ## thread pass as the one that constructed the first key. Generation
+  ## `0` is reserved for "unstamped" (see `contextVarThreadGen` below),
+  ## so the first generation handed out is `1`.
 
-  proc checkContextVarConstructionThread() {.inline.} =
-    let tid = getThreadId()
-    if not contextVarConstructionThreadRecorded:
-      contextVarConstructionThreadRecorded = true
-      contextVarConstructionThreadId = tid
-    else:
-      doAssert tid == contextVarConstructionThreadId,
-        "newContextVar/newRequiredContextVar called from a different " &
-        "thread than the one that constructed the first context " &
-        "variable key — under --mm:refc this corrupts the GC heap (see " &
-        "docs/src/contextvars.md, \"Registry and key lifetime\"); " &
-        "construct every context variable key on a single thread, " &
-        "before any createThread call"
+var contextVarThreadGen {.threadvar.}: uint
+  ## This thread's identity, lazily assigned by `contextVarThreadGeneration`
+  ## on first use. `0` means not yet stamped.
+
+proc contextVarThreadGeneration(): uint {.inline.} =
+  if contextVarThreadGen == 0'u:
+    contextVarThreadGen = contextVarThreadGenCounter.fetchAdd(1'u) + 1'u
+  contextVarThreadGen
+
+var contextVarConstructionThreadGen: Atomic[uint]
+  ## Recording slot for the automatic same-thread construction guard: `0`
+  ## means no key has been constructed yet; any other value is the
+  ## generation (see above) of the thread that constructed the first one.
+  ## Set exactly once, via the compare-exchange in
+  ## `checkContextVarConstructionThread` below, so the guard needs no
+  ## lock to stay race-free.
+
+proc checkContextVarConstructionThread() {.inline.} =
+  ## Unconditional in every build, not just `-d:chronosDebug`: the
+  ## hazard this guards is `--mm:refc` GC-heap corruption from a chain
+  ## node's untraced raw `key` pointer (see docs/src/contextvars.md,
+  ## "Registry and key lifetime"), and the construction path it runs on
+  ## is cold, so there is no release-build case for skipping it.
+  let gen = contextVarThreadGeneration()
+  var recorded = 0'u
+  if not contextVarConstructionThreadGen.compareExchange(recorded, gen):
+    doAssert recorded == gen,
+      "newContextVar/newRequiredContextVar called from a different " &
+      "thread than the one that constructed the first context " &
+      "variable key — under --mm:refc this corrupts the GC heap (see " &
+      "docs/src/contextvars.md, \"Registry and key lifetime\"); " &
+      "construct every context variable key on a single thread, " &
+      "before any createThread call"
 
 proc checkContextVarConstruction() {.inline.} =
-  ## Shared debug-only guard, called unconditionally from both
-  ## constructors below — a no-op outside `-d:chronosDebug`, so callers
-  ## don't need their own `when defined(chronosDebug):` wrapper. See
-  ## `checkContextVarConstructionAllowed`/`checkContextVarConstructionThread`
-  ## above.
+  ## Called unconditionally from both constructors below, so callers
+  ## don't need their own `when defined(chronosDebug):` wrapper: the
+  ## lock check (`checkContextVarConstructionAllowed`) is allowed only
+  ## under `-d:chronosDebug`, opt-in as above; the thread check
+  ## (`checkContextVarConstructionThread`) always runs.
   when defined(chronosDebug):
     checkContextVarConstructionAllowed()
-    checkContextVarConstructionThread()
+  checkContextVarConstructionThread()
 
 proc registerVar(base: ContextVarBase) =
   base.nextRegistered = registryHead

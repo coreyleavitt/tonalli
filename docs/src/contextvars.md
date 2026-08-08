@@ -677,30 +677,35 @@ enumeration filter, never a key's lifetime.
 
 `newContextVar`/`newRequiredContextVar` are supported only *before* any
 `createThread` call — the same write-once-then-read-only discipline the
-registry already needs, enforced two ways under a `chronosDebug` build.
+registry already needs, enforced two ways.
 
-The first is automatic and needs no setup: on a key's first registration,
-chronos records the constructing thread's id (`getThreadId()`); every
-later registration doAsserts it is running on that same thread, before
-either constructor's registry mutation ever runs, so a violation leaves
-the registry exactly as it was. A second thread constructing a key
-corrupts the GC heap under `--mm:refc`, since a chain node's `key` field
-is an untraced raw pointer into whichever thread built its key (see
-[Implementation](#implementation) above), and this check fires the moment
-that hazard actually occurs.
+The first is automatic, needs no setup, and runs in every build,
+including a release build: on a key's first registration, chronos stamps
+the constructing thread with a process-lifetime generation counter — not
+`getThreadId()`, whose OS-level ids are recycled once a thread exits, and
+so cannot tell a returning thread from an unrelated later one reusing its
+id — and records that generation; every later registration doAsserts it
+is running on the same thread, before either constructor's registry
+mutation ever runs, so a violation leaves the registry exactly as it was.
+A second thread constructing a key corrupts the GC heap under `--mm:refc`,
+since a chain node's `key` field is an untraced raw pointer into whichever
+thread built its key (see [Implementation](#implementation) above), and
+this check fires the moment that hazard actually occurs — unconditionally,
+because the hazard it prevents is not itself limited to debug builds, and
+the construction path it runs on is cold.
 
-The second is `lockContextVarConstruction()`, a stricter opt-in boundary:
-chronos does not wrap or intercept thread creation, so nothing flips this
-lock automatically. Call it yourself at your program's own
-construction/thread-creation boundary — the test suite is its only caller
-today — and every `newContextVar`/`newRequiredContextVar` call after that
-point asserts, on any thread, not just a different one from the first.
-Neither check is a substitute for the other: the automatic check catches
-the cross-thread case with no setup but tolerates further same-thread
-construction after other threads already exist, while the lock catches
-that too, but only once an application opts in. No lock is paid on any
-path in a release build, and neither check runs at all outside
-`chronosDebug`.
+The second is `lockContextVarConstruction()`, a stricter, `chronosDebug`-
+only opt-in boundary: chronos does not wrap or intercept thread creation,
+so nothing flips this lock automatically. Call it yourself at your
+program's own construction/thread-creation boundary — the test suite is
+its only caller today — and every `newContextVar`/`newRequiredContextVar`
+call after that point asserts, on any thread, not just a different one
+from the first. Neither check is a substitute for the other: the
+automatic check catches the cross-thread case with no setup but tolerates
+further same-thread construction after other threads already exist, while
+the lock catches that too, but only once an application opts in. No lock
+is paid on any path in a release build, and the lock itself runs only
+under `chronosDebug`.
 
 Applications are encouraged to call `lockContextVarConstruction()` at
 their own thread-creation boundary in `chronosDebug` builds and in CI,
