@@ -200,6 +200,36 @@ genuinely needs a fresh instance per unbound read, bind it explicitly with
 `proc(): T` factory default is not offered — nothing in chronos needs one
 today.
 
+### Reads inside your own `{.cast(gcsafe).}` blocks
+
+`cv.value`, `cv.withValue`, and `cv.isBound` are templates, and each
+expands a narrowly-scoped `{.cast(gcsafe).}` into its caller: a key is
+typically a module-level `let` holding a `ref`, so the read is formally a
+global access, and the cast is what lets it appear in `{.gcsafe.}` code
+(sound because keys are write-once at construction — see
+[Registry and key lifetime](#registry-and-key-lifetime)).
+
+Current Nim (through 2.2.x and devel at the time of writing) mishandles
+*nested* `{.cast(gcsafe).}` blocks: when an inner cast block ends, the
+compiler's effect tracking clears the enforcement outright instead of
+restoring the enclosing block's state, so every statement *after* the
+inner block loses the outer cast's protection. This is not specific to
+chronos — two hand-written nested blocks reproduce it — but calling one
+of the templates above inside your own cast block is an easy way to
+trigger it, and the resulting "is not GC-safe" errors point at unrelated
+statements after the call. Until the compiler fix propagates, hoist the
+read above your cast block:
+
+```nim
+proc handler() {.gcsafe.} =
+  let user = currentUser.value      # read first, outside the cast
+  {.cast(gcsafe).}:
+    touchGlobalState(user)
+    runCallbacks()                  # stays covered by the outer cast
+```
+
+On a fixed compiler the hoist is unnecessary, merely harmless.
+
 ## Required variables
 
 A key may omit its default entirely, using `newRequiredContextVar[T]`
