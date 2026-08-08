@@ -9,7 +9,7 @@
 ## Continuation-local storage (contextvars) cost benchmark.
 ##
 ## Each metric runs twice in the same binary: once unused (no binder
-## ever pushed, nil ambient context) and once with a `contextVar` bound
+## ever pushed, nil ambient context) and once with a contextVar bound
 ## around the hot loop. Both numbers and their delta are printed
 ## together.
 ##
@@ -17,11 +17,14 @@
 ## before and after every phase; unused/bound run order alternates per
 ## metric (`runBothWorlds`/`runBothWorldsInt`).
 ##
-## Chain-depth ladder: `chain1` .. `chain16` are hand-declared
-## contextVars composed via `withChainDepth`, a compile-time unrolling
-## macro (no runtime-parametrized "chain of depth N" exists). Reading
-## `chain1` at depth D walks all D nodes -- the worst-case lookup for
-## that depth.
+## Chain-depth ladder: `chainVars[0]` .. `chainVars[15]` are a runtime
+## `array[16, ContextVar[int]]`, raw-constructed at module init and
+## bound via `bindDepth`, a `when`-recursive static-unrolled template
+## (no runtime-parametrized "chain of depth N" exists -- unrolling per
+## depth is what keeps per-node overhead honest, not loop-amortized).
+## `bindDepth(D)` binds `chainVars[0]` outermost through `chainVars[D-1]`
+## innermost, so reading `chainVars[0]` at depth D walks all D nodes --
+## the worst-case lookup for that depth.
 ##
 ## Timing uses `getMonoTime().ticks` differences directly as
 ## nanoseconds (valid on POSIX, backed by `clock_gettime`).
@@ -35,10 +38,10 @@
 ##   nim c -d:release --mm:orc  -r benchmarks/bench_contextvars
 ##   nim c -d:release --mm:refc -r benchmarks/bench_contextvars
 
-import std/[algorithm, macros, monotimes, strformat]
+import std/[algorithm, monotimes, strformat]
 
 import chronos
-import chronos/contextvars
+import chronos/internal/contextkeys
 
 {.used.}
 
@@ -57,38 +60,41 @@ const
   MixedBatchN = 300_000
 
 # --- contextVar declarations -------------------------------------------------
-# `benchVar`/`mixedVar` back the single-var metrics; `chain1` .. `chain16`
-# back the depth ladder. All module-private (no `*`) -- this file is an
-# executable, not a library.
+# `benchVar`/`mixedVar` back the single-var metrics, declared via the
+# `{.contextVar.}` sugar -- no `*`, so they're private (this file is an
+# executable, not a library). `chainVars` backs the depth ladder: the
+# sugar emits one symbol per declaration, so it cannot mint an indexable
+# family -- the ladder is a raw-constructed `array[16, ContextVar[int]]`
+# instead, filled at module init (before any thread is created). Named
+# `chainVars`, not `chain`, to stay distinct from the local `chain()`
+# procs metric 2 declares below (an unrelated await chain).
 
-contextVar:
-  var benchVar: int = 0
-  var mixedVar: int = 0
-  var chain1: int = 0
-  var chain2: int = 0
-  var chain3: int = 0
-  var chain4: int = 0
-  var chain5: int = 0
-  var chain6: int = 0
-  var chain7: int = 0
-  var chain8: int = 0
-  var chain9: int = 0
-  var chain10: int = 0
-  var chain11: int = 0
-  var chain12: int = 0
-  var chain13: int = 0
-  var chain14: int = 0
-  var chain15: int = 0
-  var chain16: int = 0
+let benchVar {.contextVar.} = 0
+let mixedVar {.contextVar.} = 0
 
-macro withChainDepth(depth: static int, body: untyped): untyped =
-  ## Composes `depth` nested `with`-blocks (`withChain1` outermost
-  ## through `withChain<depth>` innermost) around `body`. `depth` must
-  ## be in 1..16, the hand-declared ladder above.
-  doAssert depth in 1 .. 16, "withChainDepth: depth out of the hand-declared ladder"
-  result = body
-  for i in countdown(depth, 1):
-    result = newCall(ident("withChain" & $i), newLit(i), result)
+var chainVars: array[16, ContextVar[int]]
+for i in 0 ..< chainVars.len:
+  chainVars[i] = newContextVar[int]("chain" & $(i + 1), 0)
+
+template bindDepthFrom(i, depth: static int, body: untyped): untyped =
+  when i >= depth:
+    body
+  else:
+    chainVars[i].withValue(1):
+      bindDepthFrom(i + 1, depth, body)
+
+template bindDepth(depth: static int, body: untyped): untyped =
+  ## Nests `withValue` for `chainVars[0] .. chainVars[depth-1]`,
+  ## outermost to innermost -- `chainVars[0]` is bound first (oldest, at
+  ## the bottom of the stack) and `chainVars[depth-1]` last (newest, at
+  ## the top), so reading `chainVars[0]` inside `body` always walks the
+  ## full `depth` nodes regardless of how deep the ladder goes. Replaces
+  ## the old macro-expansion `withChainDepth` with the same nesting
+  ## order, runtime-parametrized over the array but still unrolled per
+  ## depth at compile time via `static`.
+  static:
+    doAssert depth in 1 .. chainVars.len, "bindDepth: depth out of the hand-declared ladder"
+  bindDepthFrom(0, depth, body)
 
 # --- median-of-N trial infrastructure ----------------------------------------
 
@@ -177,7 +183,7 @@ proc benchCallSoonBound(n: int): float =
   var count = 0
   proc cb(u: pointer) {.gcsafe, raises: [].} =
     inc count
-  withBenchVar(1):
+  benchVar.withValue(1):
     let start = getMonoTime().ticks
     var scheduled = 0
     while scheduled < n:
@@ -202,7 +208,7 @@ proc benchSleepChainUnused(n: int): float =
 
 proc benchSleepChainBound(n: int): float =
   proc chain(): Future[void] {.async.} =
-    withBenchVar(1):
+    benchVar.withValue(1):
       for i in 0 ..< n:
         await sleepAsync(0.milliseconds)
   let start = getMonoTime().ticks
@@ -228,7 +234,7 @@ proc benchFutureChurnBound(n: int): float =
     return 1
   proc run(): Future[int] {.async.} =
     var acc = 0
-    withBenchVar(1):
+    benchVar.withValue(1):
       for i in 0 ..< n:
         acc += await mk()
     return acc
@@ -252,7 +258,7 @@ proc benchMemPendingFutureUnused(n: int): int =
 proc benchMemPendingFutureBound(n: int): int =
   var futs = newSeqOfCap[Future[void]](n)
   GC_fullCollect()
-  withBenchVar(1):
+  benchVar.withValue(1):
     let before = getOccupiedMem()
     for i in 0 ..< n:
       futs.add newFuture[void]("bench")
@@ -284,7 +290,7 @@ proc queuedCallbackMemThread(bound: bool) {.thread, nimcall.} =
       callSoon(cb, nil)
     queuedCallbackMemResult = (getOccupiedMem() - before) div MemQueuedCallbackN
   if bound:
-    withBenchVar(1):
+    benchVar.withValue(1):
       measure()
   else:
     measure()
@@ -304,18 +310,18 @@ proc benchChainReadUnused(n: int): float =
   var acc = 0
   let start = getMonoTime().ticks
   for i in 0 ..< n:
-    acc += chain1()
+    acc += chainVars[0].value
   result = (getMonoTime().ticks - start).float / n.float
-  doAssert acc == 0, "unbound chain1() must read the declared default"
+  doAssert acc == 0, "unbound chainVars[0].value must read the declared default"
 
 proc benchChainReadBound(n: int, depth: static int): float =
   var acc = 0
-  withChainDepth(depth):
+  bindDepth(depth):
     let start = getMonoTime().ticks
     for i in 0 ..< n:
-      acc += chain1()
+      acc += chainVars[0].value
     result = (getMonoTime().ticks - start).float / n.float
-  doAssert acc == n, "chain1() must read its bound value (1) at every depth"
+  doAssert acc == n, "chainVars[0].value must read its bound value (1) at every depth"
 
 # --- mixed bound/unbound batch (branch-predictor-hostile interleaving) -------
 
@@ -331,7 +337,7 @@ proc benchMixedBatch(n: int): float =
       if (scheduled + i) mod 2 == 0:
         callSoon(cb, nil)
       else:
-        withMixedVar(1):
+        mixedVar.withValue(1):
           callSoon(cb, nil)
     inc scheduled, batch
     poll()
@@ -389,13 +395,13 @@ proc runReport() =
 
   echo "-- bound single-var steady state + chain-depth ladder (contextLookup O(depth) walk) --"
   let unboundRead = benchMedian(Trials, proc(): float = benchChainReadUnused(ChainReadN))
-  echo &"chain1() read, unbound (epsilon baseline)  {unboundRead:10.2f} ns/op"
+  echo &"chain[0].value read, unbound (epsilon baseline) {unboundRead:10.2f} ns/op"
   let depth1 = benchMedian(Trials, proc(): float = benchChainReadBound(ChainReadN, 1))
-  echo &"chain1() read, bound, depth=1 (steady state){depth1:10.2f} ns/op"
+  echo &"chain[0].value read, bound, depth=1 (steady state){depth1:10.2f} ns/op"
   let depth4 = benchMedian(Trials, proc(): float = benchChainReadBound(ChainReadN, 4))
-  echo &"chain1() read, bound, depth=4               {depth4:10.2f} ns/op"
+  echo &"chain[0].value read, bound, depth=4               {depth4:10.2f} ns/op"
   let depth16 = benchMedian(Trials, proc(): float = benchChainReadBound(ChainReadN, 16))
-  echo &"chain1() read, bound, depth=16              {depth16:10.2f} ns/op"
+  echo &"chain[0].value read, bound, depth=16              {depth16:10.2f} ns/op"
   echo ""
 
   echo "-- mixed bound/unbound batch (branch-predictor-hostile interleaving) --"
