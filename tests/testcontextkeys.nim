@@ -9,6 +9,7 @@
 ## Spike coverage for the first-class `ContextVar[T]` key runtime. See
 ## .claude/rfc/0002-contextvars-firstclass-keys.handoff.md.
 
+import std/tables
 import unittest2
 import ../chronos/internal/contextkeys
 
@@ -132,3 +133,66 @@ suite "contextkeys: ambient value and withValue":
     k.withValue(9):
       check k.value == 9
     check k.value == 0
+
+suite "contextkeys: snapshot AsyncContext and []":
+
+  test "currentContext() captured inside withValue outlives the binder":
+    let k = newContextVar("t14Key", 0)
+    var snap: AsyncContext
+    k.withValue(42):
+      snap = currentContext()
+      check snap[k] == 42
+    check snap[k] == 42
+
+  test "snapshot captured before a later bind is unaffected by it":
+    let k = newContextVar("t15Key", 0)
+    let snap = currentContext()
+    check snap[k] == 0
+    k.withValue(99):
+      check snap[k] == 0
+    check snap[k] == 0
+
+  test "snapshot == and hash: identity semantics, usable as a Table key":
+    let a = currentContext()
+    let b = currentContext()
+    check a == b
+    check hash(a) == hash(b)
+
+    let k = newContextVar("t16Key", 0)
+    k.withValue(1):
+      let c = currentContext()
+      check c != a
+
+    var t = initTable[AsyncContext, string]()
+    t[a] = "outer"
+    check t[b] == "outer"
+
+suite "contextkeys: must-bind Defect parity":
+
+  test "unbound must-bind .value raises UnboundContextVarDefect with varName":
+    let k = newContextVar[int]("t18Key")
+    try:
+      discard k.value
+      check false
+    except UnboundContextVarDefect as e:
+      check e.varName == "t18Key"
+
+  test "unbound must-bind ctx[cv] raises UnboundContextVarDefect, same fields":
+    let k = newContextVar[int]("t19Key")
+    let snap = currentContext()
+    try:
+      discard snap[k]
+      check false
+    except UnboundContextVarDefect as e:
+      check e.varName == "t19Key"
+
+  test "bound must-bind read returns the value on both paths, no raise":
+    let k = newContextVar[int]("t20Key")
+    k.withValue(5):
+      check k.value == 5
+      check currentContext()[k] == 5
+
+  test "defaulted key ctx[cv] miss returns default, symmetric with .value":
+    let k = newContextVar("t21Key", 11)
+    check currentContext()[k] == 11
+    check currentContext()[k] == k.value

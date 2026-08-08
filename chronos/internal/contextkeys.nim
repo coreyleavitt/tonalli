@@ -14,11 +14,12 @@
 ## (`chronos/contextvars.nim`) without changing it; takes its final
 ## name at re-fold time. Covers construction, the intrusive registry,
 ## the render-proc generic-into-nimcall construction, the ambient
-## chain-walk lookup, and `withValue`. Must-bind Defect parity,
-## snapshot `` `[]` ``/`AsyncContext`, the registry-consuming
-## `dumpContext`, and the `{.contextVar.}` declaration sugar are
-## later slices.
+## chain-walk lookup, `withValue`, the snapshot `` `[]` ``/`AsyncContext`
+## pair, and must-bind `UnboundContextVarDefect` parity. The
+## registry-consuming `dumpContext` and the `{.contextVar.}` declaration
+## sugar are later slices.
 
+import std/hashes
 import ../futures
 import ./contextnode
 export ContextNodeBase
@@ -114,13 +115,42 @@ proc renderDefault*[T](cv: ContextVar[T]): string =
   let node = ContextNode[T](key: cv, value: cv.default)
   cv.render(node)
 
-# --- The one chain-walk lookup -----------------------------------------------
-# Slice 4 re-expresses `.value` as `currentContext()[cv]`, on top of the
-# same `lookupChain` — kept as the sole walk so that re-expression is a
-# thin wrapper, not a second implementation.
+# --- Snapshot type and the one chain-walk lookup -----------------------------
+# `.value` re-expresses as `currentContext()[cv]` below, on top of this
+# same `` `[]` `` — the sole walk, so the re-expression is a thin wrapper,
+# not a second implementation.
 
-proc lookupChain[T](chain: ContextNodeBase, cv: ContextVar[T]): T {.raises: [].} =
-  var node = chain
+type
+  AsyncContext* = distinct ContextNodeBase
+    ## Opaque snapshot of a binding chain, captured by `currentContext()`.
+    ## Transitional: mirrors `chronos/contextvars.nim`'s type of the same
+    ## name exactly (identity semantics); the two are unified at re-fold.
+
+proc `==`*(a, b: AsyncContext): bool {.gcsafe, raises: [].} =
+  ContextNodeBase(a) == ContextNodeBase(b)
+
+proc hash*(ctx: AsyncContext): Hash {.gcsafe, raises: [].} =
+  hash(cast[pointer](ContextNodeBase(ctx)))
+
+proc currentContext*(): AsyncContext {.gcsafe, raises: [].} =
+  ## Capture the current task's binding chain as an opaque snapshot.
+  {.cast(gcsafe).}:
+    AsyncContext(currentAsyncContext)
+
+type
+  UnboundContextVarDefect* = object of Defect
+    ## Raised by a must-bind key's read (`.value` or `ctx[cv]`) when no
+    ## binding is in scope. Message parity with
+    ## `chronos/contextvars.nim`'s `UnboundContextVarDefect`, with one
+    ## resolved divergence: since `.value` routes through `` `[]` ``,
+    ## the wording can't distinguish ambient from snapshot at zero cost
+    ## (the old module's two callsites could; this one can't without a
+    ## per-callsite string param, rejected as not worth it for wording
+    ## alone). Both paths use the old module's snapshot wording.
+    varName*: string
+
+proc `[]`*[T](ctx: AsyncContext, cv: ContextVar[T]): T {.raises: [].} =
+  var node = ContextNodeBase(ctx)
   while node != nil:
     if cast[ContextNodeKeyed](node).key == ContextVarBase(cv):
       return cast[ContextNode[T]](node).value
@@ -128,19 +158,14 @@ proc lookupChain[T](chain: ContextNodeBase, cv: ContextVar[T]): T {.raises: [].}
   if cv.hasDefault:
     cv.default
   else:
-    # Placeholder only: must-bind Defect parity (message + `varName`)
-    # is slice 5. This is the smallest honest miss behavior until then.
-    raise newException(Defect, "unbound context variable: " & cv.name)
-
-proc lookupAmbient[T](cv: ContextVar[T]): T {.gcsafe, raises: [].} =
-  ## Mirrors `contextvars_impl.nim`'s `contextLookup`: reading the
-  ## ambient `currentAsyncContext` threadvar isn't provably gcsafe to
-  ## the compiler, hence the escape hatch.
-  {.cast(gcsafe).}:
-    lookupChain(currentAsyncContext, cv)
+    var e = newException(UnboundContextVarDefect,
+      "context variable '" & cv.name & "' has no default and is not " &
+      "bound in this context")
+    e.varName = cv.name
+    raise e
 
 template value*[T](cv: ContextVar[T]): T =
-  lookupAmbient(cv)
+  currentContext()[cv]
 
 template withValue*[T](cv: ContextVar[T], v: T, body: untyped): untyped =
   ## Push a `ContextNode[T]` bound to `cv` onto the ambient chain for
