@@ -480,6 +480,19 @@ known, and the lookup walk's cast from `ContextNodeKeyed` to
 `ContextNode[T]` is sound by that construction invariant, not by a runtime
 type tag.
 
+That invariant only holds if every node reachable through an
+`AsyncContext` was actually built by `withValue` in the first place —
+which in turn requires that `AsyncContext` itself can't be fabricated
+from an arbitrary `ContextNodeBase`. `AsyncContext* = object` wraps its
+chain head in a field private to this module for exactly this reason:
+the only route to a populated value is `currentContext()`'s own capture,
+so nothing outside `chronos/contextvars.nim` — not even code that
+imports `chronos/internal/contextnode` directly — can hand `withContext`
+a snapshot whose chain wasn't built the normal way. The soundness
+argument above is therefore by construction against the entire import
+surface, not merely against callers who stick to `chronos/contextvars.nim`'s
+own exports.
+
 The key field itself is stored as a raw `pointer` (`cast[pointer](cv)`),
 not a traced `ContextVarBase` reference. This is load-bearing, not a style
 choice: `withValue` can run on any thread once a key exists, and under
@@ -808,7 +821,11 @@ codebase already paid on its one field.
   key inside a proc, capturing the binding, letting the proc return,
   forcing a full GC collection, and confirming an unrelated key
   constructed afterward still reads its own default rather than the
-  collected key's stale bound value.
+  collected key's stale bound value; and that `AsyncContext` cannot be
+  constructed from a bare `ContextNodeBase` obtained via a direct
+  `chronos/internal/contextnode` import, by either positional or
+  named-field syntax — the forgery route a distinct-type `AsyncContext`
+  used to leave open (see "Implementation").
 - `tests/testcontextvarssurface.nim` — verifies `import chronos` plus
   `import chronos/contextvars` expose only the intended public API:
   `ContextVar[T]`, `newContextVar`, `newRequiredContextVar`, the `contextVar`
@@ -817,10 +834,12 @@ codebase already paid on its one field.
   + `` `==` ``/`hash`, `currentContext`, `withContext`,
   `dumpContext`/`ContextVarEntry`, `UnboundContextVarDefect` — and none
   of `ContextVarBase`'s internals (registry link, render pointer,
-  default field), chain-node construction or `next` access, or any
-  `set`/`reset`/token symbol; also pins the deliberate absence of an
-  imperative token API and, on the `--os:windows` leg, that
-  `CompletionData.context` is not reachable either.
+  default field), chain-node construction or `next` access, `ContextNodeBase`
+  itself (unlike the old macro design, which needed it nameable — see
+  "Implementation"), or any `set`/`reset`/token symbol; also pins the
+  deliberate absence of an imperative token API and, on the
+  `--os:windows` leg, that `CompletionData.context` is not reachable
+  either.
 - `tests/testcontextvarsexport.nim` + `tests/contextvarsexportfixture.nim`
   — cross-module export-marker semantics: a starred key declared via
   `{.contextVar.}` is reachable (and its bindings visible in

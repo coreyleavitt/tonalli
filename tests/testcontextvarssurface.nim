@@ -96,12 +96,23 @@ when declared(AsyncContextToken):
 
 # --- Anti-leak: key-runtime internals must not be reachable -----------------
 #
-# `ContextNodeBase`'s bare name IS reachable (deliberately, unlike the
-# old macro design — see chronos/contextvars.nim's `export
-# ContextNodeBase` comment): nothing about `next`'s privacy depends on
-# the base type being unnameable, since contextnode.nim keeps `next`
-# private to itself regardless. What must stay unreachable is
-# construction of a chain node and any access to `next`.
+# `ContextNodeBase`'s bare name must NOT be reachable through this
+# surface: `AsyncContext` wraps its chain head in a field private to
+# chronos/contextvars.nim (see that module's top-of-file comment and
+# docs/src/contextvars.md, "Implementation"), so nothing public needs to
+# name the base chain-node type anymore — unlike the old macro design,
+# which needed it nameable for its own reasons. Whitebox probes of
+# `ContextNodeBase` itself (its `next` field's privacy, the forgery
+# guardrail) live in tests/testcontextvarsguardrails.nim, which imports
+# chronos/internal/contextnode directly rather than going through this
+# public surface.
+
+when declared(ContextNodeBase):
+  {.error: "`ContextNodeBase` must not leak through the public API — " &
+           "`AsyncContext` wraps it in a private field, so no public " &
+           "symbol needs to name the base chain-node type anymore. See " &
+           "chronos/contextvars.nim's top-of-file comment and " &
+           "docs/src/contextvars.md, \"Implementation\".".}
 
 when declared(nextNode):
   {.error: "`nextNode` (chain traversal getter) must not leak through " &
@@ -117,23 +128,13 @@ when declared(ContextNode):
   {.error: "`ContextNode[T]` must not leak through the public API — no " &
            "nameable per-key chain-node type exists anymore (the old " &
            "macro design's per-arm nameable slot subtype is exactly what " &
-           "made the cycle attack below representable in the first " &
-           "place); chronos/contextvars.nim builds and walks nodes from " &
-           "its own definitions only.".}
+           "made the old cycle attack representable in the first place); " &
+           "chronos/contextvars.nim builds and walks nodes from its own " &
+           "definitions only.".}
 
 when declared(ContextNodeKeyed):
   {.error: "`ContextNodeKeyed` must not leak through the public API " &
            "either — same reasoning as `ContextNode[T]` above.".}
-
-static:
-  doAssert not compiles((var n: ContextNodeBase; n.next = n)),
-    "the inherited `next` field must not be writable through a bare " &
-    "ContextNodeBase — the strongest form of the old cycle attack no " &
-    "longer has a nameable slot subtype to go through, but this pins " &
-    "that the base type's own field privacy still holds on its own."
-  doAssert not compiles((var n: ContextNodeBase; discard n.next)),
-    "the inherited `next` field must not be readable through a bare " &
-    "ContextNodeBase either."
 
 when declared(currentAsyncContext):
   {.error: "`currentAsyncContext` threadvar must not leak through the " &

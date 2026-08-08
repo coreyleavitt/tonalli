@@ -57,16 +57,13 @@
 import std/[algorithm, hashes, macros, strutils]
 import ./futures
 import ./internal/contextnode
-# `ContextNodeBase` is reachable (unlike the ambient `currentAsyncContext`
-# threadvar, deliberately not re-exported below) because this module's
-# own guardrail tests need to name it to prove its `next` field stays
-# unreachable; nothing about that field's privacy depends on the base
-# type itself being unnameable — `contextnode.nim` keeps `next` private
-# regardless of who names `ContextNodeBase`. `currentAsyncContext` is
-# declared in `chronos/futures.nim` and used internally below via the
-# plain `import ./futures`; it is NOT re-exported here — user code must
-# go through `withContext`, never the ambient threadvar directly.
-export ContextNodeBase
+# Neither `ContextNodeBase` nor the ambient `currentAsyncContext`
+# threadvar (declared in `chronos/futures.nim`, used internally below via
+# the plain `import ./futures`) is re-exported: `AsyncContext` below
+# wraps the chain head in a field private to this module, so no external
+# code — including code that imports `chronos/internal/contextnode`
+# directly — has any route to construct one outside `currentContext()`'s
+# own capture. See docs/src/contextvars.md, "Implementation".
 
 type
   ContextVarBase* = ref object of RootRef
@@ -250,31 +247,37 @@ iterator registeredVars(): ContextVarBase =
 # not a second implementation.
 
 type
-  AsyncContext* = distinct ContextNodeBase
+  AsyncContext* = object
     ## Opaque snapshot of a binding chain, captured by `currentContext()`.
+    node: ContextNodeBase
+      ## Private: the only route to a populated `AsyncContext` is
+      ## `currentContext()`'s capture below — construction from an
+      ## arbitrary `ContextNodeBase` must not compile, even for code
+      ## that imports `chronos/internal/contextnode` directly. See
+      ## docs/src/contextvars.md, "Implementation".
 
 proc `==`*(a, b: AsyncContext): bool {.gcsafe, raises: [].} =
   ## Identity equality: `true` iff `a` and `b` reference the same
   ## underlying chain head — i.e. both were captured with no
   ## intervening binding change.
-  ContextNodeBase(a) == ContextNodeBase(b)
+  a.node == b.node
 
 proc hash*(ctx: AsyncContext): Hash {.gcsafe, raises: [].} =
   ## Pointer-identity hash, consistent with `==`'s identity semantics —
   ## safe to use `AsyncContext` as a `Table`/`HashSet` key.
-  hash(cast[pointer](ContextNodeBase(ctx)))
+  hash(cast[pointer](ctx.node))
 
 proc currentContext*(): AsyncContext {.gcsafe, raises: [].} =
   ## Capture the current task's binding chain as an opaque snapshot.
   {.cast(gcsafe).}:
-    AsyncContext(currentAsyncContext)
+    AsyncContext(node: currentAsyncContext)
 
 template withContext*(ctx: AsyncContext, body: untyped) =
   ## Run `body` with `ctx` as the current async context; restore the
   ## prior context on every exit path (normal, exception, including
   ## `CancelledError`).
   let chronosCtxPrev = currentAsyncContext
-  currentAsyncContext = ContextNodeBase(ctx)
+  currentAsyncContext = ctx.node
   try:
     body
   finally:
@@ -294,7 +297,7 @@ proc findNode(chain: ContextNodeBase, cv: ContextVarBase): ContextNodeBase =
     node = node.nextNode
 
 proc `[]`*[T](ctx: AsyncContext, cv: ContextVar[T]): T {.raises: [].} =
-  let node = findNode(ContextNodeBase(ctx), cv)
+  let node = findNode(ctx.node, cv)
   if node != nil:
     when defined(chronosDebug):
       doAssert node of ContextNode[T],
@@ -385,7 +388,7 @@ proc contains*[T](ctx: AsyncContext, cv: ContextVar[T]): bool {.raises: [].} =
   ## instead. Answers what a `dumpContext` name-match cannot: which of
   ## two same-name keys is the one actually bound (see "Registry and key
   ## lifetime" — same-name keys never alias).
-  findNode(ContextNodeBase(ctx), cv) != nil
+  findNode(ctx.node, cv) != nil
 
 template isBound*[T](cv: ContextVar[T]): bool =
   ## Ambient form of `contains` — mirrors `value`'s relationship to
@@ -399,7 +402,7 @@ proc dumpContext*(ctx: AsyncContext): seq[ContextVarEntry] {.raises: [].} =
   ## by name. Never raises — render failures are caught inside each
   ## key's render hook.
   {.cast(gcsafe).}:
-    let chain = ContextNodeBase(ctx)
+    let chain = ctx.node
     for cv in registeredVars():
       if cv.private: continue
       let node = findNode(chain, cv)

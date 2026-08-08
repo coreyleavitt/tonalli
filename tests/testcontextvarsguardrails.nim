@@ -26,6 +26,11 @@
 import std/[sequtils, tables]
 import unittest2
 import ../chronos/contextvars
+import ../chronos/internal/contextnode
+  # Whitebox: guardrails 5 and 11 below name `ContextNodeBase` directly,
+  # which `chronos/contextvars.nim` no longer re-exports (see guardrail
+  # 11) — those checks import the internal module the same way an
+  # attacker attempting the forgery in guardrail 11 would have to.
 import ../chronos
   # Brings `withTimeout` into scope for guardrail 9 below, and
   # InternalAsyncCallback/AsyncCallback/InternalCancelCallback/
@@ -295,6 +300,35 @@ suite "contextvars guardrails: g10 private-key registration closes chain-node UA
     # guardrail exists to catch if registration is ever narrowed again.
     let freshKey = newContextVar("g10Fresh", 999)
     check g10CapturedCtx[freshKey] == 999
+
+# --- Guardrail 11: AsyncContext cannot be forged from a bare chain node -----
+#
+# `AsyncContext` wraps its chain-head node in a private field precisely so
+# that no code outside chronos/contextvars.nim — not even code that
+# imports chronos/internal/contextnode directly, as this file does above —
+# can construct one from an arbitrary `ContextNodeBase`. Before this
+# guardrail existed, `AsyncContext* = distinct ContextNodeBase` let a
+# `ContextNodeBase` allocated by plain `new` convert straight into an
+# `AsyncContext` that `withContext` would accept unvalidated; the chain
+# walk's cast to `ContextNodeKeyed` then read past that allocation — a
+# silent out-of-bounds read indistinguishable from the empty context. See
+# docs/src/contextvars.md, "Implementation".
+
+static:
+  doAssert not compiles(block:
+    var n: ContextNodeBase
+    new(n)
+    AsyncContext(n)),
+    "AsyncContext must not be constructible from a bare ContextNodeBase " &
+    "via distinct-style positional conversion — that was exactly the " &
+    "forgery route this guardrail exists to close."
+  doAssert not compiles(block:
+    var n: ContextNodeBase
+    new(n)
+    AsyncContext(node: n)),
+    "AsyncContext must not be constructible from a bare ContextNodeBase " &
+    "via named-field object construction either — the `node` field must " &
+    "stay private to chronos/contextvars.nim."
 
 # =============================================================================
 # --- Capture-discipline guardrails (substrate-level, orthogonal to the
