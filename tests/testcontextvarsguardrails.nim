@@ -6,20 +6,264 @@
 #  Apache License, version 2.0, (LICENSE-APACHEv2)
 #              MIT license (LICENSE-MIT)
 
-## Drift-detection guardrails for chronos's context-variable feature.
+## Drift-detection guardrails for chronos's continuation-local storage
+## feature.
+##
+## Two orthogonal halves: guardrails 1-9 pin representation/identity
+## properties of the `ContextVar[T]` key runtime
+## (`chronos/contextvars.nim`) — ref identity, field privacy, absence of
+## an imperative API, chain-node unreachability, `std/tables` coexistence,
+## name-string drift, non-aliasing, and the positive inverse of the old
+## macro design's collision guardrail. The callback-capture-discipline
+## guardrails after them are substrate-level — orthogonal to the API and
+## carried over unchanged from before this redesign.
 ##
 ## Each check is a compile-time assertion (`static:` / `when compiles`)
-## pinning capture discipline, chain privacy, and struct layout so
-## regressions fail at build time rather than at runtime.
+## or, where the guardrail is semantic rather than structural, a runtime
+## assertion — with a control assertion first wherever a bare `not
+## compiles` could otherwise be vacuous (e.g. a typo'd field name).
 
+import std/[sequtils, tables]
 import unittest2
-import ../chronos/internal/contextvars_impl
-import ../chronos/futures
 import ../chronos/contextvars
+import ../chronos
+  # Brings `withTimeout` into scope for guardrail 9 below, and
+  # InternalAsyncCallback/AsyncCallback/InternalCancelCallback/
+  # CompletionData for the capture-discipline guardrails.
 
 {.used.}
 
-# --- Guardrail 1: capture coverage is structural -----------------------------
+# --- Guardrail 1: ContextVar[T] is ref ---------------------------------------
+#
+# Ref identity IS key identity (see docs/src/contextvars.md,
+# "Implementation"): aliases compare equal, keys work in Table/seq for
+# free, and a default-initialized `nil` key is a detectable invalid
+# state. A value `object` key was rejected for exactly this reason.
+
+static:
+  doAssert ContextVar[int] is ref,
+    "ContextVar[T] must be a `ref object` — ref identity is key " &
+    "identity; a value object would let a copy silently break it."
+  doAssert ContextVarBase is ref,
+    "ContextVarBase must be a `ref object` too — ContextVar[T] " &
+    "inherits it, so the base carries the same identity guarantee."
+
+# --- Guardrail 2: no public mutable fields -----------------------------------
+#
+# `name`/`hasDefault`/`private` are exposed as read-only accessor procs
+# (same spelling as the private field names, so `cv.name` etc. still
+# reads via UFCS); `render`/`default`/the registry link
+# (`nextRegistered`) are not reachable at all outside
+# chronos/contextvars.nim. A writable field here would let user code
+# corrupt a key after construction — e.g. rewrite `render` to defeat
+# `dumpContext`, or flip `hasDefault` to bypass `UnboundContextVarDefect`.
+# This is also the successor to the old macro design's registry-field
+# guardrail (`ContextVarRegistration.registered`/`.next`): the new
+# registry has no separate node type, just this one private link field
+# on `ContextVarBase` itself, so its privacy is pinned here rather than
+# in a dedicated registry guardrail.
+
+static:
+  # Controls: reads must still compile, or the write probes below
+  # would be vacuous (indistinguishable from a typo'd field name).
+  doAssert compiles((let k = newContextVar("g2CtlName", 0); discard k.name)),
+    "control: `.name` must be readable — if this fails, the write " &
+    "probe below isn't probing what it claims to."
+  doAssert compiles((let k = newContextVar("g2CtlHasDefault", 0); discard k.hasDefault)),
+    "control: `.hasDefault` must be readable."
+  doAssert compiles((let k = newContextVar("g2CtlPrivate", 0); discard k.private)),
+    "control: `.private` must be readable."
+
+  doAssert not compiles((let k = newContextVar("g2Name", 0); k.name = "evil")),
+    "ContextVar[T].name must not be writable — it's a read-only " &
+    "accessor over a private field."
+  doAssert not compiles((let k = newContextVar("g2HasDefault", 0); k.hasDefault = false)),
+    "ContextVar[T].hasDefault must not be writable — flipping it " &
+    "post-construction would desync a must-bind key from its Defect."
+  doAssert not compiles((let k = newContextVar("g2Private", 0); k.private = true)),
+    "ContextVar[T].private must not be writable — flipping it " &
+    "post-construction wouldn't retroactively (un)register the key, " &
+    "so a writable field would make `.private` lie about registration."
+  doAssert not compiles((let k = newContextVar("g2Default", 0); k.default = 1)),
+    "ContextVar[T].default must not be reachable at all outside this " &
+    "module — it's on the RFC's public-surface Forbidden list."
+  doAssert not compiles((let k = newContextVar("g2Render", 0); k.render = nil)),
+    "ContextVarBase.render must not be reachable at all outside this " &
+    "module — a writable render hook would let user code corrupt " &
+    "dumpContext's output for a key it doesn't own."
+  doAssert not compiles((let k = newContextVar("g2Registry", 0); k.nextRegistered = nil)),
+    "ContextVarBase.nextRegistered (the intrusive registry link) must " &
+    "not be reachable at all outside this module — a writable link " &
+    "would let user code splice or unlink registry nodes."
+
+# --- Guardrail 3: no custom `==` on ContextVar -------------------------------
+#
+# Chain-node dispatch (the `[]` walk) depends on ref-identity
+# comparison; a value-based `==` would silently alias two distinct
+# keys constructed with the same arguments.
+
+type
+  G3UnrelatedRef = ref object
+    tag: int
+
+static:
+  doAssert not compiles(newContextVar("g3Unrelated", 0) == G3UnrelatedRef(tag: 1)),
+    "ContextVar must not compare equal to an unrelated ref type — no " &
+    "accidental converter or structural `==` should bridge the two " &
+    "hierarchies."
+
+suite "contextvars guardrails: g3 no custom ==":
+  test "two identically-constructed same-T keys compare unequal (ref identity)":
+    let k1 = newContextVar("g3Key", 0)
+    let k2 = newContextVar("g3Key", 0)
+    check k1 != k2
+
+# --- Guardrail 4: imperative set/reset stays absent --------------------------
+#
+# Binding is block-scoped only (`withValue`); no imperative token API.
+# `reset`/`set` can't be probed via `declared()` the way an absent
+# surface symbol normally would (`system.reset` makes `declared(reset)`
+# true in every module — see testcontextvarssurface.nim's note), so the
+# probe is call-shape instead: none of these verb-shaped calls with a
+# value argument may resolve against `ContextVar[T]`.
+
+static:
+  doAssert not compiles((let k = newContextVar("g4Set", 0); k.set(1))),
+    "ContextVar[T] must not have an imperative `set` — binding is " &
+    "block-scoped only via `withValue`."
+  doAssert not compiles((let k = newContextVar("g4Reset", 0); k.reset(1))),
+    "ContextVar[T] must not have an imperative `reset` taking a value."
+  doAssert not compiles((let k = newContextVar("g4Push", 0); k.push(1))),
+    "ContextVar[T] must not have a `push`-shaped imperative call."
+  doAssert not compiles((let k = newContextVar("g4Pop", 0); k.pop(1))),
+    "ContextVar[T] must not have a `pop`-shaped imperative call."
+  doAssert not compiles((let k = newContextVar("g4Free", 0); set(k, 1))),
+    "free-function `set(cv, v)` must not resolve either — same probe, " &
+    "non-UFCS call shape."
+
+# --- Guardrail 5: chain-node construction and `next` access unreachable -----
+#
+# `ContextNode`/`ContextNodeKeyed` are both unexported: neither name
+# resolves outside chronos/contextvars.nim at all, so there is no
+# `cast`-free way to construct a node or reach its `next`. Successor to
+# the old macro design's chain-privacy guardrail, which depended on
+# declaring a `contextVar` arm to obtain a nameable slot subtype to
+# probe through — first-class keys have no such subtype at all, so the
+# probe is simpler: the node types themselves are unnameable.
+# `ContextNodeBase.next` (the inherited field) stays private to
+# contextnode.nim unchanged — that half of the guardrail predates this
+# redesign.
+
+static:
+  doAssert not compiles(ContextNode[int]),
+    "ContextNode[T] must not be nameable outside chronos/contextvars.nim."
+  doAssert not compiles(ContextNodeKeyed),
+    "ContextNodeKeyed must not be nameable outside chronos/contextvars.nim either."
+  doAssert not compiles((var n: ContextNodeBase; n.next = n)),
+    "ContextNodeBase.next must stay unwritable from outside " &
+    "chronos/internal/contextnode.nim — unchanged by this redesign, " &
+    "reconfirmed here because it's the field the whole guardrail " &
+    "protects."
+  doAssert not compiles((var n: ContextNodeBase; discard n.next)),
+    "ContextNodeBase.next must stay unreadable from outside " &
+    "chronos/internal/contextnode.nim either."
+
+# --- Guardrail 6: std/tables.withValue coexistence (pinned decision 1) ------
+#
+# Overloads dispatch on receiver type, ordinary stdlib verb-sharing à
+# la `len`/`[]` — not a compile hazard. Compiles a module importing
+# both std/tables and chronos/contextvars, calling both `withValue`s
+# side by side, including once from inside a generic proc.
+
+proc g6GenericRoundtrip[T](cv: ContextVar[T], v: T): T =
+  cv.withValue(v):
+    result = cv.value
+
+suite "contextvars guardrails: g6 std/tables.withValue coexistence":
+  test "Table.withValue and ContextVar.withValue compile and behave side by side":
+    let cv = newContextVar("g6Key", 0)
+    var t = {"a": 1}.toTable
+
+    t.withValue("a", v):
+      v[] = 99
+
+    cv.withValue(7):
+      check cv.value == 7
+      check t["a"] == 99
+
+    check g6GenericRoundtrip(cv, 55) == 55
+
+# --- Guardrail 7: name-string drift -------------------------------------------
+#
+# The raw constructor's `name` argument is the DRY wart accepted for
+# non-sugar call sites; this guardrail pins that the string surfaces
+# verbatim, unmangled, on both consumers: dumpContext and
+# UnboundContextVarDefect.varName.
+
+suite "contextvars guardrails: g7 name-string drift":
+  test "raw-constructor name surfaces verbatim in dumpContext":
+    let k = newContextVar("rawNamed", 0)
+    let entries = dumpContext(currentContext()).filterIt(it.name == "rawNamed")
+    check entries.len == 1
+
+  test "raw-constructor name surfaces verbatim in UnboundContextVarDefect.varName":
+    let k = newContextVar[int]("rawNamed")
+    try:
+      discard k.value
+      check false
+    except UnboundContextVarDefect as e:
+      check e.varName == "rawNamed"
+
+# --- Guardrail 8: same-name keys don't alias ----------------------------------
+#
+# Duplicate name strings are representable and accepted as
+# cosmetic-only (matching PEP 567): dumpContext may show two entries
+# with the same label. What's pinned instead is the semantic property —
+# binding one same-name key is never observable through the other.
+
+suite "contextvars guardrails: g8 same-name keys don't alias":
+  test "binding one of two same-name same-T keys leaves the other's default; both list in dumpContext":
+    let a = newContextVar("g8Dup", 1)
+    let b = newContextVar("g8Dup", 1)
+
+    a.withValue(99):
+      check a.value == 99
+      check b.value == 1
+
+    check a.value == 1
+    check b.value == 1
+
+    let entries = dumpContext(currentContext()).filterIt(it.name == "g8Dup")
+    check entries.len == 2
+
+# --- Guardrail 9: positive inverse of the old collision guardrail -----------
+#
+# The old macro's per-arm `withName` collided with an already-declared
+# symbol of the same name (`timeout` vs. chronos's own `withTimeout`
+# combinator) — a compile ERROR. First-class keys mint no derived
+# identifiers, so this bug class is unrepresentable: a key literally
+# named "timeout" and chronos's `withTimeout` coexist without conflict.
+# Proof is compile-and-run, not `not compiles`, since the claim is the
+# ABSENCE of an error — this deletes the old design's collision-error
+# guardrail (and its duplicate-arm variant) outright, rather than
+# re-deriving it, since the mechanism that produced the error no longer
+# exists.
+
+let timeout* {.contextVar.} = 5
+  ## Deliberately named to match the old collision case — the old
+  ## macro would have refused this declaration outright.
+
+suite "contextvars guardrails: g9 no collision with chronos's own symbols":
+  test "a key literally named `timeout` coexists with chronos's withTimeout":
+    check timeout.value == 5
+    check declared(withTimeout)
+
+# =============================================================================
+# --- Capture-discipline guardrails (substrate-level, orthogonal to the
+#     key/macro API — carried over unchanged) ---------------------------------
+# =============================================================================
+
+# --- Guardrail: capture coverage is structural -------------------------------
 #
 # InternalAsyncCallback's fields are private to chronos/futures.nim;
 # only capturingCallback/bareCallback/contextCallback can construct one.
@@ -40,7 +284,7 @@ static:
     "AsyncCallback's `context` field must be private — direct mutation " &
     "would let a scheduling site silently skip context capture."
 
-# --- Guardrail 2: context is a native ref, not a manually-refcounted pointer -
+# --- Guardrail: context is a native ref, not a manually-refcounted pointer ---
 #
 # A `pointer` field would need manual GC_ref/GC_unref at every drop
 # site — a latent leak under --mm:refc since keepItIf's shallowCopy
@@ -54,7 +298,7 @@ static:
     "manual GC_ref/unref leaks under refc via `keepItIf`'s shallowCopy, " &
     "and forces every new scheduling site to remember the manual ops."
 
-# --- Guardrail 3: AsyncCallback layout stable --------------------------------
+# --- Guardrail: AsyncCallback layout stable ----------------------------------
 #
 # If the struct gains a field or changes layout, this assertion drifts.
 # A cheap canary against accidental shape changes.
@@ -67,40 +311,10 @@ static:
     "(function: 2-word closure proc, udata: pointer, context: ref); " &
     "actual size = " & $sizeof(InternalAsyncCallback)
 
-# Guardrail 4 (public surface is minimal) lives in
-# tests/testcontextvarssurface.nim, which imports only public paths.
+# Public-surface minimality lives in tests/testcontextvarssurface.nim,
+# which imports only public paths.
 
-# --- Guardrail 5: the binding chain is immutable outside contextnode.nim -----
-#
-# ContextNodeBase.next must stay private: each contextVar arm emits a
-# nameable subtype inheriting the field, so a public `next` would let
-# user code write `mySlot.next = mySlot`, cycling contextLookup's walk
-# or rewriting a chain shared with pending callbacks.
-
-contextVar:
-  var chainProbe: int = 0
-
-static:
-  doAssert compiles(ChainProbeSlot(value: 1)),
-    "control: this module declared the arm, so constructing its slot " &
-    "with `value` must compile here — if this fails, the checks below " &
-    "are not probing what they claim to probe"
-  doAssert not compiles((var n: ContextNodeBase; n.next)),
-    "ContextNodeBase.next must not be readable outside contextnode.nim " &
-    "— traversal goes through the internal `nextNode` getter only."
-  doAssert not compiles((var n: ContextNodeBase; n.next = n)),
-    "ContextNodeBase.next must not be writable outside contextnode.nim " &
-    "— chain links are written by `linkNode` exactly once per node."
-  doAssert not compiles((var s = ChainProbeSlot(value: 1); s.next = s)),
-    "a slot SUBTYPE must not reach the inherited `next` field either — " &
-    "the emitted slot types are nameable, so a public field would " &
-    "reopen the cycle attack without ever naming ContextNodeBase."
-  doAssert not compiles((cast[ChainProbeSlot](currentAsyncContext).next = nil)),
-    "`cast` must not defeat this: casting yields the subtype, but field " &
-    "access is still privacy-checked per-module, so even a cast of the " &
-    "live chain head cannot mutate a link."
-
-# --- Guardrail 6: InternalCancelCallback --------------------------------------
+# --- Guardrail: InternalCancelCallback ---------------------------------------
 #
 # Same structural-privacy discipline as InternalAsyncCallback above,
 # mirrored for this 3-word type (no udata field).
@@ -122,71 +336,13 @@ static:
   doAssert InternalCancelCallback.context is ContextNodeBase,
     "InternalCancelCallback.context must be `ContextNodeBase` (a native " &
     "`ref` field) — same MM-delegated lifetime discipline as " &
-    "`InternalAsyncCallback.context` (guardrail 2 above)."
+    "`InternalAsyncCallback.context` (guardrail above)."
 
   # CallbackFunc closure proc (2 words) + context: ContextNodeBase (1) = 3.
   doAssert sizeof(InternalCancelCallback) == sizeof(pointer) * 3,
     "InternalCancelCallback expected to be 3 pointer-sized fields " &
     "(function: 2-word closure proc, context: ref); " &
     "actual size = " & $sizeof(InternalCancelCallback)
-
-# --- Guardrail 7: the introspection registry is not externally mutable ------
-#
-# `.name`/`.render` are public (the declaring module's macro-generated
-# code constructs entries), but `.registered`/`.next` must stay private
-# to contextvars_impl.nim — a reachable `.next` would let code splice
-# or unlink registry nodes, corrupting dumpContext's walk.
-#
-# Starred, not bare: only a starred arm emits a registration node at
-# all (non-starred arms are never registered — see "Guardrail 8" and
-# docs/src/contextvars.md, "Inspecting contexts").
-
-contextVar:
-  var registryProbe*: int = 0
-
-static:
-  doAssert compiles(registryProbeContextVarReg.name),
-    "control: this module declared the arm, so its registration " &
-    "node's public `name` field must be readable here — otherwise " &
-    "the probe below is vacuous"
-  doAssert not compiles(registryProbeContextVarReg.registered),
-    "ContextVarRegistration.registered must not be readable outside " &
-    "contextvars_impl.nim."
-  doAssert not compiles(registryProbeContextVarReg.next),
-    "ContextVarRegistration.next must not be readable outside " &
-    "contextvars_impl.nim — a reachable link primitive would reopen " &
-    "the cycle/unlink attack the registry's append-only design closes."
-  doAssert not compiles((registryProbeContextVarReg.next = nil)),
-    "ContextVarRegistration.next must not be writable outside " &
-    "contextvars_impl.nim either."
-
-# --- Guardrail 8: withX collision is a compile error, named -----------------
-#
-# An arm's generated `withName` must not silently shadow/collide with
-# an already-declared symbol of the same name — chronos's own
-# `withTimeout` is the canonical case. Also covers a same-module
-# duplicate arm, which resolves the exact same way (the second arm's
-# `withName` is already declared by the first by the time its own
-# check runs).
-
-static:
-  doAssert not compiles((block:
-    contextVar:
-      var timeout*: int = 0)),
-    "an arm named `timeout` must fail to compile — it collides with " &
-    "chronos's own `withTimeout` combinator. See docs/src/contextvars.md, " &
-    "'Naming caution'."
-
-contextVar:
-  var guardrailDupArm: int = 1
-
-static:
-  doAssert not compiles((block:
-    contextVar:
-      var guardrailDupArm: int = 2)),
-    "a same-module duplicate arm must fail to compile with the same " &
-    "collision error — the second declaration's `withGuardrailDupArm` " &
-    "is already declared by the first."
 
 # --- A trivial runtime assertion to keep the test file unittest-recognized ---
 

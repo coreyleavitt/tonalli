@@ -13,7 +13,7 @@
 import unittest2
 import ../chronos
 import ../chronos/config
-import ../chronos/internal/contextkeys
+import ../chronos/contextvars
 
 when not defined(windows):
   import std/posix

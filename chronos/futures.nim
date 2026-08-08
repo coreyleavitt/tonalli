@@ -157,7 +157,7 @@ func context*(acb: InternalCancelCallback): ContextNodeBase {.inline.} =
 # import `contextnode.nim` directly; `asyncengine.nim` reaches it only
 # by inference, so `currentAsyncContext`, the constructors below, and
 # `withRestoredContext`/`pinContext` all live here rather than in
-# `chronos/internal/contextvars_impl.nim`.
+# `chronos/contextvars.nim`.
 
 var currentAsyncContext* {.threadvar.}: ContextNodeBase
   ## Per-thread head of the binding chain. Chronos is single-thread-

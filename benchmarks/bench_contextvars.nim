@@ -41,7 +41,7 @@
 import std/[algorithm, monotimes, strformat]
 
 import chronos
-import chronos/internal/contextkeys
+import chronos/contextvars
 
 {.used.}
 

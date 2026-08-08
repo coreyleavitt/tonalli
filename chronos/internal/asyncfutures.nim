@@ -405,7 +405,7 @@ proc futureContinue*(fut: FutureBase) {.raises: [], gcsafe.} =
   # Every call to an `{.async.}` proc is redirected to call this function
   # instead with its original body captured in `fut.closure`.
 
-  # A suspend inside a `withName` binder is a plain `return`, not an
+  # A suspend inside a `withValue` binder is a plain `return`, not an
   # unwind, so the binder's `finally` doesn't run - `pinContext`
   # unconditionally saves/restores `currentAsyncContext` here on every
   # entry and resume; there is no safe fast path to skip it.
@@ -425,7 +425,7 @@ proc futureContinue*(fut: FutureBase) {.raises: [], gcsafe.} =
         if not next.finished():
           # We cannot make progress on `fut` until `next` has finished - schedule
           # `fut` to continue running when that happens. `addCallback` captures
-          # the iterator's current context (set by any enclosing `withName`),
+          # the iterator's current context (set by any enclosing `withValue`),
           # so on resume the continuation sees the right bindings.
           scheduleContinuation(fut, next)
 

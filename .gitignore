@@ -2,7 +2,6 @@ nimcache/
 *.exe
 # compiled test binaries (extensionless on Linux/macOS)
 tests/testcontextvars*
-tests/testcontextkeys*
 !tests/*.nim
 nimble.develop
 nimble.paths
