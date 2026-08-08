@@ -18,7 +18,7 @@ import
 
 import
   ./[testcontextvars, testcontextvarsasync, testcontextvarsguardrails,
-     testcontextvarssurface, testcontextvarsexport]
+     testcontextvarssurface, testcontextvarsexport, testcontextkeys]
 
 when (chronosEventEngine in ["epoll", "kqueue"]) or defined(windows):
   # `poll` engine does not support signals and processes.
