@@ -16,13 +16,21 @@
 ##   thread and must not run after the lock is engaged, since the lock
 ##   makes every construction in the process assert, including its own
 ##   control construction on the main thread.
+## - tests/testcontextvarsrecorderdeath.nim's full scenario needs a
+##   process where no key has been constructed yet, so its worker thread
+##   is the one that records; it must run before the lock is engaged for
+##   the same reason as the cross-thread suite, and after the
+##   leak-guard/cross-thread suites so their main-thread construction
+##   has already claimed the recorder in this mode, exercising its
+##   degraded branch instead — which orchestrate mode's per-suite
+##   process avoids, giving it the full scenario there.
 ## - tests/testcontextvarslock.nim's chronosDebug construction lock is
 ##   one-way for the process's lifetime: once engaged, every later
 ##   `newContextVar`/`newRequiredContextVar` call in the process asserts.
 ##
 ## Three invocation modes, selected by argv:
 ##
-## - No arguments: all three suites run in one process, in the import
+## - No arguments: all four suites run in one process, in the import
 ##   order below (dev convenience). Import order is load-bearing only in
 ##   this mode.
 ## - `orchestrate`: this process becomes a parent that spawns itself once
@@ -39,6 +47,7 @@
 import std/[os, osproc]
 import ./testcontextvarsleakguard
 import ./testcontextvarscrossthread
+import ./testcontextvarsrecorderdeath
 import ./testcontextvarslock
 
 const orchestrateArg = "orchestrate"
@@ -47,6 +56,7 @@ if paramCount() >= 1 and paramStr(1) == orchestrateArg:
   let suiteNames = [
     contextVarsLeakGuardSuiteName,
     contextVarsCrossThreadSuiteName,
+    contextVarsRecorderDeathSuiteName,
     contextVarsLockSuiteName,
   ]
   var allOk = true

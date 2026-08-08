@@ -54,7 +54,26 @@ import ../chronos
 
 {.used.}
 
-let leakGuardVar {.contextVar.} = 0
+var leakGuardVarKey: ContextVar[int]
+var leakGuardVarConstructed = false
+
+proc leakGuardVar(): ContextVar[int] {.gcsafe.} =
+  ## Constructed on first call rather than via a top-level
+  ## `{.contextVar.}` `let`: this suite is linked into the same binary
+  ## as tests/testcontextvarsrecorderdeath.nim (see
+  ## tests/testcontextvarsstandalone.nim), and a top-level construction
+  ## runs during module init, before unittest2 filters which suite's
+  ## tests actually execute — claiming the process-global recorder slot
+  ## in every child the orchestrate driver spawns, including
+  ## recorderdeath's, and leaving it no process in which to observe an
+  ## unclaimed slot. Deferring construction into the first test that
+  ## needs it keeps this suite's own tests unaffected while leaving the
+  ## slot free in any process where none of its tests are selected.
+  {.cast(gcsafe).}:
+    if not leakGuardVarConstructed:
+      leakGuardVarKey = newContextVar("leakGuardVar", 0, private = true)
+      leakGuardVarConstructed = true
+    leakGuardVarKey
 
 const contextVarsLeakGuardSuiteName* =
   "contextvars: chronosDebug context-corruption detection net"
@@ -65,8 +84,8 @@ suite contextVarsLeakGuardSuiteName:
     when defined(chronosDebug):
       var ran = false
       proc goodCb(udata: pointer) {.gcsafe, raises: [].} =
-        leakGuardVar.withValue(1):
-          discard leakGuardVar.value
+        leakGuardVar().withValue(1):
+          discard leakGuardVar().value
         ran = true
 
       callSoon(goodCb, nil)
@@ -107,7 +126,7 @@ suite contextVarsLeakGuardSuiteName:
         currentAsyncContext = ContextNodeBase()
         ran = true
 
-      leakGuardVar.withValue(2):
+      leakGuardVar().withValue(2):
         # Scheduled inside withValue so capturingCallback embeds a real,
         # non-nil chain - the restore arm only runs when the captured
         # context differs from the ambient ready to receive it.

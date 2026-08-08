@@ -64,11 +64,13 @@ suite contextVarsCrossThreadSuiteName:
     let k = newContextVar("afterCrossThreadAttempt", 2)
     check k.value == 2
 
-  test "two sequential child threads each trip the guard, immune to OS thread-id recycling":
-    # Under OS-TID identity, thread B could pass the guard whenever the
-    # OS hands it thread A's just-recycled id — this test pins that a
-    # second, later child thread is caught just as reliably as the
-    # first, which a TID-based identity cannot guarantee.
+  test "two sequential child threads each trip the guard, not only the first":
+    # Pins that the guard keeps firing for every later violating thread,
+    # not just the one that happens to run first — both threads here are
+    # seeded against the same main-thread recorder from above, so this
+    # is repeated-firing coverage, not a pin on recorder identity itself
+    # (see tests/testcontextvarsrecorderdeath.nim for the recycled-OS-id
+    # hazard, which needs a dead recording thread to exercise).
     discard newContextVar("sequentialThreadsMainSeed", 0)
 
     proc constructOnChildThread(firedAddr: ptr bool) {.thread, nimcall.} =

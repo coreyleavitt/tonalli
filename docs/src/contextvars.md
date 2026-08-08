@@ -799,12 +799,14 @@ pins is part of adding a scheduling site.
 Tests live under `tests/testcontextvars*.nim`: construction and the
 registry, ambient and `withValue` semantics, async propagation across the
 dispatcher's scheduling sites, cross-module export rules, and the
-compile-time and runtime drift guardrails above. Three of them — the
-leak-guard, cross-thread-construction, and construction-lock suites — run
-from a standalone driver (`tests/testcontextvarsstandalone.nim`) instead
-of `tests/testall.nim`: the construction lock is a one-way switch that
-stays engaged for the rest of the process once set, and the leak-guard
-test deliberately lets a Defect escape `poll` to prove the corruption
-check fires, so neither can safely share a process with a suite that
-constructs keys at runtime — the driver runs each suite in its own
-subprocess.
+compile-time and runtime drift guardrails above. Four of them — the
+leak-guard, cross-thread-construction, dead-recording-thread, and
+construction-lock suites — run from a standalone driver
+(`tests/testcontextvarsstandalone.nim`) instead of `tests/testall.nim`:
+the construction lock is a one-way switch that stays engaged for the
+rest of the process once set, the leak-guard test deliberately lets a
+Defect escape `poll` to prove the corruption check fires, and the
+dead-recording-thread suite needs a process where no key has been
+constructed yet to exercise its full scenario, so none of them can
+safely share a process with a suite that constructs keys at runtime —
+the driver runs each suite in its own subprocess.
