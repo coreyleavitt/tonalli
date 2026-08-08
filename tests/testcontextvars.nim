@@ -155,7 +155,7 @@ suite "contextvars (raw key): key construction and registry":
     check not dumpContext(currentContext()).anyIt(it.name == "t2Key")
 
   test "must-bind arity has hasDefault false":
-    let k = newContextVar[int]("t3Key")
+    let k = newRequiredContextVar[int]("t3Key")
     check k.hasDefault == false
 
   test "dumpContext renders defaults and bound values across T shapes":
@@ -181,6 +181,34 @@ suite "contextvars (raw key): key construction and registry":
     let k1 = newContextVar("t5Key", 1)
     let k2 = newContextVar("t5Key", 1)
     check k1 != k2
+
+# --- Overload resolution: a bool default/second positional arg (r4-01) ------
+# `newContextVar(name, default: T, private = true)` takes `private` as
+# its third parameter, not its second — a bool-typed default must
+# resolve there cleanly. `newRequiredContextVar` is a distinct name
+# from `newContextVar` precisely so a call like this can never collide
+# with the must-bind constructor's own `private: bool` parameter.
+
+suite "contextvars (raw key): bool-typed default resolves to the right constructor":
+
+  test "newContextVar(name, false) compiles and yields a working bool var":
+    let k = newContextVar("t5aBoolKey", false)
+    check k.hasDefault == true
+    check k.value == false
+    k.withValue(true):
+      check k.value == true
+    check k.value == false
+
+  test "newRequiredContextVar[bool] works with in/isBound and raises when unbound":
+    let k = newRequiredContextVar[bool]("t5bRequiredBool")
+    check k notin currentContext()
+    check not k.isBound
+    expect UnboundContextVarDefect:
+      discard k.value
+    k.withValue(true):
+      check k in currentContext()
+      check k.isBound
+      check k.value == true
 
 # --- Keys as values: generic parameters, seq, Table --------------------------
 # Capabilities an identifier-family design structurally could not offer,
@@ -515,7 +543,7 @@ suite "contextvars: must-bind (default-less) keys":
 suite "contextvars (raw key): must-bind Defect parity":
 
   test "unbound must-bind .value raises UnboundContextVarDefect with varName":
-    let k = newContextVar[int]("t18Key")
+    let k = newRequiredContextVar[int]("t18Key")
     try:
       discard k.value
       check false
@@ -523,7 +551,7 @@ suite "contextvars (raw key): must-bind Defect parity":
       check e.varName == "t18Key"
 
   test "unbound must-bind ctx[cv] raises UnboundContextVarDefect, same fields":
-    let k = newContextVar[int]("t19Key")
+    let k = newRequiredContextVar[int]("t19Key")
     let snap = currentContext()
     try:
       discard snap[k]
@@ -532,7 +560,7 @@ suite "contextvars (raw key): must-bind Defect parity":
       check e.varName == "t19Key"
 
   test "bound must-bind read returns the value on both paths, no raise":
-    let k = newContextVar[int]("t20Key")
+    let k = newRequiredContextVar[int]("t20Key")
     k.withValue(5):
       check k.value == 5
       check currentContext()[k] == 5
@@ -558,12 +586,12 @@ suite "contextvars (raw key): contains / isBound":
       check not b.isBound
 
   test "must-bind key unbound: false, does not raise":
-    let k = newContextVar[int]("t31MustBind")
+    let k = newRequiredContextVar[int]("t31MustBind")
     check k notin currentContext()
     check not k.isBound
 
   test "must-bind key bound: true":
-    let k = newContextVar[int]("t31MustBindBound")
+    let k = newRequiredContextVar[int]("t31MustBindBound")
     k.withValue(5):
       check k in currentContext()
       check k.isBound
@@ -696,7 +724,7 @@ suite "contextvars (raw key): dumpContext and $":
 
   test "dumpContext on empty context: defaulted, must-bind, private semantics":
     let defaultedKey = newContextVar("t22Defaulted", 5, private = false)
-    let mustBindKey = newContextVar[int]("t22MustBind", private = false)
+    let mustBindKey = newRequiredContextVar[int]("t22MustBind", private = false)
     discard newContextVar("t22Private", 9, private = true)
 
     let entries = dumpContext(currentContext())

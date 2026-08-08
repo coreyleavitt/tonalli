@@ -31,8 +31,8 @@
 ## ## Public API
 ##
 ## - `ContextVar[T]` / `newContextVar[T](name, default, private = true)`
-##   / `newContextVar[T](name, private = true)` (must-bind) — the key
-##   type and its raw constructors.
+##   / `newRequiredContextVar[T](name, private = true)` (must-bind) —
+##   the key type and its raw constructors.
 ## - `{.contextVar.}` — declaration pragma: `let name* {.contextVar.} =
 ##   default` derives the key's name and `dumpContext` privacy from the
 ##   declaration site itself. See docs/src/contextvars.md, "The
@@ -193,16 +193,17 @@ when defined(chronosDebug):
     ## no lock is paid on any path in a release build.
 
   proc lockContextVarConstruction*() {.inline.} =
-    ## Engage the construction guard. Any `newContextVar` call after
-    ## this point asserts. One-way for the process's lifetime — there
-    ## is no matching unlock, mirroring the real thread-creation event
-    ## it stands in for.
+    ## Engage the construction guard. Any `newContextVar`/
+    ## `newRequiredContextVar` call after this point asserts. One-way
+    ## for the process's lifetime — there is no matching unlock,
+    ## mirroring the real thread-creation event it stands in for.
     contextVarConstructionLocked = true
 
   proc checkContextVarConstructionAllowed() {.inline.} =
     doAssert not contextVarConstructionLocked,
-      "newContextVar called after lockContextVarConstruction() — keys " &
-      "must be constructed before any thread creation"
+      "newContextVar/newRequiredContextVar called after " &
+      "lockContextVarConstruction() — keys must be constructed before " &
+      "any thread creation"
 
 proc registerVar(base: ContextVarBase) =
   base.nextRegistered = registryHead
@@ -213,17 +214,19 @@ proc newContextVar*[T](name: string, default: T, private = true): ContextVar[T] 
   ## `private` — see "Registry and key lifetime" in
   ## docs/src/contextvars.md for why registration is now the key's only
   ## lifetime guarantee. `private` governs `dumpContext` visibility only,
-  ## and defaults to `true` — see "Privacy and the raw constructor".
+  ## and defaults to `true` — see "Privacy and the raw constructors".
   when defined(chronosDebug): checkContextVarConstructionAllowed()
   result = ContextVar[T](name: name, hasDefault: true, private: private,
                           default: default)
   result.render = renderGeneric[T]
   registerVar(result)
 
-proc newContextVar*[T](name: string, private = true): ContextVar[T] =
-  ## Must-bind arm constructor — no default supplied. Same unconditional
-  ## registration and `private` default as the defaulted-arm overload
-  ## above.
+proc newRequiredContextVar*[T](name: string, private = true): ContextVar[T] =
+  ## Must-bind constructor — no default supplied. See
+  ## docs/src/contextvars.md, "Required variables". Same unconditional
+  ## registration and `private` default as `newContextVar` above; a
+  ## distinct name rather than a second overload of `newContextVar` —
+  ## see docs/src/contextvars.md, "The raw constructors".
   when defined(chronosDebug): checkContextVarConstructionAllowed()
   result = ContextVar[T](name: name, hasDefault: false, private: private)
   result.render = renderGeneric[T]
@@ -449,12 +452,12 @@ macro contextVar*(def: untyped): untyped =
   ## `let name* {.contextVar.} = default` (T inferred), `let name*
   ## {.contextVar.}: T = default` (explicit T), or `var name*
   ## {.contextVar.}: T` (must-bind) — expands to exactly one symbol,
-  ## `let name* = newContextVar(...)`. See docs/src/contextvars.md,
-  ## "The `{.contextVar.}` pragma". The `let`/`var` choice is enforced
-  ## here, not just documented: a defaulted key must be a `let`, a
-  ## must-bind key must be a `var` — the same arity split
-  ## `newContextVar`'s two overloads make at the call site, moved to the
-  ## declaration site.
+  ## `let name* = newContextVar(...)` or `newRequiredContextVar(...)`.
+  ## See docs/src/contextvars.md, "The `{.contextVar.}` pragma". The
+  ## `let`/`var` choice is enforced here, not just documented: a
+  ## defaulted key must be a `let`, a must-bind key must be a `var` —
+  ## the same split between `newContextVar` and `newRequiredContextVar`
+  ## the call site makes, moved to the declaration site.
   if def.kind notin {nnkLetSection, nnkVarSection}:
     error("contextVar must annotate a `let` or `var` statement", def)
   if def.len != 1:
@@ -483,7 +486,7 @@ macro contextVar*(def: untyped): untyped =
 
   let ctorCall =
     if value.kind == nnkEmpty:
-      quote do: newContextVar[`typAnnotation`](`nameStr`, private = `private`)
+      quote do: newRequiredContextVar[`typAnnotation`](`nameStr`, private = `private`)
     elif typAnnotation.kind != nnkEmpty:
       quote do: newContextVar[`typAnnotation`](`nameStr`, `value`, private = `private`)
     else:

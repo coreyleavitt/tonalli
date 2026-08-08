@@ -28,6 +28,8 @@ import ../chronos/contextvars
 static:
   doAssert declared(ContextVar),       "ContextVar[T] type must be public"
   doAssert declared(newContextVar),    "newContextVar must be public"
+  doAssert declared(newRequiredContextVar),
+    "newRequiredContextVar (the must-bind constructor) must be public"
   doAssert declared(contextVar),       "the {.contextVar.} pragma macro must be public"
   doAssert declared(AsyncContext),     "AsyncContext type must be public"
   doAssert declared(currentContext),   "currentContext proc must be public"
@@ -46,9 +48,9 @@ let surfaceProbeKey = newContextVar("surfaceProbeKey", 0)
 static:
   doAssert compiles(newContextVar("x", 0)),
     "newContextVar[T](name, default, private = false) must be public and callable"
-  doAssert compiles(newContextVar[int]("x")),
-    "the must-bind arity newContextVar[T](name, private = false) must " &
-    "be public and callable"
+  doAssert compiles(newRequiredContextVar[int]("x")),
+    "newRequiredContextVar[T](name, private = false) must be public " &
+    "and callable"
   doAssert compiles(surfaceProbeKey.value),
     "ContextVar[T].value must be public and callable"
   doAssert compiles(currentContext()[surfaceProbeKey]),

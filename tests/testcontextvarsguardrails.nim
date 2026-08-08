@@ -207,7 +207,7 @@ suite "contextvars guardrails: g7 name-string drift":
     check entries.len == 1
 
   test "raw-constructor name surfaces verbatim in UnboundContextVarDefect.varName":
-    let k = newContextVar[int]("rawNamed")
+    let k = newRequiredContextVar[int]("rawNamed")
     try:
       discard k.value
       check false

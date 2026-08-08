@@ -79,9 +79,9 @@ var traceId* {.contextVar.}: string             # must-bind: no default
 ```
 
 All four forms expand to exactly one symbol — a `let`/`var` binding a
-`newContextVar` call — never a second, derived identifier. `x*: T
-{.contextVar.}` (pragma after the type) is not accepted; `x* {.contextVar.}: T`
-is the only order the grammar admits.
+`newContextVar`/`newRequiredContextVar` call — never a second, derived
+identifier. `x*: T {.contextVar.}` (pragma after the type) is not
+accepted; `x* {.contextVar.}: T` is the only order the grammar admits.
 
 The `let`/`var` choice above is not just convention — the macro rejects
 the wrong one at compile time: a defaulted key (has `= default`) must be
@@ -93,44 +93,46 @@ than silently accepting a keyword that doesn't match the key's arity.
 The star controls two things at once, both derived from the same marker:
 whether the symbol itself is exported (ordinary Nim visibility), and
 whether the key registers with `dumpContext` (star -> `private = false`,
-no star -> `private = true` — see "Privacy and the raw constructor"
+no star -> `private = true` — see "Privacy and the raw constructors"
 below). Explicit `[T]` is needed only when the default is a polymorphic
 literal (`nil`) or absent entirely (must-bind); `let requestId*
 {.contextVar.} = ""` and `var traceId* {.contextVar.}: string` both settle
 `T` without it.
 
-**The raw constructor.** The pragma is sugar over a public, documented
-primitive:
+**The raw constructors.** The pragma is sugar over two public, documented
+primitives — a distinct name per arity, not two overloads of one name,
+because a bool-typed default would otherwise collide with the must-bind
+constructor's own `private: bool` parameter during overload resolution:
 
 ```nim
 proc newContextVar*[T](name: string, default: T, private = true): ContextVar[T]
-proc newContextVar*[T](name: string, private = true): ContextVar[T]
+proc newRequiredContextVar*[T](name: string, private = true): ContextVar[T]
 ```
 
-Call it directly when a key's name needs to be computed, when a key
+Call one directly when a key's name needs to be computed, when a key
 belongs to a runtime-indexed family the pragma can't mint (one
 declaration, one symbol — see "Keys as values" below), or when composing
-another macro around key declarations. It carries its name as an explicit
-string, rather than one the compiler infers from the identifier — the
-same DRY wart PEP 567's `ContextVar("name")` carries at every raw call
+another macro around key declarations. Each carries its name as an
+explicit string, rather than one the compiler infers from the identifier —
+the same DRY wart PEP 567's `ContextVar("name")` carries at every raw call
 site. `cv.name`, `cv.hasDefault`, and `cv.private` are read-only accessor
 procs over the same three values on any `ContextVarBase`, sugar-declared
-or raw-constructed alike.
+or raw-constructed alike, regardless of which constructor built it.
 
-**Privacy and the raw constructor.** `{.contextVar.}` keeps a key's name
+**Privacy and the raw constructors.** `{.contextVar.}` keeps a key's name
 and privacy in lockstep with the declaration's own export marker, so they
-can never drift apart. The raw constructor cannot offer that guarantee —
-its `private` parameter is an ordinary value argument, entirely decoupled
-from the enclosing `let`'s own `*`. This decoupling is deliberate, not an
-oversight, and it has real consequences in both directions: a non-exported
-`let` constructed with `newContextVar(..., private = false)` (passed
-explicitly) still appears in *other* modules' `dumpContext`/`$ctx` output,
-even though nothing outside its own module can read or bind it — and,
-symmetrically, an exported key constructed with `private = true` is
+can never drift apart. The raw constructors cannot offer that guarantee —
+their `private` parameter is an ordinary value argument, entirely decoupled
+from the enclosing `let`/`var`'s own `*`. This decoupling is deliberate, not
+an oversight, and it has real consequences in both directions: a
+non-exported `let` constructed with `newContextVar(..., private = false)`
+(passed explicitly) still appears in *other* modules' `dumpContext`/`$ctx`
+output, even though nothing outside its own module can read or bind it —
+and, symmetrically, an exported key constructed with `private = true` is
 reachable but invisible to introspection. Neither case is a bug; both are
 pinned, negative-tested behavior.
 
-The raw constructor's `private` **defaults to `true`** — mirroring the
+Both raw constructors' `private` **defaults to `true`** — mirroring the
 `{.contextVar.}` pragma's own no-star-means-private mapping and Nim's own
 private-unless-starred convention, and, more importantly, fail-safe in
 the direction that matters: a key missing from a debug dump is
@@ -177,8 +179,8 @@ doesn't yet have a caller for.
 
 ## Required variables
 
-A key may omit its default entirely, using the arity-1 constructor
-overload (or the pragma's must-bind form, `var name* {.contextVar.}: T`):
+A key may omit its default entirely, using `newRequiredContextVar[T]`
+(or the pragma's must-bind form, `var name* {.contextVar.}: T`):
 
 ```nim
 var traceId* {.contextVar.}: string    # must-bind: no default
@@ -407,8 +409,8 @@ A private key (declared without a star, or raw-constructed with `private
 enumeration time, so private means private to introspection too, not
 just to reads and binds. (The key still registers, like every key — see
 "Registry and key lifetime" below; `private` governs this filter, not
-whether the key stays alive.) See "Privacy and the raw constructor"
-above for the raw constructor's export-decoupling caveat.
+whether the key stays alive.) See "Privacy and the raw constructors"
+above for the raw constructors' export-decoupling caveat.
 
 Every registered key appears exactly once, bound or not. This is a
 deliberate choice: the alternative — showing only the keys that happen to
@@ -519,17 +521,18 @@ later key reusing the freed address would compare pointer-equal to the
 stale `node.key` and read back the wrong value. `private` now governs
 only `dumpContext`'s enumeration filter, never a key's lifetime.
 
-`newContextVar` is supported only *before* any `createThread` call — the
-same write-once-then-read-only discipline the registry already needs, now
-a documented convention rather than something the compiler enforces
-structurally. chronos does not wrap or intercept thread creation, so
-nothing flips this automatically: under a `chronosDebug` build,
-`lockContextVarConstruction()` is an opt-in debug hook that engages the
-guard by hand, and every `newContextVar` call after that point asserts.
-Call it yourself at your program's own construction/thread-creation
-boundary to get the check; the test suite is its only caller today. No
-lock is paid on any path in a release build, and no check runs at all
-outside `chronosDebug`.
+`newContextVar`/`newRequiredContextVar` are supported only *before* any
+`createThread` call — the same write-once-then-read-only discipline the
+registry already needs, now a documented convention rather than
+something the compiler enforces structurally. chronos does not wrap or
+intercept thread creation, so nothing flips this automatically: under a
+`chronosDebug` build, `lockContextVarConstruction()` is an opt-in debug
+hook that engages the guard by hand, and every `newContextVar`/
+`newRequiredContextVar` call after that point asserts. Call it yourself
+at your program's own construction/thread-creation boundary to get the
+check; the test suite is its only caller today. No lock is paid on any
+path in a release build, and no check runs at all outside
+`chronosDebug`.
 
 Duplicate name strings are representable — two independently-constructed
 keys can share a `name`, matching PEP 567 — and accepted as
@@ -539,10 +542,10 @@ never alias — binding one is never observable through the other,
 regardless of whether they share a name.
 
 The render hook (feeding `dumpContext`/`` `$` ``) is instantiated once per
-`T`, inside `newContextVar[T]`, and stored on `ContextVarBase` as a
-`{.nimcall.}` pointer — the same `when T is ref` nil-guard and `when
-compiles($v)` fallback ladder as before, generic code degraded to a plain
-proc pointer so a non-generic base field can hold it.
+`T`, inside whichever raw constructor built the key, and stored on
+`ContextVarBase` as a `{.nimcall.}` pointer — the same `when T is ref`
+nil-guard and `when compiles($v)` fallback ladder as before, generic code
+degraded to a plain proc pointer so a non-generic base field can hold it.
 
 ## Capture discipline
 
@@ -666,9 +669,9 @@ deliberately diverges from those precedents:
   mutate-and-restore covers chronos's callback-boundary cases (see
   "Bridging independent callbacks").
 - **Kotlin** couples a key and its value type through a companion object
-  declared on the value type. chronos keeps an independent factory
-  (`newContextVar[T]`) instead — Nim has no companion-object idiom, and
-  the coupling wouldn't buy anything here.
+  declared on the value type. chronos keeps independent factories
+  (`newContextVar[T]`/`newRequiredContextVar[T]`) instead — Nim has no
+  companion-object idiom, and the coupling wouldn't buy anything here.
 - **JEP 446** forbids rebinding a `ScopedValue` within the same dynamic
   scope. chronos keeps arbitrary LIFO re-shadowing — `cv.withValue`
   nests freely, and the innermost binding always wins, the same as the
@@ -801,7 +804,7 @@ codebase already paid on its one field.
   collected key's stale bound value.
 - `tests/testcontextvarssurface.nim` — verifies `import chronos` plus
   `import chronos/contextvars` expose only the intended public API:
-  `ContextVar[T]`, `newContextVar` (both arities), the `contextVar`
+  `ContextVar[T]`, `newContextVar`, `newRequiredContextVar`, the `contextVar`
   pragma macro, `value`, `` `[]` ``, `withValue`, `name`, `contains`/
   `isBound`, `hash(cv: ContextVarBase)`, `AsyncContext`
   + `` `==` ``/`hash`, `currentContext`, `withContext`,
