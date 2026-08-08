@@ -38,10 +38,10 @@ declares exactly one symbol, `currentUser`, whose type is
 `ContextVar[User]`; every operation on it is a uniform, ordinary call:
 
 - `cv.value` — the innermost binding for the current logical task, or the
-  key's default when nothing is bound (see "Required variables" for the
-  no-default case).
+  key's default when nothing is bound (see [Required variables](#required-variables)
+  for the no-default case).
 - `ctx[cv]` — the same read, against a captured `AsyncContext` snapshot
-  instead of the ambient chain (see "Inspecting contexts").
+  instead of the ambient chain (see [Inspecting contexts](#inspecting-contexts)).
 - `cv.withValue(v): body` — bind `cv` to `v` for the dynamic extent of
   `body`, restoring the previous binding on every exit path (normal,
   exception, `CancelledError`).
@@ -50,9 +50,8 @@ declares exactly one symbol, `currentUser`, whose type is
 meaning: `Table.withValue(key, value)` is a conditional-if-present,
 mutate-in-place accessor, while `ContextVar[T].withValue(v)` is an
 unconditional bind. The two coexist without ambiguity because Nim
-overloads dispatch on receiver type — the same ordinary verb-sharing as
-`len`/`[]` across the standard library, including from a generic call
-site.
+overloads dispatch on receiver type, the same ordinary verb-sharing as
+`len`/`[]` across the standard library.
 
 Bindings nest (innermost wins) and propagate into tasks spawned within the
 binder's extent. Two additional primitives, `currentContext()` and
@@ -93,20 +92,22 @@ than silently accepting a keyword that doesn't match the key's arity.
 The star controls two things at once, both derived from the same marker:
 whether the symbol itself is exported (ordinary Nim visibility), and
 whether the key registers with `dumpContext` (star -> `private = false`,
-no star -> `private = true` — see "Privacy and the raw constructors"
+no star -> `private = true` — see [Privacy and the raw constructors](#privacy-and-the-raw-constructors)
 below). Explicit `[T]` is needed only when the default is a polymorphic
 literal (`nil`) or absent entirely (must-bind); `let requestId*
 {.contextVar.} = ""` and `var traceId* {.contextVar.}: string` both settle
 `T` without it.
 
-**Overriding dump-visibility.** The star-derived default covers the
-common case, but export and dump-visibility are two different axes, and
-occasionally a declaration genuinely needs them to disagree — an
-exported key whose value is still too sensitive for a debug dump, or an
-unexported key a maintainer wants surfaced in `dumpContext` for local
-debugging without changing its export marker. `{.contextVar: (private:
-true|false).}` breaks the derivation for that one declaration, leaving
-every other declaration's default unaffected:
+### Overriding dump-visibility
+
+The star-derived default covers the common case, but export and
+dump-visibility are two different axes, and occasionally a declaration
+genuinely needs them to disagree — an exported key whose value is still
+too sensitive for a debug dump, or an unexported key a maintainer wants
+surfaced in `dumpContext` for local debugging without changing its export
+marker. `{.contextVar: (private: true|false).}` breaks the derivation for
+that one declaration, leaving every other declaration's default
+unaffected:
 
 ```nim
 let requestId* {.contextVar: (private: true).} = ""     # exported, still dump-private
@@ -119,13 +120,14 @@ ever changes which `private` value reaches the underlying constructor
 call. Omitting the argument (plain `{.contextVar.}`) keeps the
 star-derived default; reach for the override only when a declaration's
 export marker and its intended dump-visibility genuinely need to differ,
-not as a habit — an override that always agrees with the star is just
-the default spelled out.
+not as a habit.
 
-**The raw constructors.** The pragma is sugar over two public, documented
-primitives — a distinct name per arity, not two overloads of one name,
-because a bool-typed default would otherwise collide with the must-bind
-constructor's own `private: bool` parameter during overload resolution:
+### The raw constructors
+
+The pragma is sugar over two public, documented primitives — a distinct
+name per arity, not two overloads of one name, because a bool-typed
+default would otherwise collide with the must-bind constructor's own
+`private: bool` parameter during overload resolution:
 
 ```nim
 proc newContextVar*[T](name: string, default: T, private = true): ContextVar[T]
@@ -134,37 +136,36 @@ proc newRequiredContextVar*[T](name: string, private = true): ContextVar[T]
 
 Call one directly when a key's name needs to be computed, when a key
 belongs to a runtime-indexed family the pragma can't mint (one
-declaration, one symbol — see "Keys as values" below), or when composing
-another macro around key declarations. Each carries its name as an
-explicit string, rather than one the compiler infers from the identifier —
-the same DRY wart PEP 567's `ContextVar("name")` carries at every raw call
-site. `cv.name`, `cv.hasDefault`, and `cv.private` are read-only accessor
-procs over the same three values on any `ContextVarBase`, sugar-declared
-or raw-constructed alike, regardless of which constructor built it.
+declaration, one symbol — see [Keys as values](#keys-as-values) below), or
+when composing another macro around key declarations. Each carries its
+name as an explicit string, rather than one the compiler infers from the
+identifier — the same DRY wart PEP 567's `ContextVar("name")` carries at
+every raw call site. `cv.name`, `cv.hasDefault`, and `cv.private` are
+read-only accessor procs over the same three values on any
+`ContextVarBase`, sugar-declared or raw-constructed alike.
 
-**Privacy and the raw constructors.** `{.contextVar.}` keeps a key's name
-and privacy in lockstep with the declaration's own export marker, so they
-can never drift apart. The raw constructors cannot offer that guarantee —
-their `private` parameter is an ordinary value argument, entirely decoupled
-from the enclosing `let`/`var`'s own `*`. This decoupling is deliberate, not
-an oversight, and it has real consequences in both directions: a
+### Privacy and the raw constructors
+
+`{.contextVar.}` keeps a key's name and privacy in lockstep with the
+declaration's own export marker, so they can never drift apart. The raw
+constructors cannot offer that guarantee — their `private` parameter is an
+ordinary value argument, entirely decoupled from the enclosing
+`let`/`var`'s own `*`. This decoupling is deliberate, not an oversight: a
 non-exported `let` constructed with `newContextVar(..., private = false)`
-(passed explicitly) still appears in *other* modules' `dumpContext`/`$ctx`
-output, even though nothing outside its own module can read or bind it —
-and, symmetrically, an exported key constructed with `private = true` is
-reachable but invisible to introspection. Neither case is a bug; both are
-pinned, negative-tested behavior.
+still appears in *other* modules' `dumpContext`/`$ctx` output, even though
+nothing outside its own module can read or bind it — and, symmetrically,
+an exported key constructed with `private = true` is reachable but
+invisible to introspection. Neither case is a bug; both are pinned,
+negative-tested behavior.
 
 Both raw constructors' `private` **defaults to `true`** — mirroring the
-`{.contextVar.}` pragma's own no-star-means-private mapping and Nim's own
-private-unless-starred convention, and, more importantly, fail-safe in
-the direction that matters: a key missing from a debug dump is
+`{.contextVar.}` pragma's own no-star-means-private mapping, and fail-safe
+in the direction that matters: a key missing from a debug dump is
 discoverable (grep the constructor call, add `private = false`), while a
 sensitive value that leaked into a dump because a call site forgot the
 argument is not. Pass `private = false` explicitly to register a
 raw-constructed key for `dumpContext`, or prefer the pragma, whose star
-marker sets this automatically and can't be forgotten independently of
-export.
+marker sets this automatically.
 
 ## Semantics notes
 
@@ -197,8 +198,7 @@ Treat a `ref`-typed default as an immutable shared singleton. If a key
 genuinely needs a fresh instance per unbound read, bind it explicitly with
 `withValue` at the point of use instead of relying on the default; a lazy
 `proc(): T` factory default is not offered — nothing in chronos needs one
-today, and it would double the constructor surface for a case the library
-doesn't yet have a caller for.
+today.
 
 ## Required variables
 
@@ -211,10 +211,10 @@ var traceId* {.contextVar.}: string    # must-bind: no default
 
 This declares a *must-bind* key — the analog of PEP 567's default-less
 `ContextVar`. Reading `traceId.value` (or `ctx[traceId]`) while no
-`withValue` binder is in scope raises `UnboundContextVarDefect` —
-structurally, on both paths, since `.value` is `currentContext()[cv]`
-under the hood (see "Implementation"). The Defect's `varName: string`
-field names the unbound key (`"traceId"` here):
+`withValue` binder is in scope raises `UnboundContextVarDefect` on both
+paths — see [Implementation](#implementation) for why they're the same
+read under the hood. The Defect's `varName: string` field names the
+unbound key (`"traceId"` here):
 
 ```nim
 proc handler() {.async: (raises: []).} =
@@ -235,25 +235,24 @@ deliberate, for two reasons:
 - `Defect`s sit outside Nim's `raises` effect tracking. A must-bind read
   can therefore happen inside an `{.async: (raises: []).}` proc — the
   common case for handler code that doesn't want to widen its raises
-  list — without the compiler forcing every caller to declare or catch an
-  exception for a condition that, if it occurs at all, indicates a bug
-  rather than an expected failure mode. This deliberately diverges from
-  PEP 567, whose `ctx[var]` raises a catchable `LookupError` — see
-  "Divergences from cited precedent" below.
+  list — without forcing every caller to declare or catch it. This
+  deliberately diverges from PEP 567, whose `ctx[var]` raises a catchable
+  `LookupError` — see [Divergences from cited precedent](#divergences-from-cited-precedent) below.
 
 Everything else about a must-bind key is identical to a defaulted one: the
 binder (`withValue`), spawn-time inheritance, propagation across `await`,
 and restore-on-every-exit-path all use the exact same code path — only the
 read's behavior on a miss differs. `dumpContext` is the one exception to
-"behaves like the read" — see "Inspecting contexts" for why introspection
-never raises.
+"behaves like the read" — see [Inspecting contexts](#inspecting-contexts)
+for why introspection never raises.
 
-**Checking boundness without reading.** `cv in ctx` (`` `contains`(ctx:
-AsyncContext, cv: ContextVar[T]): bool ``) and its ambient counterpart
-`cv.isBound` answer "is this key bound here?" without raising and without
-returning a value — the non-raising complement to the Defect above, for
-callers that want to branch on boundness rather than catch a Defect or
-fall back to a default:
+### Checking boundness without reading
+
+`cv in ctx` (`` `contains`(ctx: AsyncContext, cv: ContextVar[T]): bool ``)
+and its ambient counterpart `cv.isBound` answer "is this key bound here?"
+without raising and without returning a value — the non-raising complement
+to the Defect above, for callers that want to branch on boundness rather
+than catch a Defect or fall back to a default:
 
 ```nim
 if traceId in currentContext():
@@ -261,13 +260,12 @@ if traceId in currentContext():
 ```
 
 This is identity-correct, unlike inferring boundness from `dumpContext`'s
-`bound` field: two keys can share a `name` (see "Registry and key
-lifetime"), and `dumpContext` groups its output by that name, so it
-cannot distinguish which of two same-name keys is the one actually bound.
-`in`/`isBound` test the key itself, by identity, so they answer correctly
-even in that case. Works identically for a defaulted key — `cv in ctx` is
-`false` when unbound even though `cv.value` would still return the
-default.
+`bound` field: two keys can share a `name` (see [Registry and key lifetime](#registry-and-key-lifetime)),
+and `dumpContext` groups its output by that name, so it cannot distinguish
+which of two same-name keys is the one actually bound. `in`/`isBound` test
+the key itself, by identity, so they answer correctly even in that case.
+Works identically for a defaulted key — `cv in ctx` is `false` when
+unbound even though `cv.value` would still return the default.
 
 ## Binding multiple variables
 
@@ -275,7 +273,7 @@ There is no combined "bind several at once" form — binding multiple keys
 together is ordinary nested `withValue` blocks, one per key:
 
 ```nim
-let currentUser* {.contextVar.} = anonymousUser
+let currentUser* {.contextVar.} = User(name: "anonymous")
 let requestId* {.contextVar.} = ""
 
 proc handleRequest(user: User, reqId: string) {.async.} =
@@ -290,17 +288,25 @@ with the number of keys bound at a given point, not with the number of
 keys declared in scope elsewhere. Independent keys don't interact with
 each other, so the nesting order between them is arbitrary — binding
 `requestId` inside `currentUser` or the other way around produces the same
-observable bindings either way. This is the same nested-binder convention
-the earlier identifier-family design used; only the spelling of each
-layer changed.
+observable bindings either way.
+
+## Spawn-time inheritance
+
+A task spawned inside a binder (calling an `async` proc, `asyncSpawn`, or
+registering a callback) inherits the spawner's binding chain as it existed
+at the point of spawning. Because the chain is immutable, later re-binding
+in the parent is invisible to the already-spawned child and vice versa —
+a child's nested binding never leaks back to the parent.
+
+Chain nodes own their bound value inline, so a `currentContext()` snapshot
+(or a pending callback's captured chain) remains sound after the binder
+that created it has exited.
 
 ## Keys as values
 
 A `ContextVar[T]` is an ordinary value: it can be passed as a generic proc
-parameter, stored in a `seq`/`array`, or used as a `Table` key — none of
-which an identifier-family design could offer, since there was never a
-runtime value to pass around. A generic proc over the key itself, not just
-over its value type, works for free:
+parameter, stored in a `seq`/`array`, or used as a `Table` key. A generic
+proc over the key itself, not just over its value type, works for free:
 
 ```nim
 proc readOrDefault[T](cv: ContextVar[T]): T =
@@ -322,20 +328,11 @@ chainVars[3].withValue(1):
   discard chainVars[3].value
 ```
 
-Two keys constructed with identical arguments (same name, same type, same
-default) are still distinct: ref identity IS key identity (see
-"Implementation"), so `chainVars[0] != chainVars[1]` even where their
-names happened to collide, and binding one is never observable through
-the other.
-
-## The empty context
-
-A default-initialized `AsyncContext` (`var ctx: AsyncContext`, never
-assigned from `currentContext()`) is the *empty* context — the same one
-every task starts with before any key is ever bound. Running under it via
-`withContext` installs no bindings at all: a defaulted key reads its own
-default, exactly as if no binder were ever entered, and a must-bind key
-raises `UnboundContextVarDefect`, same as an unbound ambient read.
+Two keys constructed with identical arguments — same name, same type,
+same default — are still distinct: ref identity is key identity (see
+[Implementation](#implementation)). `chainVars[0] != chainVars[1]` even
+where their names happen to collide, and binding one is never observable
+through the other.
 
 ## Bridging independent callbacks
 
@@ -350,9 +347,9 @@ scheduling time around *every* callback invocation (`fireWithContext` in
 survives into a second, separately-scheduled callback — the next callback
 observes whatever context it captured at its own registration.
 
-Skipping this pattern is fail-closed, not a leak: an exit hook that never
-captured a snapshot simply runs under whatever context was ambient at its
-own registration (typically empty), never under another task's binding.
+An exit hook that never captured a snapshot simply runs under whatever
+context was ambient at its own registration — typically empty — never
+under another task's binding.
 
 For that shape, use `currentContext()`/`withContext()` — capture a
 snapshot in the enter hook, restore it in the exit hook:
@@ -378,26 +375,35 @@ be used from `withContext` any number of times, including from multiple
 callbacks interleaved on the same dispatcher.
 
 `AsyncContext` values are thread-affine: the chain they reference is
-thread-local, garbage-collected memory (see "Migration / compatibility"
-below on cross-thread scheduling), so a snapshot captured on one thread
-must not be sent to or restored on another — "any number of times" means
-any number of callbacks on the capturing thread.
+thread-local, garbage-collected memory (see [Migration and compatibility](#migration-and-compatibility)
+on cross-thread scheduling), so a snapshot captured on one thread must not
+be sent to or restored on another — "any number of times" means any
+number of callbacks on the capturing thread.
 
-There is deliberately no imperative token API (PEP 567's
-`ContextVar.set()`/`Token.reset()` shape): within a single logical task,
-`withValue` expresses every binding lifecycle, and across independent
-callbacks a token could not work anyway — as described above, the
-dispatcher's restore-at-fire discipline unwinds any push a callback leaves
-behind. `tests/testcontextvarssurface.nim` enforces the absence of a
-token API as a compile-time check.
+chronos has no imperative token API (PEP 567's `ContextVar.set()`/
+`Token.reset()` shape): within a single logical task, `withValue`
+expresses every binding lifecycle, and across independent callbacks a
+token could not work anyway — the dispatcher's restore-at-fire discipline
+described above unwinds any push a callback leaves behind.
+`tests/testcontextvarssurface.nim` pins the absence of a token API as a
+compile-time check.
 
 ## Inspecting contexts
 
 Three primitives exist purely for debugging and don't participate in the
 hot paths at all — they cost nothing unless a program actually calls them.
 
-**Identity.** Two `AsyncContext` snapshots compare equal with `==` iff
-they reference the same underlying chain head:
+A default-initialized `AsyncContext` (`var ctx: AsyncContext`, never
+assigned from `currentContext()`) is the *empty* context — the same one
+every task starts with before any key is ever bound. Running under it via
+`withContext` installs no bindings at all: a defaulted key reads its own
+default, exactly as if no binder were ever entered, and a must-bind key
+raises `UnboundContextVarDefect`, same as an unbound ambient read.
+
+### Identity
+
+Two `AsyncContext` snapshots compare equal with `==` iff they reference
+the same underlying chain head:
 
 ```nim
 let a = currentContext()
@@ -415,10 +421,12 @@ carry the same bindings are not `==`. `hash*(ctx: AsyncContext): Hash`
 matches the same identity (a pointer-identity hash), so `AsyncContext`
 works as a `Table`/`HashSet` key.
 
-**`dumpContext` / `` `$` ``.** `dumpContext(ctx: AsyncContext): seq[ContextVarEntry]`
-enumerates every *registered* (non-private) key constructed anywhere in
-the program — across every module, defaulted or must-bind — as it stands
-in `ctx`, sorted by name:
+### `dumpContext`
+
+`dumpContext(ctx: AsyncContext): seq[ContextVarEntry]` enumerates every
+*registered* (non-private) key constructed anywhere in the program —
+across every module, defaulted or must-bind — as it stands in `ctx`,
+sorted by name:
 
 ```nim
 type ContextVarEntry* = object
@@ -427,21 +435,19 @@ type ContextVarEntry* = object
   value*: string
 ```
 
-A private key (declared without a star, or raw-constructed with `private
-= true`) never appears here — `dumpContext` filters it out at
-enumeration time, so private means private to introspection too, not
-just to reads and binds. (The key still registers, like every key — see
-"Registry and key lifetime" below; `private` governs this filter, not
-whether the key stays alive.) See "Privacy and the raw constructors"
-above for the raw constructors' export-decoupling caveat.
+A private key — no star, or raw-constructed with `private = true` — never
+appears here. See [The `{.contextVar.}` pragma](#the-contextvar-pragma)
+for how the star maps to this filter, [Registry and key lifetime](#registry-and-key-lifetime)
+for why a private key still registers, and
+[Privacy and the raw constructors](#privacy-and-the-raw-constructors) for
+the raw constructors' export-decoupling caveat.
 
-Every registered key appears exactly once, bound or not. This is a
-deliberate choice: the alternative — showing only the keys that happen to
-be bound — hides the "what else *could* be here" half of the picture,
-which is exactly what a debugger or log dump wants. An unbound defaulted
-key shows `bound: false` and the value its read would actually return
-(the rendered default); an unbound must-bind key shows `bound: false` and
-a fixed `<unbound>` placeholder — calling `dumpContext` never raises
+Every registered key appears exactly once, bound or not, so a dump shows
+not just current bindings but everything that *could* be bound — the
+picture a debugger or log dump actually wants. An unbound defaulted key
+shows `bound: false` and the value its read would actually return (the
+rendered default); an unbound must-bind key shows `bound: false` and a
+fixed `<unbound>` placeholder — calling `dumpContext` never raises
 `UnboundContextVarDefect` the way the key's own read would, because
 introspection has to stay total to be useful as a debugging tool. A value
 is rendered via `$` when the key's type has one (checked with `when
@@ -456,233 +462,26 @@ single `{name: value, ...}` string, in the same sorted order, for quick
 `echo`/logging use. Its format is not a stable, parseable contract — only
 `dumpContext`'s structured `seq[ContextVarEntry]` is.
 
-**Cost.** All three are zero-cost in the sense that matters for this
-feature: nothing on the read, bind, capture, or fire hot paths changed to
-support them. `==` is one pointer comparison. `dumpContext` costs one walk
-of the process-wide registry (see "Implementation") plus one `$`-render
-per key — paid only when `dumpContext` is actually called.
+### Cost
 
-The no-lock argument behind that walk (see "Implementation") assumes a
-static single-binary deployment, where every key is constructed on the
-main thread before any other thread exists. It does not hold across
-`dlopen`/shared-library boundaries: a library loaded after other threads
-already exist can construct keys concurrently with readers on those other
-threads, and unloading it leaves dangling registry entries. Neither shape
-is a chronos use case today, but embedding chronos in a plugin/
-shared-library host would need to revisit this registry's construction
-discipline.
+All three are zero-cost in the sense that matters for this feature:
+nothing on the read, bind, capture, or fire hot paths changed to support
+them. `==` is one pointer comparison. `dumpContext` costs one walk of the
+process-wide registry (see [Registry and key lifetime](#registry-and-key-lifetime))
+plus one `$`-render per key — paid only when `dumpContext` is actually
+called.
 
-## Implementation
+The no-lock argument behind that walk (see [Registry and key lifetime](#registry-and-key-lifetime))
+assumes a static single-binary deployment, where every key is constructed
+on the main thread before any other thread exists. It does not hold
+across `dlopen`/shared-library boundaries: a library loaded after other
+threads already exist can construct keys concurrently with readers on
+those other threads, and unloading it leaves dangling registry entries.
+Neither shape is a chronos use case today, but embedding chronos in a
+plugin/shared-library host would need to revisit this registry's
+construction discipline.
 
-A key (`ContextVar[T]`) is a `ref object` inheriting a non-generic
-`ContextVarBase`, which carries the name, the `dumpContext` render hook,
-and the registry link. Ref identity IS key identity: `ContextVar[T]`
-defines no custom `` `==` `` (Nim's builtin ref `==` is already identity
-comparison), and `hash*(cv: ContextVarBase): Hash` is a pointer-identity
-hash paired with that same `==` — never a custom, value-based one — so
-two keys compare and hash equal only when they're the same allocation —
-`let alias = someKey` compares equal to `someKey` (the intended re-export
-pattern), while two keys built from identical constructor arguments are
-distinct (see "Keys as values"). This identity hash is what makes
-`ContextVar[T]` usable as a genuine `Table`/`HashSet` key, not merely a
-value stored under some other key. A value-`object` key was rejected for
-the same reason as the `==`/`hash` pairing: a copy would get its own
-address and silently stop being "the same key."
-
-A context is an immutable, singly-linked chain of nodes, one per active
-binding, each carrying the key it was bound under alongside the bound
-value. A chain node needs to expose its key *without* knowing the node's
-value type — the lookup walk visits every node on a chain regardless of
-which `T` each one carries — so the key field lives one layer below the
-generic `ContextNode[T]`, on a non-generic `ContextNodeKeyed` base
-inserted between it and the chain's own `ContextNodeBase`. `withValue` is
-the only code that ever builds a `ContextNode[T]`, and it always tags the
-node with the very `ContextVar[T]` whose `T` matches the node's own type
-parameter — so a node's real type is never in question once its key is
-known, and the lookup walk's cast from `ContextNodeKeyed` to
-`ContextNode[T]` is sound by that construction invariant, not by a runtime
-type tag.
-
-That invariant only holds if every node reachable through an
-`AsyncContext` was actually built by `withValue` in the first place —
-which in turn requires that `AsyncContext` itself can't be fabricated
-from an arbitrary `ContextNodeBase`. `AsyncContext* = object` wraps its
-chain head in a field private to this module for exactly this reason:
-the only route to a populated value in safe Nim is `currentContext()`'s
-own capture, so no safe construction — not even from code that imports
-`chronos/internal/contextnode` directly — can hand `withContext` a
-snapshot whose chain wasn't built the normal way. It does not, and
-cannot, cover
-`cast[AsyncContext](node)`: a same-size bit reinterpretation bypasses
-field privacy the same way it bypasses every other Nim type's
-invariants, `cast` being the language's declared-unsafe escape hatch —
-a runtime discriminant would not help either, since the discriminant
-itself would be forgeable by the same cast. The soundness argument
-above is therefore by construction against every safe-Nim construction
-route, not against `cast`.
-
-The key field itself is stored as a raw `pointer` (`cast[pointer](cv)`),
-not a traced `ContextVarBase` reference. This is load-bearing, not a style
-choice: `withValue` can run on any thread once a key exists, and under
-`--mm:refc` the GC heap is per-thread bookkeeping — a traced ref field
-pointing at a key allocated on a different thread increfs through the
-wrong thread's heap the moment a second thread binds that key,
-reproducibly crashing under `-d:useGcAssert`. A raw pointer sidesteps
-reference counting on every memory manager; it's sound because node keys
-are only ever *compared*, never dereferenced (`dumpContext` renders
-through the registry's own live refs, not through the chain), and because
-keys are process-lifetime by construction discipline (below) — the same
-argument the prior registry design made for its own `ptr` field.
-
-Lookup (`` `[]`(AsyncContext, ContextVar[T]): T ``, the one real chain
-walk) compares `node.key == cast[pointer](cv)` while walking — one
-pointer comparison per node — and, on a match, reads the value out via
-`cast[ContextNode[T]](node)`. `.value` is not a second read path: it's
-`template value(cv) = currentContext()[cv]`, so the ambient spelling and
-the snapshot spelling (`ctx[cv]`) are two spellings of this one walk, not
-parallel implementations. Under a `chronosDebug` build, the cast is
-preceded by `doAssert node of ContextNode[T]` — a checked downcast
-verifying the construction invariant the paragraph above argues for by
-construction, the same debug-only discipline `chainBalance` and the
-construction lock below already use elsewhere in this module; release
-builds pay nothing for it.
-
-**Registry and key lifetime.** Every key — private or not — links itself
-into a process-wide intrusive list at construction — a private
-`nextRegistered: ContextVarBase` field threaded through `ContextVarBase`
-itself, so the registry costs no separate allocation. Registration keeps
-a key alive for the life of the process; this is leak-by-design, matching
-what a purely static, module-level-global design would have gotten for
-free. Registering unconditionally, rather than only for non-private keys,
-is load-bearing, not merely uniform: a chain node's `key` field is an
-untraced raw pointer (above), so a key that never registered would have
-no other process-lifetime guarantee, and a chain node built from a
-since-collected private key would dangle — worse, silently, since a
-later key reusing the freed address would compare pointer-equal to the
-stale `node.key` and read back the wrong value. `private` now governs
-only `dumpContext`'s enumeration filter, never a key's lifetime.
-
-`newContextVar`/`newRequiredContextVar` are supported only *before* any
-`createThread` call — the same write-once-then-read-only discipline the
-registry already needs, enforced two ways under a `chronosDebug` build.
-
-The first is automatic and needs no setup: on a key's first registration,
-chronos records the constructing thread's id (`getThreadId()`); every
-later registration doAsserts it is running on that same thread, before
-either constructor's registry mutation ever runs, so a violation leaves
-the registry exactly as it was. This is the specific hazard the
-write-once discipline exists for — a second thread constructing a key
-corrupts the GC heap under `--mm:refc`, since a chain node's `key` field
-is an untraced raw pointer into whichever thread built its key (see
-"Implementation" above) — and it fires the moment that hazard actually
-occurs, unconditionally.
-
-The second is `lockContextVarConstruction()`, a stricter opt-in boundary:
-chronos does not wrap or intercept thread creation, so nothing flips this
-lock automatically. Call it yourself at your program's own
-construction/thread-creation boundary — the test suite is its only
-caller today — and every `newContextVar`/`newRequiredContextVar` call
-after that point asserts, on any thread, not just a different one from
-the first. Neither check is a substitute for the other: the automatic
-check catches the cross-thread case with no setup but tolerates further
-same-thread construction after other threads already exist, while the
-lock catches that too, but only once an application opts in. No lock is
-paid on any path in a release build, and neither check runs at all
-outside `chronosDebug`.
-
-Applications are encouraged to call `lockContextVarConstruction()` at
-their own thread-creation boundary in `chronosDebug` builds and in CI,
-rather than relying on the automatic check alone: a construction-
-discipline violation — a key constructed after another thread already
-exists — is far cheaper to catch there than to chase down as an
-intermittent failure in production.
-
-Duplicate name strings are representable — two independently-constructed
-keys can share a `name`, matching PEP 567 — and accepted as
-cosmetic-only: `dumpContext` may show two entries with the same label, and
-`UnboundContextVarDefect.varName` may be non-unique, but same-name keys
-never alias — binding one is never observable through the other,
-regardless of whether they share a name.
-
-The render hook (feeding `dumpContext`/`` `$` ``) is instantiated once per
-`T`, inside whichever raw constructor built the key, and stored on
-`ContextVarBase` as a `{.nimcall.}` pointer — the same `when T is ref`
-nil-guard and `when compiles($v)` fallback ladder as before, generic code
-degraded to a plain proc pointer so a non-generic base field can hold it.
-
-## Capture discipline
-
-The obligation this section places on every scheduling-site author: a
-context-blind trampoline (`bareCallback`) is sound only when everything
-it fires either captured its own context at registration or is itself
-context-neutral. `bareCallback` doesn't check this — it just fires with
-an empty context — so a bare trampoline that starts firing
-context-sensitive code without one of the other two constructors
-upstream reintroduces a leak silently.
-
-Every `AsyncCallback` construction site must deliberately pick one of three
-constructors defined in `chronos/futures.nim`:
-
-- `capturingCallback(fn, udata)` — for every scheduling site whose callback
-  must observe registration-time bindings (`addCallback`, `callSoon`,
-  `setTimer`, `addReader`/`addWriter`, `addSignal`/`addProcess`, `callIdle`,
-  `closeSocket`/`closeHandle` after-callbacks), whether the callback is
-  application code or chronos-internal. Captures the current context.
-- `bareCallback(fn, udata)` — for chronos-internal trampolines
-  (sentinels, cross-thread queue draining, the low-level per-operation
-  IOCP read/write completion trampolines, `internalCallTick`'s
-  `CallbackFunc` overloads) where no meaningful registration-time
-  context exists. Fires with an empty context.
-- `contextCallback(fn, udata, ctx)` — for reconstructing a callback from
-  a context value captured *earlier* rather than the ambient one at the
-  call site. Windows IOCP completion dispatch (`poll()` in
-  `asyncengine.nim`) is the only caller: it fires every completion with
-  whatever `CompletionData.context` an upstream arm site
-  (`registerWaitable`, a stream server's `start()`) stored via
-  `captureContextInto`, nil - reproducing `bareCallback`'s
-  empty-context behavior - otherwise.
-
-`internalCallTick` also has an `AsyncCallback`-taking overload
-(`internalCallTick(acb: AsyncCallback)`) that simply schedules whatever
-`AsyncCallback` the caller already built — the caller picks the
-constructor when building that value. Only the convenience `CallbackFunc`
-overloads (`internalCallTick(cbproc, data)`) default to `bareCallback`
-and are therefore context-blind by design.
-
-Unauthorized *construction* of an `InternalAsyncCallback` is a compile
-error, not a convention: `function`/`udata`/`context` are private to
-`chronos/futures.nim`, so only `capturingCallback`/`bareCallback`/
-`contextCallback` can build a value, and no other module can
-read-modify a field after construction (existing readers go through
-exported `function()`/`udata()`/`context()` getters). A raw
-`AsyncCallback(function: ..., udata: ...)` literal, or a direct field
-assignment, anywhere outside `chronos/futures.nim` simply fails to
-compile — `tests/testcontextvarsguardrails.nim` asserts this with
-`not compiles(...)` checks.
-
-*Which* constructor a given scheduling site calls, however, is not
-something the type system can check — the three share a shape, so
-picking the wrong one compiles fine. That discipline rests on an
-enumerate-and-pin approach instead:
-`tests/testcontextvarssurface.nim` and `tests/testcontextvarsguardrails.nim`
-enumerate every known construction/capture site and pin its expected
-behavior, so a *changed* site shows up as a failing assertion — but a
-genuinely *new* scheduling site added without updating those pins would
-not be caught by them. Extending the pins is part of adding one.
-
-## Spawn-time inheritance
-
-A task spawned inside a binder (calling an `async` proc, `asyncSpawn`, or
-registering a callback) inherits the spawner's binding chain as it existed
-at the point of spawning. Because the chain is immutable, later re-binding
-in the parent is invisible to the already-spawned child and vice versa —
-a child's nested binding never leaks back to the parent.
-
-Chain nodes own their bound value inline, so a `currentContext()` snapshot
-(or a pending callback's captured chain) remains sound after the binder
-that created it has exited.
-
-## Migration / compatibility
+## Migration and compatibility
 
 - The feature is additive: code that never constructs a `ContextVar` pays
   one pointer field per `AsyncCallback` and a pointer copy per capture.
@@ -691,28 +490,12 @@ that created it has exited.
   origin thread's chain is thread-local, garbage-collected memory and
   cannot be shared. Same-thread scheduling through the same API captures
   normally.
-- **Windows IOCP completions carry the registrant's context**: every
-  `OVERLAPPED`-based completion (`CompletionData`, the record armed by
-  `registerWaitable` and by a stream server's accept machinery) carries
-  a `context` field, captured via `captureContextInto` at the site that
-  arms the completion, and restored when `poll()` dispatches the fired
-  callback — the same registration-time-capture contract as the
-  epoll/kqueue paths, just carried on the completion record instead of
-  in an `AsyncCallback` built inline. `addProcess2`/`addSignal2`
-  (via `registerWaitable`) and a stream server's handler (captured at
-  `start()`, not at `createStreamServer()` or per-connection) both
-  propagate correctly. `CompletionData.context` is nil - reproducing
-  the historical empty-context, fail-closed behavior - for any
-  completion whose arm site does not opt in; this remains true, by
-  design, for the low-level per-operation read/write completion
-  trampolines (they only drive an internal future to completion, and
-  that future's own awaiter already carries its own captured context
-  from the normal `capturingCallback` path, so there's nothing for those
-  trampolines themselves to propagate). The accept loop's `context` is
-  captured once, at `start()`, and reused for every connection the
-  server ever accepts — it is not re-captured per connection, so a
-  caller that binds a large value around `start()` pins it for the
-  server's entire lifetime, not just for one `start()` call.
+- **Windows IOCP completions carry the registrant's context**, the same
+  registration-time-capture contract as the epoll/kqueue paths: a
+  completion fires with the context captured when its `OVERLAPPED` record
+  was armed, not the context ambient when it fires. See
+  [Capture discipline](#capture-discipline) for which sites capture and
+  how the fallback behaves.
 
 ## Divergences from cited precedent
 
@@ -721,29 +504,28 @@ every mature ecosystem converged on: Python PEP 567 (`var.get()`,
 `ctx[var]`), Kotlin (`coroutineContext[Key]`), Java JEP 446 ScopedValue
 (`sv.get()`, `ScopedValue.where(sv, v).run(...)`), .NET `AsyncLocal`
 (`v.Value`). None of them mint derived identifiers per variable — that's
-the design principle this API borrows. Where chronos's design
-deliberately diverges from those precedents:
+the design principle this API borrows. Where chronos's design diverges
+from those precedents:
 
 - **PEP 567**: an unbound read there raises a catchable `LookupError`;
-  here it raises `UnboundContextVarDefect`, a `Defect` (see "Required
-  variables" for the raises-tracking rationale — a Nim-specific
-  constraint Python has no analog of). Python's `Context.run(fn)`
-  value-isolated execution is also not offered; `withContext`'s
-  mutate-and-restore covers chronos's callback-boundary cases (see
-  "Bridging independent callbacks").
+  here it raises `UnboundContextVarDefect`, a `Defect` (see
+  [Required variables](#required-variables) for the raises-tracking
+  rationale — a Nim-specific constraint Python has no analog of). Python's
+  `Context.run(fn)` value-isolated execution is also not offered;
+  `withContext`'s mutate-and-restore covers chronos's callback-boundary
+  cases (see [Bridging independent callbacks](#bridging-independent-callbacks)).
 - **Kotlin** couples a key and its value type through a companion object
   declared on the value type. chronos keeps independent factories
   (`newContextVar[T]`/`newRequiredContextVar[T]`) instead — Nim has no
   companion-object idiom, and the coupling wouldn't buy anything here.
 - **JEP 446** forbids rebinding a `ScopedValue` within the same dynamic
-  scope. chronos keeps arbitrary LIFO re-shadowing — `cv.withValue`
-  nests freely, and the innermost binding always wins, the same as the
-  prior identifier-family design's semantics.
+  scope. chronos keeps arbitrary LIFO re-shadowing — `cv.withValue` nests
+  freely, and the innermost binding always wins.
 - **.NET** `AsyncLocal.Value` is an imperative setter with forward flow
   (`asyncLocal.Value = x` mutates ambient state going forward). Only its
   read spelling is cited here; the imperative-write model itself was
-  rejected — see "There is deliberately no imperative token API" under
-  "Bridging independent callbacks".
+  rejected — see [Bridging independent callbacks](#bridging-independent-callbacks)
+  above.
 
 ## Performance
 
@@ -751,7 +533,7 @@ The design goal is cost proportional to use: a program that never
 constructs a `ContextVar` should pay a cost indistinguishable, on every
 hot path, from a build without the feature at all. This is measured, not
 assumed — every number below comes from `benchmarks/bench_contextvars.nim`,
-run in the same container image both memory managers ship in.
+run under both memory managers.
 
 **refc** (chronos's most latency-sensitive consumers pin `--mm:refc`
 unconditionally) and **orc** both show the dispatcher-level headline
@@ -774,11 +556,6 @@ intervening binding) is where the difference is clearest:
 | orc, chain read, all depths                                    | overlapping old/new ranges -- noise-neutral |
 | `callSoon` / sleep-chain / future-churn, both MMs               | comparable to the prior design -- within measurement noise |
 | memory (pending future, queued callback), both MMs             | byte-identical |
-
-These are the current measurement-record numbers; final publication
-re-runs the full benchmark under both memory managers at fold
-verification — chronos's delivery gate for this feature — rather than
-carrying these forward unchecked.
 
 Per-call-class cost, confirmed by inspecting the generated C at each site
 rather than inferred from throughput alone, and unaffected by this
@@ -808,113 +585,214 @@ whose dequeue is barrier-free on the copy-out; this restores
 queue-transport cost per hop to parity with what the pre-contextvars
 codebase already paid on its one field.
 
-## Test plan
+## Internals
 
-- `tests/testcontextvars.nim` — key construction and registry (name/
-  hasDefault/private accessors, private keys absent from dumpContext, two
-  identically-constructed keys staying distinct, a key used as a genuine
-  `Table` *key* via its identity `hash`); ambient `.value` and
-  `withValue` (unbound-returns-default, bind/restore on normal exit,
-  LIFO nesting/shadowing of the same key, restore on exception, two
-  same-`T` keys bound simultaneously each reading back their own value,
-  two different-`T` keys coexisting); the `contains`/`isBound` boundness
-  probe (identity-correct on duplicate-name keys, must-bind unbound
-  returning `false` without raising, a defaulted key reading `false`
-  while unbound even though `.value` would return its default); snapshot
-  `AsyncContext` and `` `[]` `` (a snapshot outliving its binder, a
-  snapshot unaffected by a later bind, `==`/`hash` identity semantics and
-  `Table`-key usability); must-bind Defect parity on both `.value` and
-  `ctx[cv]` (unbound raise with `varName` set, bound read on both paths,
-  no raise); `dumpContext`/`` `$` `` (bound, defaulted-unbound,
-  must-bind-unbound, a non-`$`-able type's placeholder path, a
-  `ref`-typed key's nil-safe render, sorted-by-name order); the
-  `{.contextVar.}` pragma's four declaration forms (starred/inferred,
-  explicit-`T`, unstarred/private, must-bind), one-symbol emission (no
-  derived identifiers reachable after expansion), wrapper-macro
-  composition (the pragma invoked through a forwarding template), its
-  `let`/`var` grammar enforcement (a defaulted key spelled with `var`, a
-  must-bind key spelled with `let` — both compile errors), and the
-  `{.contextVar: (private: ...).}` override argument (both override
-  directions, its composition with the must-bind `var` form, and a
-  malformed argument as a `not compiles` pin).
-- `tests/testcontextvarsasync.nim` — async propagation (isolation across
-  interleaved tasks, survival across sequential awaits, exception and
-  cancellation paths, spawn-time inheritance), per-scheduling-site
-  capture coverage (`callSoon`, `setTimer`/`sleepAsync`, `callIdle`,
-  `addReader`, `race`/`allFutures`, `closeSocket`/`closeHandle`), the
-  bridging pattern from "Bridging independent callbacks" above, and a
-  must-bind key's binding propagating across `await` exactly like a
-  defaulted one.
-- `tests/testcontextvarsguardrails.nim` — compile-time and runtime drift
-  detection: `ContextVar[T]`/`ContextVarBase` are `ref` (identity IS key
-  identity); no public mutable fields (`name`/`hasDefault`/`private` are
-  read-only accessors; `default`, the render hook, and the registry link
-  are unreachable outside the implementation module); no custom `==`
-  defined anywhere in the hierarchy; no imperative `set`/`reset`/`push`/
-  `pop`; chain-node construction and traversal (the node types and their
-  `next`/`key` fields) unreachable outside the implementation module;
-  `std/tables.withValue` coexistence, including from a generic call
-  site; a raw-constructed key's name surfacing verbatim, unmangled, in
-  both `dumpContext` and `UnboundContextVarDefect.varName`; two
-  same-name keys never aliasing each other while both still appearing in
-  `dumpContext`; the positive inverse of the old collision
-  guardrail — a key literally named `timeout` coexists with chronos's
-  own `withTimeout` combinator, compiling and running without conflict,
-  because first-class keys mint no derived identifiers for this bug
-  class to attach to; and that registering every key regardless of
-  `private` closes the chain-node UAF a private key's untraced `key`
-  pointer would otherwise reopen — constructing and binding a private
-  key inside a proc, capturing the binding, letting the proc return,
-  forcing a full GC collection, and confirming an unrelated key
-  constructed afterward still reads its own default rather than the
-  collected key's stale bound value; and that `AsyncContext` cannot be
-  constructed from a bare `ContextNodeBase` obtained via a direct
-  `chronos/internal/contextnode` import, by either positional or
-  named-field syntax — the forgery route a distinct-type `AsyncContext`
-  used to leave open (see "Implementation").
-- `tests/testcontextvarssurface.nim` — verifies `import chronos` plus
-  `import chronos/contextvars` expose only the intended public API:
-  `ContextVar[T]`, `newContextVar`, `newRequiredContextVar`, the `contextVar`
-  pragma macro, `value`, `` `[]` ``, `withValue`, `name`, `contains`/
-  `isBound`, `hash(cv: ContextVarBase)`, `AsyncContext`
-  + `` `==` ``/`hash`, `currentContext`, `withContext`,
-  `dumpContext`/`ContextVarEntry`, `UnboundContextVarDefect` — and none
-  of `ContextVarBase`'s internals (registry link, render pointer,
-  default field), chain-node construction or `next` access, `ContextNodeBase`
-  itself (unlike the old macro design, which needed it nameable — see
-  "Implementation"), or any `set`/`reset`/token symbol; also pins the
-  deliberate absence of an imperative token API and, on the
-  `--os:windows` leg, that `CompletionData.context` is not reachable
-  either.
-- `tests/testcontextvarsexport.nim` + `tests/contextvarsexportfixture.nim`
-  — cross-module export-marker semantics: a starred key declared via
-  `{.contextVar.}` is reachable (and its bindings visible in
-  `dumpContext`) from an importing module; a non-starred key is not,
-  including from `dumpContext`, not just by name; the raw constructor's
-  export-decoupling behavior (a non-exported key registered with
-  `private = false` still appearing in another module's `dumpContext`)
-  is pinned as intentional via a dedicated negative test, not treated as
-  a bug.
-- `tests/testcontextvarsbalance.nim` — the suite-final binder-balance
-  check (bind/unbind counters staying at zero at suite end), split out
-  of `testutils.nim` so it runs on every engine, including `poll` (see
-  `tests/testall.nim`).
-- `tests/testcontextvarsleakguard.nim` — the `chronosDebug`
-  context-corruption detection net (see the file's own docstring for the
-  specific layers pinned): a callback that corrupts `currentAsyncContext`
-  is caught structurally rather than silently propagating.
-- `tests/testcontextvarscrossthread.nim` — the automatic `chronosDebug`
-  cross-thread construction guard (`newContextVar`/
-  `newRequiredContextVar`'s thread-id check — see "Registry and key
-  lifetime"): constructing a key from a second thread doAsserts, and a
-  subsequent main-thread construction still succeeding is the evidence
-  the registry mutation never ran.
-- `tests/testcontextvarslock.nim` — the one-way `chronosDebug`
-  construction lock (`newContextVar` asserting after
-  `lockContextVarConstruction()`).
-- `tests/testcontextvarsstandalone.nim` — the driver that runs the three
-  files above in one binary, ordered leak-guard, cross-thread, then lock
-  (the lock's permanent, process-lifetime engagement must run last);
-  kept out of `tests/testall.nim` and run as its own step in
-  `chronos.nimble`'s `test` task, so their process-wide effects never
-  share a binary with a suite that constructs keys at runtime.
+The rest of this document describes the implementation for chronos
+contributors extending the context-variable substrate itself; application
+code using the API above does not need it.
+
+### Implementation
+
+A key (`ContextVar[T]`) is a `ref object` inheriting a non-generic
+`ContextVarBase`, which carries the name, the `dumpContext` render hook,
+and the registry link. Ref identity IS key identity: `ContextVar[T]`
+defines no custom `` `==` `` (Nim's builtin ref `==` is already identity
+comparison), and `hash*(cv: ContextVarBase): Hash` is a pointer-identity
+hash paired with that same `==` — never a custom, value-based one — so
+two keys compare and hash equal only when they're the same allocation —
+`let alias = someKey` compares equal to `someKey` (the intended re-export
+pattern), while two keys built from identical constructor arguments are
+distinct (see [Keys as values](#keys-as-values)). This identity hash is
+what makes `ContextVar[T]` usable as a genuine `Table`/`HashSet` key, not
+merely a value stored under some other key. A value-`object` key was
+rejected for the same reason as the `==`/`hash` pairing: a copy would get
+its own address and silently stop being "the same key."
+
+A context is an immutable, singly-linked chain of nodes, one per active
+binding, each carrying the key it was bound under alongside the bound
+value. A chain node needs to expose its key *without* knowing the node's
+value type — the lookup walk visits every node on a chain regardless of
+which `T` each one carries — so the key field lives one layer below the
+generic `ContextNode[T]`, on a non-generic `ContextNodeKeyed` base
+inserted between it and the chain's own `ContextNodeBase`. `withValue` is
+the only code that ever builds a `ContextNode[T]`, and it always tags the
+node with the very `ContextVar[T]` whose `T` matches the node's own type
+parameter — so a node's real type is never in question once its key is
+known, and the lookup walk's cast from `ContextNodeKeyed` to
+`ContextNode[T]` is sound by that construction invariant, not by a runtime
+type tag.
+
+That invariant holds because every node reachable through an
+`AsyncContext` was built by `withValue`, and `AsyncContext` itself can't
+be fabricated from an arbitrary `ContextNodeBase`. `AsyncContext* =
+object` wraps its chain head in a field private to this module: the only
+route to a populated value in safe Nim is `currentContext()`'s own
+capture, so no safe construction — not even from code that imports
+`chronos/internal/contextnode` directly — can hand `withContext` a
+snapshot whose chain wasn't built the normal way. This guarantee covers
+every safe-Nim construction route; `cast[AsyncContext](node)` bypasses it
+the same way a `cast` bypasses any Nim type's invariants.
+
+The key field itself is stored as a raw `pointer` (`cast[pointer](cv)`)
+rather than a traced `ContextVarBase` reference: `withValue` can run on
+any thread once a key exists, and under `--mm:refc` the GC heap is
+per-thread bookkeeping, so a traced ref field pointing at a key allocated
+on a different thread increfs through the wrong thread's heap the moment
+a second thread binds that key, reproducibly crashing under
+`-d:useGcAssert`. A raw pointer sidesteps reference counting on every
+memory manager — the same approach the prior registry design used for its
+own `ptr` field. It is sound because node keys are only ever *compared*,
+never dereferenced (`dumpContext` renders through the registry's own live
+refs, not through the chain), and because keys are process-lifetime by
+construction discipline (see [Registry and key lifetime](#registry-and-key-lifetime)
+below).
+
+Lookup (`` `[]`(AsyncContext, ContextVar[T]): T ``, the one real chain
+walk) compares `node.key == cast[pointer](cv)` while walking — one
+pointer comparison per node — and, on a match, reads the value out via
+`cast[ContextNode[T]](node)`. `.value` is not a second read path: it's
+`template value(cv) = currentContext()[cv]`, so the ambient spelling and
+the snapshot spelling (`ctx[cv]`) are two spellings of this one walk.
+Under a `chronosDebug` build, the cast is preceded by `doAssert node of
+ContextNode[T]` — a checked downcast verifying the construction invariant
+above, the same debug-only discipline `chainBalance` and the construction
+lock below already use elsewhere in this module; release builds pay
+nothing for it.
+
+### Registry and key lifetime
+
+Every key — private or not — links itself into a process-wide intrusive
+list at construction, via a private `nextRegistered: ContextVarBase`
+field threaded through `ContextVarBase` itself, so the registry costs no
+separate allocation. Registration keeps a key alive for the life of the
+process: a permanent, by-design leak, matching what a purely static,
+module-level-global design would have gotten for free. This applies to
+private keys too: a chain node's `key` field is an untraced raw pointer
+(see [Implementation](#implementation) above), so an unregistered key
+would have no other process-lifetime guarantee, and a chain node built
+from a since-collected private key would dangle — a later key reusing the
+freed address would then compare pointer-equal to the stale `node.key`
+and read back the wrong value. `private` governs only `dumpContext`'s
+enumeration filter, never a key's lifetime.
+
+`newContextVar`/`newRequiredContextVar` are supported only *before* any
+`createThread` call — the same write-once-then-read-only discipline the
+registry already needs, enforced two ways under a `chronosDebug` build.
+
+The first is automatic and needs no setup: on a key's first registration,
+chronos records the constructing thread's id (`getThreadId()`); every
+later registration doAsserts it is running on that same thread, before
+either constructor's registry mutation ever runs, so a violation leaves
+the registry exactly as it was. A second thread constructing a key
+corrupts the GC heap under `--mm:refc`, since a chain node's `key` field
+is an untraced raw pointer into whichever thread built its key (see
+[Implementation](#implementation) above), and this check fires the moment
+that hazard actually occurs.
+
+The second is `lockContextVarConstruction()`, a stricter opt-in boundary:
+chronos does not wrap or intercept thread creation, so nothing flips this
+lock automatically. Call it yourself at your program's own
+construction/thread-creation boundary — the test suite is its only caller
+today — and every `newContextVar`/`newRequiredContextVar` call after that
+point asserts, on any thread, not just a different one from the first.
+Neither check is a substitute for the other: the automatic check catches
+the cross-thread case with no setup but tolerates further same-thread
+construction after other threads already exist, while the lock catches
+that too, but only once an application opts in. No lock is paid on any
+path in a release build, and neither check runs at all outside
+`chronosDebug`.
+
+Applications are encouraged to call `lockContextVarConstruction()` at
+their own thread-creation boundary in `chronosDebug` builds and in CI,
+rather than relying on the automatic check alone: a construction-
+discipline violation is far cheaper to catch there than to chase down as
+an intermittent failure in production.
+
+Duplicate name strings are representable — two independently-constructed
+keys can share a `name`, matching PEP 567 — and accepted as
+cosmetic-only: `dumpContext` may show two entries with the same label, and
+`UnboundContextVarDefect.varName` may be non-unique, but same-name keys
+never alias — binding one is never observable through the other,
+regardless of whether they share a name.
+
+The render hook (feeding `dumpContext`/`` `$` ``) is instantiated once per
+`T`, inside whichever raw constructor built the key, and stored on
+`ContextVarBase` as a `{.nimcall.}` pointer — the same `when T is ref`
+nil-guard and `when compiles($v)` fallback ladder as before, generic code
+degraded to a plain proc pointer so a non-generic base field can hold it.
+
+### Capture discipline
+
+The obligation this section places on every scheduling-site author: a
+context-blind trampoline (`bareCallback`) is sound only when everything
+it fires either captured its own context at registration or is itself
+context-neutral. `bareCallback` doesn't check this — it just fires with
+an empty context — so a bare trampoline that starts firing
+context-sensitive code without one of the other two constructors upstream
+reintroduces a leak silently.
+
+Every `AsyncCallback` construction site must pick one of three
+constructors defined in `chronos/futures.nim`:
+
+- `capturingCallback(fn, udata)` — for every scheduling site whose callback
+  must observe registration-time bindings (`addCallback`, `callSoon`,
+  `setTimer`, `addReader`/`addWriter`, `addSignal`/`addProcess`, `callIdle`,
+  `closeSocket`/`closeHandle` after-callbacks), whether the callback is
+  application code or chronos-internal. Captures the current context.
+- `bareCallback(fn, udata)` — for chronos-internal trampolines (sentinels,
+  cross-thread queue draining, the low-level per-operation IOCP
+  read/write completion trampolines, `internalCallTick`'s `CallbackFunc`
+  overloads) where no meaningful registration-time context exists: those
+  trampolines only drive an internal future to completion, and that
+  future's own awaiter already carries its own captured context. Fires
+  with an empty context.
+- `contextCallback(fn, udata, ctx)` — for reconstructing a callback from
+  a context value captured *earlier* rather than the ambient one at the
+  call site. Windows IOCP completion dispatch (`poll()` in
+  `asyncengine.nim`) is the only caller: it fires every completion with
+  whatever `CompletionData.context` an upstream arm site
+  (`registerWaitable`, a stream server's `start()`) stored via
+  `captureContextInto`, or an empty context if the arm site didn't opt
+  in — the same fail-closed default as `bareCallback`. A stream server's
+  accept loop captures its context once, at `start()`, and reuses it for
+  every connection the server accepts, so a caller that binds a large
+  value around `start()` pins it for the server's entire lifetime, not
+  just for one call.
+
+`internalCallTick` also has an `AsyncCallback`-taking overload
+(`internalCallTick(acb: AsyncCallback)`) that simply schedules whatever
+`AsyncCallback` the caller already built — the caller picks the
+constructor when building that value. Only the convenience `CallbackFunc`
+overloads (`internalCallTick(cbproc, data)`) default to `bareCallback` and
+are therefore context-blind by design.
+
+Only `capturingCallback`/`bareCallback`/`contextCallback` can construct an
+`InternalAsyncCallback`: `function`/`udata`/`context` are private to
+`chronos/futures.nim`, and no other module can read or modify a field
+after construction (existing readers go through the exported
+`function()`/`udata()`/`context()` getters). A raw
+`AsyncCallback(function: ..., udata: ...)` literal, or a direct field
+assignment, anywhere outside `chronos/futures.nim` fails to compile —
+`tests/testcontextvarsguardrails.nim` pins this with `not compiles(...)`
+checks.
+
+Which constructor a given scheduling site calls is not something the type
+system can check — the three share a shape, so picking the wrong one
+compiles fine. `tests/testcontextvarssurface.nim` and
+`tests/testcontextvarsguardrails.nim` enumerate every known
+construction/capture site and pin its expected behavior; extending the
+pins is part of adding a scheduling site.
+
+### Tests
+
+Tests live under `tests/testcontextvars*.nim`: construction and the
+registry, ambient and `withValue` semantics, async propagation across the
+dispatcher's scheduling sites, cross-module export rules, and the
+compile-time and runtime drift guardrails above. Three of them — the
+leak-guard, cross-thread-construction, and construction-lock suites — run
+from a standalone driver (`tests/testcontextvarsstandalone.nim`) instead
+of `tests/testall.nim`: the construction lock is a one-way switch that
+stays engaged for the rest of the process once set, and the leak-guard
+test deliberately lets a Defect escape `poll` to prove the corruption
+check fires, so neither can safely share a binary with a suite that
+constructs keys at runtime.
