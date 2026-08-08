@@ -847,6 +847,35 @@ proc cancelSoon(future: FutureBase, aftercb: CallbackFunc, udata: pointer,
     if not(future.finished()):
       internalCallTick(checktick)
 
+proc cancelSoon(future: FutureBase, acb: AsyncCallback,
+                loc: ptr SrcLoc) {.raises: [].} =
+  ## Same as the `CallbackFunc`/`pointer` overload above, except `acb` is
+  ## scheduled or registered as-is rather than unpacked into a fresh
+  ## callback: whatever context `acb` carries (see `capturingCallback`)
+  ## is what fires, not whatever happens to be ambient at the
+  ## `cancelSoon` call site or whenever cancellation eventually
+  ## completes.
+  proc checktick(udata: pointer) {.gcsafe, raises: [].} =
+    if tryCancel(future, loc):
+      return
+    if not(future.finished()):
+      internalCallTick(checktick)
+
+  if future.finished():
+    if not(isNil(acb.function)):
+      callSoon(acb)
+    return
+
+  if not(isNil(acb.function)):
+    if isNil(future.internalCallback.function):
+      future.internalCallback = acb
+    else:
+      future.internalCallbacks.add acb
+
+  if not(tryCancel(future, loc)):
+    if not(future.finished()):
+      internalCallTick(checktick)
+
 template cancelSoon*(fut: FutureBase, cb: CallbackFunc, udata: pointer) =
   cancelSoon(fut, cb, udata, getSrcLocation())
 
@@ -854,7 +883,7 @@ template cancelSoon*(fut: FutureBase, cb: CallbackFunc) =
   cancelSoon(fut, cb, nil, getSrcLocation())
 
 template cancelSoon*(fut: FutureBase, acb: AsyncCallback) =
-  cancelSoon(fut, acb.function, acb.udata, getSrcLocation())
+  cancelSoon(fut, acb, getSrcLocation())
 
 template cancelSoon*(fut: FutureBase) =
   cancelSoon(fut, nil, nil, getSrcLocation())

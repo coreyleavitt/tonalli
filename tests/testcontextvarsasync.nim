@@ -589,6 +589,35 @@ suite "contextvars: scheduling-site capture coverage":
     check fired
     check seenBinding == "registrant"
 
+  test "cancelSoon(AsyncCallback) fires under the callback's own captured binding":
+    # Unlike the CallbackFunc/pointer overload above, this overload takes
+    # an already-built AsyncCallback - it must fire under the binding live
+    # when that AsyncCallback was constructed, not whatever is ambient at
+    # the cancelSoon() call site or when the future is later polled.
+    var seenBinding = -1
+    var fired = false
+
+    proc aftercb(udata: pointer) {.gcsafe, raises: [].} =
+      seenBinding = asyncInt.value
+      fired = true
+
+    var acb: AsyncCallback
+    asyncInt.withValue(111):
+      acb = capturingCallback(aftercb, nil)
+
+    let fut = newFuture[void]("already-finished-cancelsoon-acb")
+    fut.complete()
+    check fut.finished()
+
+    asyncInt.withValue(222):
+      cancelSoon(fut, acb)
+
+    asyncInt.withValue(333):
+      poll()
+
+    check fired
+    check seenBinding == 111
+
 suite "contextvars: bridging independent callbacks":
 
   test "currentContext()/withContext() bridges independent callbacks":
