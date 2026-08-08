@@ -30,8 +30,8 @@
 ##
 ## ## Public API
 ##
-## - `ContextVar[T]` / `newContextVar[T](name, default, private = false)`
-##   / `newContextVar[T](name, private = false)` (must-bind) — the key
+## - `ContextVar[T]` / `newContextVar[T](name, default, private = true)`
+##   / `newContextVar[T](name, private = true)` (must-bind) — the key
 ##   type and its raw constructors.
 ## - `{.contextVar.}` — declaration pragma: `let name* {.contextVar.} =
 ##   default` derives the key's name and `dumpContext` privacy from the
@@ -95,10 +95,10 @@ type
     ## Stored as a raw `pointer`, not `ContextVarBase`: a key is a
     ## module-level `let` constructed before any `createThread` (see
     ## "Registry and key lifetime" below) and kept alive for the
-    ## process's life either by the registry's intrusive list or, for a
-    ## private key, by the module-level global itself — never by a
-    ## chain node, so an untraced pointer is sound (the pointee
-    ## outlives every node that could reference it). This is
+    ## process's life by the registry's intrusive list — every key
+    ## registers, private or not, precisely so this field can stay an
+    ## untraced pointer — never by a chain node, so the pointee outlives
+    ## every node that could reference it. This is
     ## load-bearing, not cosmetic: `withValue` can run on any thread
     ## once a key is constructed, and under `--mm:refc` the GC heap is
     ## per-thread (`gch` is `{.rtlThreadVar.}`), so a traced
@@ -196,22 +196,26 @@ proc registerVar(base: ContextVarBase) =
   base.nextRegistered = registryHead
   registryHead = base
 
-proc newContextVar*[T](name: string, default: T, private = false): ContextVar[T] =
-  ## Defaulted-arm constructor.
+proc newContextVar*[T](name: string, default: T, private = true): ContextVar[T] =
+  ## Defaulted-arm constructor. Registers unconditionally, regardless of
+  ## `private` — see "Registry and key lifetime" in
+  ## docs/src/contextvars.md for why registration is now the key's only
+  ## lifetime guarantee. `private` governs `dumpContext` visibility only,
+  ## and defaults to `true` — see "Privacy and the raw constructor".
   when defined(chronosDebug): checkContextVarConstructionAllowed()
   result = ContextVar[T](name: name, hasDefault: true, private: private,
                           default: default)
   result.render = renderGeneric[T]
-  if not private:
-    registerVar(result)
+  registerVar(result)
 
-proc newContextVar*[T](name: string, private = false): ContextVar[T] =
-  ## Must-bind arm constructor — no default supplied.
+proc newContextVar*[T](name: string, private = true): ContextVar[T] =
+  ## Must-bind arm constructor — no default supplied. Same unconditional
+  ## registration and `private` default as the defaulted-arm overload
+  ## above.
   when defined(chronosDebug): checkContextVarConstructionAllowed()
   result = ContextVar[T](name: name, hasDefault: false, private: private)
   result.render = renderGeneric[T]
-  if not private:
-    registerVar(result)
+  registerVar(result)
 
 iterator registeredVars(): ContextVarBase =
   ## Unexported — the registry-walking primitive is internal to this
@@ -337,9 +341,10 @@ template withValue*[T](cv: ContextVar[T], v: T, body: untyped): untyped =
 # (an unbound defaulted key still shows its rendered default; an unbound
 # must-bind key shows the `<unbound>` placeholder), same sorted-by-name
 # order, same `{name: value, ...}` `$` format documented in
-# docs/src/contextvars.md, "Inspecting contexts". Private keys never
-# register (see `newContextVar`), so they are structurally absent here —
-# no filtering needed at this layer.
+# docs/src/contextvars.md, "Inspecting contexts". Every key registers
+# now (see `newContextVar`), so `dumpContext` is the filtering point:
+# it skips `cv.private` entries itself rather than relying on their
+# absence from the registry.
 
 type
   ContextVarEntry* = object
@@ -355,12 +360,13 @@ proc findNode(chain: ContextNodeBase, cv: ContextVarBase): ContextNodeBase =
     node = node.nextNode
 
 proc dumpContext*(ctx: AsyncContext): seq[ContextVarEntry] {.raises: [].} =
-  ## Introspect every registered (non-private) key as of `ctx`, sorted
+  ## Introspect every registered, non-private key as of `ctx`, sorted
   ## by name. Never raises — render failures are caught inside each
   ## key's render hook.
   {.cast(gcsafe).}:
     let chain = ContextNodeBase(ctx)
     for cv in registeredVars():
+      if cv.private: continue
       let node = findNode(chain, cv)
       if node != nil:
         result.add ContextVarEntry(name: cv.name, bound: true,

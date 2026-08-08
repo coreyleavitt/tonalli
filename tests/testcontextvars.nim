@@ -140,7 +140,7 @@ proc `$`(w: RenderWidget): string = "Widget(" & $w.id & ")"
 suite "contextvars (raw key): key construction and registry":
 
   test "defaulted key stores name, hasDefault, and registers":
-    let k = newContextVar("t1Key", 42)
+    let k = newContextVar("t1Key", 42, private = false)
     check k.name == "t1Key"
     check k.hasDefault == true
     # Registration is observable only through dumpContext — the
@@ -148,7 +148,7 @@ suite "contextvars (raw key): key construction and registry":
     # (see testcontextvarssurface.nim).
     check dumpContext(currentContext()).anyIt(it.name == "t1Key")
 
-  test "private key does not register":
+  test "private key does not appear in dumpContext":
     let k = newContextVar("t2Key", 42, private = true)
     check k.private == true
     check not dumpContext(currentContext()).anyIt(it.name == "t2Key")
@@ -158,9 +158,9 @@ suite "contextvars (raw key): key construction and registry":
     check k.hasDefault == false
 
   test "dumpContext renders defaults and bound values across T shapes":
-    let intKey = newContextVar("t4Int", 7)
-    let widgetKey = newContextVar[RenderWidget]("t4Widget", nil)
-    let blobKey = newContextVar("t4Blob", RenderBlob(3))
+    let intKey = newContextVar("t4Int", 7, private = false)
+    let widgetKey = newContextVar[RenderWidget]("t4Widget", nil, private = false)
+    let blobKey = newContextVar("t4Blob", RenderBlob(3), private = false)
 
     block:
       let entries = dumpContext(currentContext())
@@ -661,8 +661,8 @@ suite "contextvars: dumpContext and $":
 suite "contextvars (raw key): dumpContext and $":
 
   test "dumpContext on empty context: defaulted, must-bind, private semantics":
-    let defaultedKey = newContextVar("t22Defaulted", 5)
-    let mustBindKey = newContextVar[int]("t22MustBind")
+    let defaultedKey = newContextVar("t22Defaulted", 5, private = false)
+    let mustBindKey = newContextVar[int]("t22MustBind", private = false)
     discard newContextVar("t22Private", 9, private = true)
 
     let entries = dumpContext(currentContext())
@@ -682,7 +682,7 @@ suite "contextvars (raw key): dumpContext and $":
     check mustBindKey.hasDefault == false
 
   test "dumpContext on a bound snapshot: bound=true, value rendered; fresh snapshot reverts to default":
-    let k = newContextVar("t23Key", 1)
+    let k = newContextVar("t23Key", 1, private = false)
     var boundEntry: ContextVarEntry
     k.withValue(77):
       boundEntry = dumpContext(currentContext()).filterIt(it.name == "t23Key")[0]
@@ -694,9 +694,9 @@ suite "contextvars (raw key): dumpContext and $":
     check freshEntry.value == "1"
 
   test "`$` format parity and sorted order":
-    let zKey = newContextVar("t24Zeta", 1)
-    let aKey = newContextVar("t24Alpha", 2)
-    let mKey = newContextVar("t24Mid", 3)
+    let zKey = newContextVar("t24Zeta", 1, private = false)
+    let aKey = newContextVar("t24Alpha", 2, private = false)
+    let mKey = newContextVar("t24Mid", 3, private = false)
     zKey.withValue(10):
       aKey.withValue(20):
         mKey.withValue(30):
@@ -716,10 +716,10 @@ suite "contextvars (raw key): dumpContext and $":
           check names == sorted(names)
 
   test "render parity: ref-with-$, ref nil default, $-less distinct, plain int":
-    let refKey = newContextVar[RenderWidget]("t25Ref", RenderWidget(id: 3))
-    let nilKey = newContextVar[RenderWidget]("t25Nil", nil)
-    let blobKey = newContextVar("t25Blob", RenderBlob(4))
-    let intKey = newContextVar("t25Int", 8)
+    let refKey = newContextVar[RenderWidget]("t25Ref", RenderWidget(id: 3), private = false)
+    let nilKey = newContextVar[RenderWidget]("t25Nil", nil, private = false)
+    let blobKey = newContextVar("t25Blob", RenderBlob(4), private = false)
+    let intKey = newContextVar("t25Int", 8, private = false)
 
     block:
       let entries = dumpContext(currentContext())

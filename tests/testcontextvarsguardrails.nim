@@ -202,7 +202,7 @@ suite "contextvars guardrails: g6 std/tables.withValue coexistence":
 
 suite "contextvars guardrails: g7 name-string drift":
   test "raw-constructor name surfaces verbatim in dumpContext":
-    let k = newContextVar("rawNamed", 0)
+    let k = newContextVar("rawNamed", 0, private = false)
     let entries = dumpContext(currentContext()).filterIt(it.name == "rawNamed")
     check entries.len == 1
 
@@ -223,8 +223,8 @@ suite "contextvars guardrails: g7 name-string drift":
 
 suite "contextvars guardrails: g8 same-name keys don't alias":
   test "binding one of two same-name same-T keys leaves the other's default; both list in dumpContext":
-    let a = newContextVar("g8Dup", 1)
-    let b = newContextVar("g8Dup", 1)
+    let a = newContextVar("g8Dup", 1, private = false)
+    let b = newContextVar("g8Dup", 1, private = false)
 
     a.withValue(99):
       check a.value == 99
@@ -257,6 +257,44 @@ suite "contextvars guardrails: g9 no collision with chronos's own symbols":
   test "a key literally named `timeout` coexists with chronos's withTimeout":
     check timeout.value == 5
     check declared(withTimeout)
+
+# --- Guardrail 10: private-key registration closes the chain-node UAF -------
+#
+# A chain node's `key` field is an untraced raw pointer (see
+# chronos/contextvars.nim's `ContextNodeKeyed` comment): the pointee must
+# outlive every node that could reference it. Before this fix, a private
+# key registered nowhere, so nothing but its own (possibly stack-scoped)
+# `let` kept it alive; a captured `AsyncContext` whose chain still held a
+# node pointing at that key's address, taken after the key's binding
+# `let` went out of scope, was a use-after-free — worse, a *silent* one:
+# a later, unrelated key allocated at the freed address would compare
+# pointer-equal to the stale `node.key` and read back the dead key's
+# bound value instead of its own default. Registering every key,
+# private or not, closes this: the key stays alive for the process's
+# life regardless of `private`, so the address can never be reused while
+# a chain node can still reference it.
+
+var g10CapturedCtx: AsyncContext
+
+proc g10ConstructBindCapture() =
+  let privateKey = newContextVar("g10Private", 111, private = true)
+  privateKey.withValue(222):
+    g10CapturedCtx = currentContext()
+
+suite "contextvars guardrails: g10 private-key registration closes chain-node UAF":
+  test "GC after the binding proc returns leaves the captured context safe to walk, and a later key doesn't alias it":
+    g10ConstructBindCapture()
+    GC_fullCollect()
+
+    # Must not crash walking/rendering the captured chain.
+    let entries = dumpContext(g10CapturedCtx)
+    check not entries.anyIt(it.name == "g10Private")
+
+    # A key constructed after collection must read its own default, not
+    # the collected private key's bound value — the failure mode this
+    # guardrail exists to catch if registration is ever narrowed again.
+    let freshKey = newContextVar("g10Fresh", 999)
+    check g10CapturedCtx[freshKey] == 999
 
 # =============================================================================
 # --- Capture-discipline guardrails (substrate-level, orthogonal to the

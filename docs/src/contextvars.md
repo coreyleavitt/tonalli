@@ -96,8 +96,8 @@ literal (`nil`) or absent entirely (must-bind); `let requestId*
 primitive:
 
 ```nim
-proc newContextVar*[T](name: string, default: T, private = false): ContextVar[T]
-proc newContextVar*[T](name: string, private = false): ContextVar[T]
+proc newContextVar*[T](name: string, default: T, private = true): ContextVar[T]
+proc newContextVar*[T](name: string, private = true): ContextVar[T]
 ```
 
 Call it directly when a key's name needs to be computed, when a key
@@ -115,15 +115,24 @@ and privacy in lockstep with the declaration's own export marker, so they
 can never drift apart. The raw constructor cannot offer that guarantee —
 its `private` parameter is an ordinary value argument, entirely decoupled
 from the enclosing `let`'s own `*`. This decoupling is deliberate, not an
-oversight, and it has real consequences: a non-exported `let` constructed
-with `newContextVar(..., private = false)` (the default) still appears in
-*other* modules' `dumpContext`/`$ctx` output, even though nothing outside
-its own module can read or bind it — and, symmetrically, an exported key
-constructed with `private = true` is reachable but invisible to
-introspection. Neither case is a bug; both are pinned, negative-tested
-behavior. If a raw-constructed key's registration should track its own
-export marker, pass `private` by hand to match, or prefer the pragma,
-which does this automatically.
+oversight, and it has real consequences in both directions: a non-exported
+`let` constructed with `newContextVar(..., private = false)` (passed
+explicitly) still appears in *other* modules' `dumpContext`/`$ctx` output,
+even though nothing outside its own module can read or bind it — and,
+symmetrically, an exported key constructed with `private = true` is
+reachable but invisible to introspection. Neither case is a bug; both are
+pinned, negative-tested behavior.
+
+The raw constructor's `private` **defaults to `true`** — mirroring the
+`{.contextVar.}` pragma's own no-star-means-private mapping and Nim's own
+private-unless-starred convention, and, more importantly, fail-safe in
+the direction that matters: a key missing from a debug dump is
+discoverable (grep the constructor call, add `private = false`), while a
+sensitive value that leaked into a dump because a call site forgot the
+argument is not. Pass `private = false` explicitly to register a
+raw-constructed key for `dumpContext`, or prefer the pragma, whose star
+marker sets this automatically and can't be forgotten independently of
+export.
 
 ## Semantics notes
 
@@ -366,10 +375,12 @@ type ContextVarEntry* = object
 ```
 
 A private key (declared without a star, or raw-constructed with `private
-= true`) never registers, so it never appears here — private means
-private to introspection too, not just to reads and binds. See "Privacy
-and the raw constructor" above for the raw constructor's export-decoupling
-caveat.
+= true`) never appears here — `dumpContext` filters it out at
+enumeration time, so private means private to introspection too, not
+just to reads and binds. (The key still registers, like every key — see
+"Registry and key lifetime" below; `private` governs this filter, not
+whether the key stays alive.) See "Privacy and the raw constructor"
+above for the raw constructor's export-decoupling caveat.
 
 Every registered key appears exactly once, bound or not. This is a
 deliberate choice: the alternative — showing only the keys that happen to
@@ -455,12 +466,20 @@ pointer comparison per node — and, on a match, reads the value out via
 the snapshot spelling (`ctx[cv]`) are two spellings of this one walk, not
 parallel implementations.
 
-**Registry and key lifetime.** A non-private key links itself into a
-process-wide intrusive list at construction — a private `nextRegistered:
-ContextVarBase` field threaded through `ContextVarBase` itself, so the
-registry costs no separate allocation. Registration keeps a key alive for
-the life of the process; this is leak-by-design, matching what a purely
-static, module-level-global design would have gotten for free.
+**Registry and key lifetime.** Every key — private or not — links itself
+into a process-wide intrusive list at construction — a private
+`nextRegistered: ContextVarBase` field threaded through `ContextVarBase`
+itself, so the registry costs no separate allocation. Registration keeps
+a key alive for the life of the process; this is leak-by-design, matching
+what a purely static, module-level-global design would have gotten for
+free. Registering unconditionally, rather than only for non-private keys,
+is load-bearing, not merely uniform: a chain node's `key` field is an
+untraced raw pointer (above), so a key that never registered would have
+no other process-lifetime guarantee, and a chain node built from a
+since-collected private key would dangle — worse, silently, since a
+later key reusing the freed address would compare pointer-equal to the
+stale `node.key` and read back the wrong value. `private` now governs
+only `dumpContext`'s enumeration filter, never a key's lifetime.
 
 `newContextVar` is supported only *before* any `createThread` call — the
 same write-once-then-read-only discipline the registry already needs, now
@@ -688,7 +707,7 @@ codebase already paid on its one field.
 ## Test plan
 
 - `tests/testcontextvars.nim` — key construction and registry (name/
-  hasDefault/private accessors, private keys not registering, two
+  hasDefault/private accessors, private keys absent from dumpContext, two
   identically-constructed keys staying distinct); ambient `.value` and
   `withValue` (unbound-returns-default, bind/restore on normal exit,
   LIFO nesting/shadowing of the same key, restore on exception, two
@@ -725,11 +744,17 @@ codebase already paid on its one field.
   site; a raw-constructed key's name surfacing verbatim, unmangled, in
   both `dumpContext` and `UnboundContextVarDefect.varName`; two
   same-name keys never aliasing each other while both still appearing in
-  `dumpContext`; and the positive inverse of the old collision
+  `dumpContext`; the positive inverse of the old collision
   guardrail — a key literally named `timeout` coexists with chronos's
   own `withTimeout` combinator, compiling and running without conflict,
   because first-class keys mint no derived identifiers for this bug
-  class to attach to.
+  class to attach to; and that registering every key regardless of
+  `private` closes the chain-node UAF a private key's untraced `key`
+  pointer would otherwise reopen — constructing and binding a private
+  key inside a proc, capturing the binding, letting the proc return,
+  forcing a full GC collection, and confirming an unrelated key
+  constructed afterward still reads its own default rather than the
+  collected key's stale bound value.
 - `tests/testcontextvarssurface.nim` — verifies `import chronos` plus
   `import chronos/contextvars` expose only the intended public API:
   `ContextVar[T]`, `newContextVar` (both arities), the `contextVar`
