@@ -694,6 +694,12 @@ this check fires the moment that hazard actually occurs — unconditionally,
 because the hazard it prevents is not itself limited to debug builds, and
 the construction path it runs on is cold.
 
+Neither check makes a first construction on a thread that then exits
+safe — the registry is left holding a reference into a dead thread's
+heap — and while the guard keeps refusing every other thread's
+construction from that point on, nothing makes the process itself sound
+again.
+
 The second is `lockContextVarConstruction()`, a stricter, `chronosDebug`-
 only opt-in boundary: chronos does not wrap or intercept thread creation,
 so nothing flips this lock automatically. Call it yourself at your

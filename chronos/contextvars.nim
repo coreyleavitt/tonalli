@@ -69,13 +69,26 @@ import ./internal/contextnode
 # --- Key types and the registry --------------------------------------------
 
 type
-  ContextVarBase* = ref object of RootRef
+  ContextVarBase* {.acyclic.} = ref object of RootRef
     ## Non-generic base of a `ContextVar[T]` key. Ref identity IS key
     ## identity: no custom `==` is ever defined for this hierarchy — see
     ## `hash*` below for the pointer-identity hash that is defined.
     ## Fields stay unexported — `name`/`hasDefault`/`private` below are
     ## read-only accessors, and `render`/`nextRegistered` are
     ## registry/render internals reachable only from this module.
+    ##
+    ## `{.acyclic.}`: `nextRegistered` only ever links into
+    ## `registryHead` (append-only, see `registerVar`), so this chain is
+    ## cycle-free by construction; and every registered key is
+    ## already immortal for the process's life (see `registryHead`
+    ## below), so cycle-collector bookkeeping for it can never lead to
+    ## a collection either way. Also decouples a key from the
+    ## constructing thread's per-thread cycle-collector bookkeeping
+    ## under `--mm:orc` — load-bearing, not cosmetic: without it, a key
+    ## constructed on a thread that then exits leaves a dangling
+    ## bookkeeping entry that SIGSEGVs the next decref to touch it, even
+    ## at ordinary process teardown. `ContextVar[T]` below repeats the
+    ## pragma — it isn't inherited by generic subtypes.
     name: string
     hasDefault: bool
     private: bool
@@ -86,7 +99,7 @@ type
       ## needs for both the bound and the unbound-but-defaulted case.
     nextRegistered: ContextVarBase
 
-  ContextVar*[T] = ref object of ContextVarBase
+  ContextVar*[T] {.acyclic.} = ref object of ContextVarBase
     default: T
 
   ContextNodeKeyed = ref object of ContextNodeBase
