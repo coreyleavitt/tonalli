@@ -37,8 +37,8 @@
 ##   default` derives the key's name and `dumpContext` privacy from the
 ##   declaration site itself. See docs/src/contextvars.md, "The
 ##   `{.contextVar.}` pragma".
-## - `value`, `` `[]` ``, `withValue`, `name` — the operation vocabulary
-##   above, plus a read-only name accessor.
+## - `value`, `` `[]` ``, `withValue`, `name`, `hasDefault`, `private` —
+##   the operation vocabulary above, plus read-only accessors.
 ## - `` `contains` ``/`cv in ctx`, `isBound` — non-raising boundness
 ##   probes, identity-correct (unlike inferring boundness from
 ##   `dumpContext`'s name-grouped output). See docs/src/contextvars.md,
@@ -55,6 +55,7 @@
 ##   name in `varName`.
 
 import std/[algorithm, hashes, macros, strutils]
+import ./config
 import ./futures
 import ./internal/contextnode
 # Neither `ContextNodeBase` nor the ambient `currentAsyncContext`
@@ -65,10 +66,13 @@ import ./internal/contextnode
 # directly — has any route to construct one outside `currentContext()`'s
 # own capture. See docs/src/contextvars.md, "Implementation".
 
+# --- Key types and the registry --------------------------------------------
+
 type
   ContextVarBase* = ref object of RootRef
     ## Non-generic base of a `ContextVar[T]` key. Ref identity IS key
-    ## identity: no `==`/`hash` is ever defined for this hierarchy.
+    ## identity: no custom `==` is ever defined for this hierarchy — see
+    ## `hash*` below for the pointer-identity hash that is defined.
     ## Fields stay unexported — `name`/`hasDefault`/`private` below are
     ## read-only accessors, and `render`/`nextRegistered` are
     ## registry/render internals reachable only from this module.
@@ -125,19 +129,19 @@ type
     ## resolve against this module's scope regardless of the caller's.
     value: T
 
-proc name*(cv: ContextVarBase): string {.inline.} =
+func name*(cv: ContextVarBase): string {.inline.} =
   ## Read-only: the string is stored anyway, so log/tracing code
   ## shouldn't need a registry walk to name a key. No matching `name=`
   ## is ever defined.
   cv.name
 
-proc hasDefault*(cv: ContextVarBase): bool {.inline.} =
+func hasDefault*(cv: ContextVarBase): bool {.inline.} =
   cv.hasDefault
 
-proc private*(cv: ContextVarBase): bool {.inline.} =
+func private*(cv: ContextVarBase): bool {.inline.} =
   cv.private
 
-proc hash*(cv: ContextVarBase): Hash {.inline, raises: [].} =
+func hash*(cv: ContextVarBase): Hash {.inline, raises: [].} =
   ## Pointer-identity hash, consistent with ref identity being key
   ## identity (no custom `` `==` `` is ever defined for this hierarchy —
   ## see the guardrail in tests/testcontextvarsguardrails.nim) — mirrors
@@ -151,33 +155,26 @@ var registryHead: ContextVarBase
   ## matching what a purely static, module-level-global design would
   ## have gotten for free.
 
-proc renderValue[T](v: T): string {.raises: [].} =
+func renderValue[T](v: T): string {.raises: [].} =
   when T is ref:
     if v == nil:
-      "nil"
-    else:
-      when compiles($(v)):
-        try:
-          $(v)
-        except CatchableError:
-          "<render-error>"
-      else:
-        "<no-$>"
+      return "nil"
+  when compiles($(v)):
+    try:
+      $(v)
+    except CatchableError:
+      "<render-error>"
   else:
-    when compiles($(v)):
-      try:
-        $(v)
-      except CatchableError:
-        "<render-error>"
-    else:
-      "<no-$>"
+    "<no-$>"
 
-proc renderGeneric[T](cv: ContextVarBase, node: ContextNodeBase): string
+func renderGeneric[T](cv: ContextVarBase, node: ContextNodeBase): string
     {.nimcall, gcsafe, raises: [].} =
   if node != nil:
     renderValue(cast[ContextNode[T]](node).value)
   else:
     renderValue(ContextVar[T](cv).default)
+
+# --- Construction guards and the raw constructors ---------------------------
 
 when defined(chronosDebug):
   var contextVarConstructionLocked = false
@@ -227,33 +224,55 @@ when defined(chronosDebug):
         "construct every context variable key on a single thread, " &
         "before any createThread call"
 
+proc checkContextVarConstruction() {.inline.} =
+  ## Shared debug-only guard, called unconditionally from both
+  ## constructors below — a no-op outside `-d:chronosDebug`, so callers
+  ## don't need their own `when defined(chronosDebug):` wrapper. See
+  ## `checkContextVarConstructionAllowed`/`checkContextVarConstructionThread`
+  ## above.
+  when defined(chronosDebug):
+    checkContextVarConstructionAllowed()
+    checkContextVarConstructionThread()
+
 proc registerVar(base: ContextVarBase) =
   base.nextRegistered = registryHead
   registryHead = base
 
-proc newContextVar*[T](name: string, default: T, private = true): ContextVar[T] =
+proc newContextVar*[T](name: chronosSink string, default: T,
+                        private = true): ContextVar[T] {.raises: [].} =
   ## Defaulted-arm constructor. Registers unconditionally, regardless of
   ## `private` — see "Registry and key lifetime" in
   ## docs/src/contextvars.md for why registration is now the key's only
   ## lifetime guarantee. `private` governs `dumpContext` visibility only,
   ## and defaults to `true` — see "Privacy and the raw constructors".
-  when defined(chronosDebug):
-    checkContextVarConstructionAllowed()
-    checkContextVarConstructionThread()
+  ##
+  ## `default` stays a plain `T`, not `chronosSink T`: `T` must be
+  ## inferred from this very argument at ordinary call sites (there is
+  ## no other `T`-typed parameter to pin it, unlike this codebase's
+  ## other `chronosSink T` sites — `asyncfutures.nim`'s `complete`,
+  ## `callbackqueue.nim`'s `addLast`/`prependNoGrow` — where a
+  ## `Future[T]`/`CallbackQueue[T]` parameter already fixes `T` before
+  ## the sink parameter is even considered). Under `--mm:refc`'s
+  ## chronosUseSink branch (Nim >= 2.0.6), `chronosSink` lowers to
+  ## `sink`, and routing generic-parameter inference through the
+  ## template that produces it — rather than a bare `sink T` — defeats
+  ## Nim's sigmatch: `newContextVar("x", 0)` stops compiling with a type
+  ## mismatch, reproduced in isolation down to a two-line template.
+  ## `name`, which carries no inference burden, keeps `chronosSink`.
+  checkContextVarConstruction()
   result = ContextVar[T](name: name, hasDefault: true, private: private,
                           default: default)
   result.render = renderGeneric[T]
   registerVar(result)
 
-proc newRequiredContextVar*[T](name: string, private = true): ContextVar[T] =
+proc newRequiredContextVar*[T](name: chronosSink string,
+                                private = true): ContextVar[T] {.raises: [].} =
   ## Must-bind constructor — no default supplied. See
   ## docs/src/contextvars.md, "Required variables". Same unconditional
   ## registration and `private` default as `newContextVar` above; a
   ## distinct name rather than a second overload of `newContextVar` —
   ## see docs/src/contextvars.md, "The raw constructors".
-  when defined(chronosDebug):
-    checkContextVarConstructionAllowed()
-    checkContextVarConstructionThread()
+  checkContextVarConstruction()
   result = ContextVar[T](name: name, hasDefault: false, private: private)
   result.render = renderGeneric[T]
   registerVar(result)
@@ -285,13 +304,13 @@ type
       ## that imports `chronos/internal/contextnode` directly. See
       ## docs/src/contextvars.md, "Implementation".
 
-proc `==`*(a, b: AsyncContext): bool {.gcsafe, raises: [].} =
+func `==`*(a, b: AsyncContext): bool {.gcsafe, raises: [].} =
   ## Identity equality: `true` iff `a` and `b` reference the same
   ## underlying chain head — i.e. both were captured with no
   ## intervening binding change.
   a.node == b.node
 
-proc hash*(ctx: AsyncContext): Hash {.gcsafe, raises: [].} =
+func hash*(ctx: AsyncContext): Hash {.gcsafe, raises: [].} =
   ## Pointer-identity hash, consistent with `==`'s identity semantics —
   ## safe to use `AsyncContext` as a `Table`/`HashSet` key.
   hash(cast[pointer](ctx.node))
@@ -318,14 +337,14 @@ type
     ## binding is in scope.
     varName*: string
 
-proc findNode(chain: ContextNodeBase, cv: ContextVarBase): ContextNodeBase =
+func findNode(chain: ContextNodeBase, cv: ContextVarBase): ContextNodeBase =
   var node = chain
   while node != nil:
     if cast[ContextNodeKeyed](node).key == cast[pointer](cv):
       return node
     node = node.nextNode
 
-proc `[]`*[T](ctx: AsyncContext, cv: ContextVar[T]): T {.raises: [].} =
+func `[]`*[T](ctx: AsyncContext, cv: ContextVar[T]): T {.raises: [].} =
   let node = findNode(ctx.node, cv)
   if node != nil:
     when defined(chronosDebug):
@@ -409,7 +428,7 @@ type
     bound*: bool
     value*: string
 
-proc contains*[T](ctx: AsyncContext, cv: ContextVar[T]): bool {.raises: [].} =
+func contains*[T](ctx: AsyncContext, cv: ContextVar[T]): bool {.raises: [].} =
   ## `cv in ctx` — identity-correct boundness probe (PEP 567 precedent:
   ## Python contexts support `in`). True iff `cv` has an active binding
   ## in `ctx`, false otherwise — including for a must-bind key, which
@@ -491,8 +510,8 @@ proc parsePrivateOverride(opts: NimNode): bool =
   error("contextVar: expected `(private: true)` or `(private: false)`, " &
         "got " & opts.repr, opts)
 
-proc contextVarImpl(def: NimNode, privateOverridden: bool,
-                     privateOverride: bool): NimNode =
+proc contextVarImpl(def: NimNode, hasPrivateOverride: bool,
+                     overridePrivate: bool): NimNode =
   ## `let name* {.contextVar.} = default` (T inferred), `let name*
   ## {.contextVar.}: T = default` (explicit T), or `var name*
   ## {.contextVar.}: T` (must-bind) — expands to exactly one symbol,
@@ -501,20 +520,20 @@ proc contextVarImpl(def: NimNode, privateOverridden: bool,
   ## `let`/`var` choice is enforced here, not just documented: a
   ## defaulted key must be a `let`, a must-bind key must be a `var` —
   ## the same split between `newContextVar` and `newRequiredContextVar`
-  ## the call site makes, moved to the declaration site. `privateOverridden`
+  ## the call site makes, moved to the declaration site. `hasPrivateOverride`
   ## selects between the export-derived default (`{.contextVar.}`) and the
   ## explicit `{.contextVar: (private: ...).}` override, common to both
   ## pragma arities below.
   if def.kind notin {nnkLetSection, nnkVarSection}:
-    error("contextVar must annotate a `let` or `var` statement", def)
+    error("contextVar: must annotate a `let` or `var` statement", def)
   if def.len != 1:
-    error("contextVar supports exactly one identifier per statement", def)
+    error("contextVar: supports exactly one identifier per statement", def)
   let identDefs = def[0]
   if identDefs.kind != nnkIdentDefs or identDefs.len != 3:
     error("contextVar: expected a single `name[*][: T] [= default]` " &
           "identifier definition, got " & identDefs.repr, identDefs)
   let (nameNode, nameStr, derivedPrivate) = splitContextVarNameAndPrivate(identDefs[0])
-  let private = if privateOverridden: privateOverride else: derivedPrivate
+  let private = if hasPrivateOverride: overridePrivate else: derivedPrivate
   let typAnnotation = identDefs[1]
   let value = identDefs[2]
 
@@ -547,7 +566,7 @@ macro contextVar*(def: untyped): untyped =
   ## Default form: `dumpContext` privacy is derived from the declaration's
   ## own export marker (star -> `private = false`, no star -> `private =
   ## true`). See docs/src/contextvars.md, "The `{.contextVar.}` pragma".
-  contextVarImpl(def, privateOverridden = false, privateOverride = false)
+  contextVarImpl(def, hasPrivateOverride = false, overridePrivate = false)
 
 macro contextVar*(opts, def: untyped): untyped =
   ## Override form: `{.contextVar: (private: true|false).}` decouples
@@ -556,5 +575,5 @@ macro contextVar*(opts, def: untyped): untyped =
   ## dump-private, or an unexported key surfaced for cross-module
   ## debugging. See docs/src/contextvars.md, "The `{.contextVar.}`
   ## pragma", "Overriding dump-visibility".
-  contextVarImpl(def, privateOverridden = true,
-                  privateOverride = parsePrivateOverride(opts))
+  contextVarImpl(def, hasPrivateOverride = true,
+                  overridePrivate = parsePrivateOverride(opts))

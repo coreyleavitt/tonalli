@@ -18,6 +18,8 @@
 ## cycle without ever naming the base type. Keeping it private confines
 ## chain mutation to `linkNode` below.
 
+{.push raises: [].}
+
 type
   ContextNodeBase* = ref object of RootObj
     ## Base of the per-task continuation-local binding chain. Each
@@ -28,11 +30,11 @@ type
     next: ContextNodeBase
       ## Private — read via `nextNode`, written via `linkNode` only.
 
-proc nextNode*(node: ContextNodeBase): ContextNodeBase {.inline, raises: [].} =
+func nextNode*(node: ContextNodeBase): ContextNodeBase {.inline.} =
   ## Read-only chain traversal for the walkers in `contextvars_impl.nim`.
   node.next
 
-proc linkNode*(node, prev: ContextNodeBase) {.inline, raises: [].} =
+proc linkNode*(node, prev: ContextNodeBase) {.inline.} =
   ## Link a freshly-constructed slot node to the chain head it is about
   ## to shadow. Call exactly once per node, before the node is published
   ## as the new chain head.
