@@ -899,9 +899,22 @@ codebase already paid on its one field.
   check (bind/unbind counters staying at zero at suite end), split out
   of `testutils.nim` so it runs on every engine, including `poll` (see
   `tests/testall.nim`).
+- `tests/testcontextvarsleakguard.nim` — the `chronosDebug`
+  context-corruption detection net (see the file's own docstring for the
+  specific layers pinned): a callback that corrupts `currentAsyncContext`
+  is caught structurally rather than silently propagating.
+- `tests/testcontextvarscrossthread.nim` — the automatic `chronosDebug`
+  cross-thread construction guard (`newContextVar`/
+  `newRequiredContextVar`'s thread-id check — see "Registry and key
+  lifetime"): constructing a key from a second thread doAsserts, and a
+  subsequent main-thread construction still succeeding is the evidence
+  the registry mutation never ran.
 - `tests/testcontextvarslock.nim` — the one-way `chronosDebug`
   construction lock (`newContextVar` asserting after
-  `lockContextVarConstruction()`), kept out of `tests/testall.nim` and
-  run as its own step in `chronos.nimble`'s `test` task, so its
-  permanent lock never shares a binary with a suite that constructs
-  keys at runtime.
+  `lockContextVarConstruction()`).
+- `tests/testcontextvarsstandalone.nim` — the driver that runs the three
+  files above in one binary, ordered leak-guard, cross-thread, then lock
+  (the lock's permanent, process-lifetime engagement must run last);
+  kept out of `tests/testall.nim` and run as its own step in
+  `chronos.nimble`'s `test` task, so their process-wide effects never
+  share a binary with a suite that constructs keys at runtime.
