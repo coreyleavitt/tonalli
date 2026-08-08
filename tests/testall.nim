@@ -18,7 +18,14 @@ import
 
 import
   ./[testcontextvars, testcontextvarsasync, testcontextvarsguardrails,
-     testcontextvarssurface, testcontextvarsexport, testcontextkeys]
+     testcontextvarssurface, testcontextvarsexport, testcontextkeysguardrails,
+     testcontextkeys]
+  # testcontextkeys must import last among these: its chronosDebug suite
+  # permanently locks `newContextVar` for the rest of the process
+  # (mirrors real thread-creation, one-way by design — see
+  # contextkeys.nim). Any runtime `newContextVar` call after it, in this
+  # binary, would hit the lock; testcontextkeysguardrails constructs keys
+  # at runtime inside several `test` bodies, so it must run first.
 
 when (chronosEventEngine in ["epoll", "kqueue"]) or defined(windows):
   # `poll` engine does not support signals and processes.

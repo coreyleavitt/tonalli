@@ -30,10 +30,14 @@ type
   ContextVarBase* = ref object of RootRef
     ## Non-generic base of a `ContextVar[T]` key. Ref identity IS key
     ## identity: no `==`/`hash` is ever defined for this hierarchy.
-    name*: string
-    hasDefault*: bool
-    private*: bool
-    render*: proc(cv: ContextVarBase, node: ContextNodeBase): string
+    ## Fields stay unexported — `name`/`hasDefault`/`private` below are
+    ## read-only accessors, and `render`/`nextRegistered` are
+    ## registry/render internals reachable only from this module (see
+    ## the RFC's public-surface "Forbidden" list).
+    name: string
+    hasDefault: bool
+    private: bool
+    render: proc(cv: ContextVarBase, node: ContextNodeBase): string
       {.nimcall, gcsafe, raises: [].}
       ## `node == nil` renders the key's stored default instead of a
       ## bound node's value — the one instantiation `dumpContext`
@@ -53,10 +57,25 @@ type
     ## is sound by construction, not by runtime tag.
     key: ContextVarBase
 
-  ContextNode*[T] = ref object of ContextNodeKeyed
+  ContextNode[T] = ref object of ContextNodeKeyed
     ## One chain node: the key it was bound under, plus the owned
-    ## value.
+    ## value. Unexported like `ContextNodeKeyed` — nothing outside this
+    ## module ever names either type; `withValue`/`` `[]` `` build and
+    ## walk nodes from inside their own template/proc bodies, which
+    ## resolve against this module's scope regardless of the caller's.
     value: T
+
+proc name*(cv: ContextVarBase): string {.inline.} =
+  ## Read-only: the string is stored anyway, so log/tracing code
+  ## shouldn't need a registry walk to name a key (RFC round 1, pinned
+  ## decisions). No matching `name=` is ever defined.
+  cv.name
+
+proc hasDefault*(cv: ContextVarBase): bool {.inline.} =
+  cv.hasDefault
+
+proc private*(cv: ContextVarBase): bool {.inline.} =
+  cv.private
 
 var registryHead: ContextVarBase
   ## Head of the intrusive registry list — process-lifetime, allocation
