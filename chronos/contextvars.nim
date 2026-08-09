@@ -519,13 +519,16 @@ proc splitContextVarNameAndPrivate(identNode: NimNode):
   ## true. `nnkIdent`/`nnkSym` both resolve via `strVal` (a wrapper
   ## template forwarding its own parameter arrives as `nnkSym`); only
   ## `nnkPostfix` needs unwrapping to reach the name.
+  # 1.6: explicit `result =` per branch, not a case-expression — 1.6 sems
+  # case-branches as statements even when the last one is a noreturn
+  # `error()` call, and rejects the tuple as unused.
   case identNode.kind
   of nnkPostfix:
     if identNode.len != 2 or identNode[0].strVal != "*":
       error("contextVar: unexpected postfix form: " & identNode.repr, identNode)
-    (identNode, identNode[1].strVal, false)
+    result = (identNode, identNode[1].strVal, false)
   of nnkIdent, nnkSym:
-    (identNode, identNode.strVal, true)
+    result = (identNode, identNode.strVal, true)
   else:
     error("contextVar: expected `name` or `name*`, got " & identNode.repr, identNode)
 
