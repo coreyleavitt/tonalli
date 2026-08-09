@@ -60,17 +60,17 @@ const
   MixedBatchN = 300_000
 
 # --- contextVar declarations -------------------------------------------------
-# `benchVar`/`mixedVar` back the single-var metrics, declared via the
-# `{.contextVar.}` sugar -- no `*`, so they're private (this file is an
-# executable, not a library). `chainVars` backs the depth ladder: the
-# sugar emits one symbol per declaration, so it cannot mint an indexable
-# family -- the ladder is a raw-constructed `array[16, ContextVar[int]]`
-# instead, filled at module init (before any thread is created). Named
-# `chainVars`, not `chain`, to stay distinct from the local `chain()`
-# procs metric 2 declares below (an unrelated await chain).
+# `benchVar`/`mixedVar` back the single-var metrics, raw-constructed --
+# private by the constructor's own default (this file is an executable,
+# not a library). `chainVars` backs the depth ladder: a per-declaration
+# sugar macro cannot mint an indexable family, so the ladder is a
+# raw-constructed `array[16, ContextVar[int]]` instead, filled at module
+# init (before any thread is created). Named `chainVars`, not `chain`, to
+# stay distinct from the local `chain()` procs metric 2 declares below
+# (an unrelated await chain).
 
-let benchVar {.contextVar.} = 0
-let mixedVar {.contextVar.} = 0
+let benchVar = newContextVar("benchVar", 0)
+let mixedVar = newContextVar("mixedVar", 0)
 
 var chainVars: array[16, ContextVar[int]]
 for i in 0 ..< chainVars.len:

@@ -30,9 +30,9 @@ when not defined(windows):
 
 {.used.}
 
-let asyncInt {.contextVar.} = 0
-let asyncStr {.contextVar.} = ""
-var asyncReq {.contextVar.}: int    # must-bind: no default
+let asyncInt = newContextVar("asyncInt", 0)
+let asyncStr = newContextVar("asyncStr", "")
+let asyncReq = newRequiredContextVar[int]("asyncReq")    # must-bind: no default
 
 suite "contextvars: async propagation":
 

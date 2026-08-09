@@ -254,7 +254,7 @@ suite "contextvars guardrails: g8 same-name keys don't alias":
 # re-deriving it, since the mechanism that produced the error no longer
 # exists.
 
-let timeout* {.contextVar.} = 5
+let timeout* = newContextVar("timeout", 5, private = false)
   ## Deliberately named to match the old collision case — the old
   ## macro would have refused this declaration outright.
 

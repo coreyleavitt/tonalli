@@ -16,8 +16,13 @@
 
 import ../chronos/contextvars
 
-let exportedVar* {.contextVar.} = 1
-let privateVar {.contextVar.} = 2
+when (NimMajor, NimMinor) >= (2, 0):
+  # `{.contextVar.}` is 2.x-only — macro pragmas on `let`/`var` sections
+  # don't exist in the 1.6 compiler — so the export-marker-derived pair
+  # below, and every test in testcontextvarsexport.nim that names them,
+  # are gated the same way.
+  let exportedVar* {.contextVar.} = 1
+  let privateVar {.contextVar.} = 2
 
 let rawUnexportedRegistered = newContextVar("rawUnexportedRegistered", 3,
                                              private = false)

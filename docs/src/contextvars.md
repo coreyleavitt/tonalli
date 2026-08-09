@@ -32,6 +32,9 @@ proc handleRequest(user: User) {.async.} =
     audit("query")                      # sees `user`, not the default
 ```
 
+(The `{.contextVar.}` pragma needs Nim 2.x — see below; on Nim 1.6, spell
+`currentUser`'s declaration as `let currentUser* = newContextVar("currentUser", User(name: "anonymous"), private = false)`.)
+
 A context variable is a value — a `ContextVar[T]` key — not a family of
 generated identifiers. `let currentUser* {.contextVar.} = User(...)`
 declares exactly one symbol, `currentUser`, whose type is
@@ -59,6 +62,13 @@ binder's extent. Two additional primitives, `currentContext()` and
 synchronous-callback boundaries that don't go through `await`.
 
 ## The `{.contextVar.}` pragma
+
+> **Requires Nim 2.x.** `{.contextVar.}` relies on macro pragmas attached
+> to `let`/`var` sections, a capability the Nim compiler only gained in
+> the 2.x series — the 1.6 compiler never invokes a macro attached this
+> way, so the pragma silently fails to expand there. On Nim 1.6, declare
+> keys with the raw constructors, [`newContextVar`/`newRequiredContextVar`](#the-raw-constructors),
+> directly.
 
 `{.contextVar.}` is the recommended way to declare a key: it derives both
 the key's name and its `dumpContext` privacy from the declaration site
@@ -513,6 +523,8 @@ construction discipline.
 
 ## Migration and compatibility
 
+- On Nim 1.6, `{.contextVar.}` is unavailable (see [The `{.contextVar.}`
+  pragma](#the-contextvar-pragma)); use the raw constructors there.
 - The feature is additive: code that never constructs a `ContextVar` pays
   one pointer field per `AsyncCallback` and a pointer copy per capture.
 - Cross-thread scheduling (`callSoon` on another thread's dispatcher via

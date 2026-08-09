@@ -15,9 +15,16 @@
 ## process-lifetime lock on `newContextVar` doesn't impose an import
 ## order on this file relative to the other contextvars test files.
 
-import std/[algorithm, macros, sequtils, strutils, tables]
+import std/[algorithm, sequtils, strutils, tables]
 import unittest2
 import ../chronos/contextvars
+
+when (NimMajor, NimMinor) >= (2, 0):
+  # Only the `{.contextVar.}` pragma-sugar suite at the tail of this file
+  # needs `macros` — that pragma itself is 2.x-only (macro pragmas on
+  # `let`/`var` sections don't exist in the 1.6 compiler), so the suite
+  # and this import are gated together.
+  import std/macros
 
 {.used.}
 
@@ -36,16 +43,16 @@ proc entryFor(entries: seq[ContextVarEntry], name: string): ContextVarEntry =
 
 # --- Scoped binding fixtures --------------------------------------------------
 
-let tracerInt {.contextVar.} = 0
-let tracerStr {.contextVar.} = "default"
+let tracerInt = newContextVar("tracerInt", 0)
+let tracerStr = newContextVar("tracerStr", "default")
 
 # No `*` marker — module-private; value/binder must still work within
 # this same module.
-let privateOnlyVar {.contextVar.} = 0
+let privateOnlyVar = newContextVar("privateOnlyVar", 0)
 
 # One starred, one not — each honors its own marker independently.
-let mixedPublic* {.contextVar.} = 10
-let mixedPrivate {.contextVar.} = 20
+let mixedPublic* = newContextVar("mixedPublic", 10, private = false)
+let mixedPrivate = newContextVar("mixedPrivate", 20)
 
 suite "contextvars: declaration + scoped binding":
 
@@ -344,7 +351,7 @@ suite "contextvars (raw key): ambient value and withValue":
 # counter. Both are debug-only (when defined(chronosDebug)); the test
 # build defines it.
 
-let probeInt {.contextVar.} = 0
+let probeInt = newContextVar("probeInt", 0)
 
 suite "contextvars: binder contract":
 
@@ -391,7 +398,7 @@ suite "contextvars: binder contract":
 
 # --- AsyncContext identity (==) ----------------------------------------------
 
-let identA {.contextVar.} = 0
+let identA = newContextVar("identA", 0)
 
 suite "contextvars: AsyncContext identity (==)":
 
@@ -446,7 +453,7 @@ suite "contextvars: AsyncContext identity (==)":
 
 # --- Snapshot AsyncContext and [] --------------------------------------------
 
-let snapOuter {.contextVar.} = 0
+let snapOuter = newContextVar("snapOuter", 0)
 
 suite "contextvars (raw key): snapshot AsyncContext and []":
 
@@ -508,7 +515,7 @@ suite "contextvars (raw key): snapshot AsyncContext and []":
 
 # --- Must-bind (default-less) keys -------------------------------------------
 
-var mustBindVar {.contextVar.}: int    # must-bind: no `= default`
+let mustBindVar = newRequiredContextVar[int]("mustBindVar")    # must-bind: no default
 
 suite "contextvars: must-bind (default-less) keys":
 
@@ -641,10 +648,10 @@ proc `$`(r: DerefDollarRef): string = "field=" & $r.field
 
 # Starred: dumpContext only ever sees a starred key's state — these
 # fixtures test dumpContext itself, so they must be visible to it.
-let dumpDefaulted* {.contextVar.} = 7
-var dumpMustBind* {.contextVar.}: string      # must-bind
-let dumpNoDollar* {.contextVar.}: NoDollarPtr = nil
-let dumpRefNilDefault* {.contextVar.}: DerefDollarRef = nil
+let dumpDefaulted* = newContextVar("dumpDefaulted", 7, private = false)
+let dumpMustBind* = newRequiredContextVar[string]("dumpMustBind", private = false)  # must-bind
+let dumpNoDollar* = newContextVar[NoDollarPtr]("dumpNoDollar", nil, private = false)
+let dumpRefNilDefault* = newContextVar[DerefDollarRef]("dumpRefNilDefault", nil, private = false)
 
 suite "contextvars: dumpContext and $":
 
@@ -792,8 +799,8 @@ suite "contextvars (raw key): dumpContext and $":
 
 # --- Empty (default/nil) AsyncContext ----------------------------------------
 
-let emptyCtxDefaulted {.contextVar.} = 3
-var emptyCtxMustBind {.contextVar.}: int    # must-bind
+let emptyCtxDefaulted = newContextVar("emptyCtxDefaulted", 3)
+let emptyCtxMustBind = newRequiredContextVar[int]("emptyCtxMustBind")    # must-bind
 
 suite "contextvars: empty (default/nil) AsyncContext":
 
@@ -804,151 +811,156 @@ suite "contextvars: empty (default/nil) AsyncContext":
       expect UnboundContextVarDefect:
         discard emptyCtxMustBind.value        # must-bind key raises
 
-# --- {.contextVar.} declaration sugar ----------------------------------------
+# The declaration-pragma sugar below, and everything that exercises it,
+# is 2.x-only: macro pragmas on `let`/`var` sections (what `{.contextVar.}`
+# relies on) do not exist in the 1.6 compiler. See chronos/contextvars.nim's
+# gate on the pragma's implementation for the underlying constraint.
+when (NimMajor, NimMinor) >= (2, 0):
+  # --- {.contextVar.} declaration sugar ----------------------------------------
 
-let t27Key* {.contextVar.} = 5
+  let t27Key* {.contextVar.} = 5
 
-let t28Hidden {.contextVar.} = "hidden"
-  ## No star -> private = true. Absence from `dumpContext` is what the
-  ## test checks; the symbol itself stays reachable within this module
-  ## (unlike cross-module unreachability, which
-  ## tests/testcontextvarsexport.nim covers).
+  let t28Hidden {.contextVar.} = "hidden"
+    ## No star -> private = true. Absence from `dumpContext` is what the
+    ## test checks; the symbol itself stays reachable within this module
+    ## (unlike cross-module unreachability, which
+    ## tests/testcontextvarsexport.nim covers).
 
-var t29MustBind* {.contextVar.}: string
+  var t29MustBind* {.contextVar.}: string
 
-let t30WidgetVar* {.contextVar.}: RenderWidget = nil
+  let t30WidgetVar* {.contextVar.}: RenderWidget = nil
 
-template t32Wrapper(nm: untyped; body: untyped): untyped =
-  ## Forwards to the sugar macro from inside another template, so the
-  ## identifier arrives as whatever node kind the wrapper's own
-  ## parameter resolves to (probing the nnkIdent/nnkSym duality
-  ## `splitContextVarNameAndPrivate` handles) — the successor to the
-  ## old macro's `declareViaMacro`/`declareViaSym` arm-name probes,
-  ## which tested the same nnkIdent/nnkSym duality for the statement
-  ## macro this pragma replaced.
-  let nm* {.contextVar.} = body
+  template t32Wrapper(nm: untyped; body: untyped): untyped =
+    ## Forwards to the sugar macro from inside another template, so the
+    ## identifier arrives as whatever node kind the wrapper's own
+    ## parameter resolves to (probing the nnkIdent/nnkSym duality
+    ## `splitContextVarNameAndPrivate` handles) — the successor to the
+    ## old macro's `declareViaMacro`/`declareViaSym` arm-name probes,
+    ## which tested the same nnkIdent/nnkSym duality for the statement
+    ## macro this pragma replaced.
+    let nm* {.contextVar.} = body
 
-t32Wrapper(t32Wrapped, 777)
+  t32Wrapper(t32Wrapped, 777)
 
-suite "contextvars (raw key): {.contextVar.} declaration sugar":
+  suite "contextvars (raw key): {.contextVar.} declaration sugar":
 
-  test "starred let, T inferred: name, registration, and value":
-    check t27Key.name == "t27Key"
-    check t27Key.value == 5
-    check dumpContext(currentContext()).anyIt(it.name == "t27Key")
+    test "starred let, T inferred: name, registration, and value":
+      check t27Key.name == "t27Key"
+      check t27Key.value == 5
+      check dumpContext(currentContext()).anyIt(it.name == "t27Key")
 
-  test "unstarred: private, absent from dumpContext":
-    check t28Hidden.name == "t28Hidden"
-    check t28Hidden.private == true
-    check not dumpContext(currentContext()).anyIt(it.name == "t28Hidden")
+    test "unstarred: private, absent from dumpContext":
+      check t28Hidden.name == "t28Hidden"
+      check t28Hidden.private == true
+      check not dumpContext(currentContext()).anyIt(it.name == "t28Hidden")
 
-  test "must-bind var form: unbound read raises with varName":
-    check t29MustBind.hasDefault == false
-    try:
-      discard t29MustBind.value
-      check false
-    except UnboundContextVarDefect as e:
-      check e.varName == "t29MustBind"
-    t29MustBind.withValue("bound"):
-      check t29MustBind.value == "bound"
+    test "must-bind var form: unbound read raises with varName":
+      check t29MustBind.hasDefault == false
+      try:
+        discard t29MustBind.value
+        check false
+      except UnboundContextVarDefect as e:
+        check e.varName == "t29MustBind"
+      t29MustBind.withValue("bound"):
+        check t29MustBind.value == "bound"
 
-  test "explicit-T-with-nil-default ref form":
-    check t30WidgetVar.name == "t30WidgetVar"
-    check t30WidgetVar.value == nil
-    check dumpContext(currentContext()).entryFor("t30WidgetVar").value == "nil"
+    test "explicit-T-with-nil-default ref form":
+      check t30WidgetVar.name == "t30WidgetVar"
+      check t30WidgetVar.value == nil
+      check dumpContext(currentContext()).entryFor("t30WidgetVar").value == "nil"
 
-  test "one-symbol emission: no derived identifiers":
-    check declared(t27Key)
-    check not declared(withT27Key)
-    check not declared(T27KeySlot)
-    check not declared(t27KeyContextVarReg)
-    check not declared(t27KeyContextVarRender)
+    test "one-symbol emission: no derived identifiers":
+      check declared(t27Key)
+      check not declared(withT27Key)
+      check not declared(T27KeySlot)
+      check not declared(t27KeyContextVarReg)
+      check not declared(t27KeyContextVarRender)
 
-  test "wrapper-template composition: sugar invoked through a forwarding template":
-    check t32Wrapped.name == "t32Wrapped"
-    check t32Wrapped.value == 777
+    test "wrapper-template composition: sugar invoked through a forwarding template":
+      check t32Wrapped.name == "t32Wrapped"
+      check t32Wrapped.value == 777
 
-# --- {.contextVar.} grammar enforcement (var/let) ----------------------------
-# The pragma macro rejects the wrong keyword rather than silently
-# accepting it: a defaulted key (has `= default`) must be a `let`; a
-# must-bind key (no default) must be a `var`. `when not compiles` proves
-# the rejection is a compile error, not a runtime check.
+  # --- {.contextVar.} grammar enforcement (var/let) ----------------------------
+  # The pragma macro rejects the wrong keyword rather than silently
+  # accepting it: a defaulted key (has `= default`) must be a `let`; a
+  # must-bind key (no default) must be a `var`. `when not compiles` proves
+  # the rejection is a compile error, not a runtime check.
 
-static:
-  doAssert not compiles((var t33WrongKeyword {.contextVar.} = 5)),
-    "a defaulted {.contextVar.} key spelled with `var` must not compile " &
-    "— defaulted keys require `let`"
-  doAssert not compiles((let t34WrongKeyword {.contextVar.}: int)),
-    "a must-bind {.contextVar.} key spelled with `let` must not compile " &
-    "— must-bind keys require `var`"
+  static:
+    doAssert not compiles((var t33WrongKeyword {.contextVar.} = 5)),
+      "a defaulted {.contextVar.} key spelled with `var` must not compile " &
+      "— defaulted keys require `let`"
+    doAssert not compiles((let t34WrongKeyword {.contextVar.}: int)),
+      "a must-bind {.contextVar.} key spelled with `let` must not compile " &
+      "— must-bind keys require `var`"
 
-# --- {.contextVar.} grammar enforcement (single identifier) ------------------
-# Nim's own pragma-on-identifier syntax admits only one name per
-# `{.contextVar.}`-tagged declaration (a second name in the same
-# `IdentDefs` is already a parser-level error, before the macro ever
-# runs), so the macro's own `def.len != 1` arity check — guarding a
-# `let`/`var` *section* carrying more than one declaration — has no
-# ordinary-syntax way to reach it. `t35MultiIdentDecl` drives it
-# directly by handing the macro a hand-built two-declaration section,
-# the same macro-composition approach `t32Wrapper` above uses to reach
-# the nnkIdent/nnkSym duality.
+  # --- {.contextVar.} grammar enforcement (single identifier) ------------------
+  # Nim's own pragma-on-identifier syntax admits only one name per
+  # `{.contextVar.}`-tagged declaration (a second name in the same
+  # `IdentDefs` is already a parser-level error, before the macro ever
+  # runs), so the macro's own `def.len != 1` arity check — guarding a
+  # `let`/`var` *section* carrying more than one declaration — has no
+  # ordinary-syntax way to reach it. `t35MultiIdentDecl` drives it
+  # directly by handing the macro a hand-built two-declaration section,
+  # the same macro-composition approach `t32Wrapper` above uses to reach
+  # the nnkIdent/nnkSym duality.
 
-macro t35MultiIdentDecl(): untyped =
-  var multi = newNimNode(nnkLetSection)
-  multi.add newIdentDefs(ident("t35A"), newEmptyNode(), newLit(1))
-  multi.add newIdentDefs(ident("t35B"), newEmptyNode(), newLit(2))
-  getAst(contextVar(multi))
+  macro t35MultiIdentDecl(): untyped =
+    var multi = newNimNode(nnkLetSection)
+    multi.add newIdentDefs(ident("t35A"), newEmptyNode(), newLit(1))
+    multi.add newIdentDefs(ident("t35B"), newEmptyNode(), newLit(2))
+    getAst(contextVar(multi))
 
-static:
-  doAssert not compiles((t35MultiIdentDecl())),
-    "a {.contextVar.} section naming more than one declaration must " &
-    "not compile — the pragma supports exactly one identifier per " &
-    "declaration"
+  static:
+    doAssert not compiles((t35MultiIdentDecl())),
+      "a {.contextVar.} section naming more than one declaration must " &
+      "not compile — the pragma supports exactly one identifier per " &
+      "declaration"
 
-# --- {.contextVar.} pragma-argument override (dump-visibility) --------------
-# `{.contextVar: (private: <bool>).}` decouples a declaration's
-# dumpContext visibility from its own export marker — see
-# docs/src/contextvars.md, "The `{.contextVar.}` pragma", "Overriding
-# dump-visibility". Default (no argument) behavior is unchanged and
-# covered above; these tests cover both override directions, the
-# argument's interaction with the let/var grammar enforcement, and a
-# `not compiles` pin for a malformed argument.
+  # --- {.contextVar.} pragma-argument override (dump-visibility) --------------
+  # `{.contextVar: (private: <bool>).}` decouples a declaration's
+  # dumpContext visibility from its own export marker — see
+  # docs/src/contextvars.md, "The `{.contextVar.}` pragma", "Overriding
+  # dump-visibility". Default (no argument) behavior is unchanged and
+  # covered above; these tests cover both override directions, the
+  # argument's interaction with the let/var grammar enforcement, and a
+  # `not compiles` pin for a malformed argument.
 
-let t36ExportedPrivate* {.contextVar: (private: true).} = 1
-  ## Exported (star) but overridden private -> absent from dumpContext
-  ## despite the star.
+  let t36ExportedPrivate* {.contextVar: (private: true).} = 1
+    ## Exported (star) but overridden private -> absent from dumpContext
+    ## despite the star.
 
-let t37UnexportedVisible {.contextVar: (private: false).} = 2
-  ## Unexported (no star) but overridden non-private -> present in
-  ## dumpContext despite the missing star.
+  let t37UnexportedVisible {.contextVar: (private: false).} = 2
+    ## Unexported (no star) but overridden non-private -> present in
+    ## dumpContext despite the missing star.
 
-var t38MustBindOverride* {.contextVar: (private: true).}: int
-  ## must-bind + override: the argument form must still enforce the
-  ## var/must-bind pairing.
+  var t38MustBindOverride* {.contextVar: (private: true).}: int
+    ## must-bind + override: the argument form must still enforce the
+    ## var/must-bind pairing.
 
-suite "contextvars (raw key): {.contextVar.} pragma-argument override":
+  suite "contextvars (raw key): {.contextVar.} pragma-argument override":
 
-  test "exported + private=true override: absent from dumpContext despite the star":
-    check t36ExportedPrivate.value == 1
-    check not dumpContext(currentContext()).anyIt(it.name == "t36ExportedPrivate")
+    test "exported + private=true override: absent from dumpContext despite the star":
+      check t36ExportedPrivate.value == 1
+      check not dumpContext(currentContext()).anyIt(it.name == "t36ExportedPrivate")
 
-  test "unexported + private=false override: present in dumpContext despite no star":
-    check t37UnexportedVisible.value == 2
-    check dumpContext(currentContext()).anyIt(it.name == "t37UnexportedVisible")
+    test "unexported + private=false override: present in dumpContext despite no star":
+      check t37UnexportedVisible.value == 2
+      check dumpContext(currentContext()).anyIt(it.name == "t37UnexportedVisible")
 
-  test "override argument composes with must-bind (var) grammar":
-    check t38MustBindOverride.hasDefault == false
-    expect UnboundContextVarDefect:
-      discard t38MustBindOverride.value
-    t38MustBindOverride.withValue(9):
-      check t38MustBindOverride.value == 9
-    check not dumpContext(currentContext()).anyIt(it.name == "t38MustBindOverride")
+    test "override argument composes with must-bind (var) grammar":
+      check t38MustBindOverride.hasDefault == false
+      expect UnboundContextVarDefect:
+        discard t38MustBindOverride.value
+      t38MustBindOverride.withValue(9):
+        check t38MustBindOverride.value == 9
+      check not dumpContext(currentContext()).anyIt(it.name == "t38MustBindOverride")
 
-static:
-  doAssert not compiles((var t39WrongKeyword {.contextVar: (private: true).} = 5)),
-    "a defaulted {.contextVar: (private: ...).} key spelled with `var` " &
-    "must not compile — the argument form keeps the same let/var " &
-    "enforcement the default form has"
-  doAssert not compiles((let t40BadArg {.contextVar: (private: 1).} = 5)),
-    "a malformed {.contextVar: (private: ...).} argument (a non-bool " &
-    "value) must not compile"
+  static:
+    doAssert not compiles((var t39WrongKeyword {.contextVar: (private: true).} = 5)),
+      "a defaulted {.contextVar: (private: ...).} key spelled with `var` " &
+      "must not compile — the argument form keeps the same let/var " &
+      "enforcement the default form has"
+    doAssert not compiles((let t40BadArg {.contextVar: (private: 1).} = 5)),
+      "a malformed {.contextVar: (private: ...).} argument (a non-bool " &
+      "value) must not compile"
