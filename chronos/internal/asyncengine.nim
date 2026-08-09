@@ -189,7 +189,8 @@ template processTimersGetTimeout(loop, timeout: untyped) =
     if curTime < lastFinish:
       break
 
-    loop.callbacks.addLast(loop.timers.pop().function)
+    let callable = loop.timers.pop().function
+    loop.callbacks.addLast(callable)
 
   if loop.timers.len > 0:
     timeout = (lastFinish - curTime).getAsyncTimestamp()
@@ -213,7 +214,8 @@ template processTimers(loop: untyped) =
 
     if curTime < loop.timers[0].finishAt:
       break
-    loop.callbacks.addLast(loop.timers.pop().function)
+    let callable = loop.timers.pop().function
+    loop.callbacks.addLast(callable)
 
 template processIdlers(loop: untyped) =
   if len(loop.idlers) > 0:
