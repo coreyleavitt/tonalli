@@ -21,6 +21,7 @@ import ../[config, effects, futures, osdefs, oserrno, osutils, timer]
 
 import ./[asyncmacro, callbackqueue, errors]
 when chronosSimulation:
+  import std/algorithm
   import ./simengine
 when defined(windows):
   import ./contextnode
@@ -966,13 +967,16 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     res
 
   when chronosSimulation:
-    proc newSimDispatcher*(): PDispatcher =
+    proc newSimDispatcher*(oracle: SimOracle = defaultSimOracle()): PDispatcher =
       ## Construct a hermetic simulated dispatcher: `selector` stays
       ## nil, no fd or OS syscall is touched. `isSimDispatcher` and
       ## every provenance-guarded touch site key off `simState` being
       ## non-nil rather than off `selector` directly, since a future
       ## platform fork of this constructor may leave other real-only
-      ## fields at their zero value too.
+      ## fields at their zero value too. `oracle` drives the virtual
+      ## clock's `decideTime` choice point (3.4); a scripted stub before
+      ## S5's `RandomOracle` exists, defaulting to the earliest-deadline
+      ## advance rule.
       var res = PDispatcher(
         timers: initHeapQueue[TimerCallback](),
         callbacks: initCallbackQueue[AsyncCallback](chronosInitialSize),
@@ -980,7 +984,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
         keys: newSeq[ReadyKey](chronosInitialSize),
         trackers: initTable[string, TrackerBase](),
         counters: initTable[string, TrackerCounter](),
-        simState: newSimEngineState(),
+        simState: newSimEngineState(oracle = oracle),
       )
 
       when not chronosStrictReentrancy:
@@ -1340,11 +1344,12 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
         recv(SocketHandle(loop.wakeupFd[1]), addr dummy[0], cint(len(dummy)), cint(0))
       )
 
-  template pollSelectTouchpoint(loop: PDispatcher, curTimeout,
+  template pollRealSelectBranch(loop: PDispatcher, curTimeout,
                                  count, hasWakeup: untyped) =
-    ## Extension point (RFC 0003 3.5): seeded here so a later simulation
-    ## slice edits this template, never `poll()` itself again. Real-mode
-    ## body only in this slice - unchanged from before the extraction.
+    ## The touchpoint's real-mode body, unchanged from before the sim
+    ## branch below was added - split into its own template purely so
+    ## `pollSelectTouchpoint` can select between the two without
+    ## duplicating either.
     count = loop.selector.selectInto2(curTimeout, loop.keys).valueOr:
       raiseOsDefect(error, "poll(): Unable to get OS events")
 
@@ -1381,6 +1386,39 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       # since we don't have to poll as often under load and we can
       # batch more work in a single event loop iteration.
       loop.keys.setLen(min(loop.keys.len * 2, chronosEventsCount))
+
+  when chronosSimulation:
+    template pollSimSelectBranch(loop: PDispatcher, count, hasWakeup: untyped) =
+      ## RFC 0003 3.5's sim iteration, S3 scope: no sim event set exists
+      ## yet (S4), so `decideBatch` is never reached. Drain already-queued
+      ## work, else advance the virtual clock past the nearest armed
+      ## timer via `decideTime`, else quiescence.
+      hasWakeup = false
+      if len(loop.callbacks) > 0 or len(loop.idlers) > 0 or len(loop.ticks) > 0:
+        count = 0
+      else:
+        var armed: seq[Moment] = @[]
+        for i in 0 ..< loop.timers.len:
+          if not loop.timers[i].function.function.isNil:
+            armed.add loop.timers[i].finishAt
+        if armed.len > 0:
+          sort(armed)
+          discard loop.simState.simDecideTimeAdvance(armed, curTime)
+          count = 0
+        else:
+          raiseAssert "deadlock: no runnable work"
+
+  template pollSelectTouchpoint(loop: PDispatcher, curTimeout,
+                                 count, hasWakeup: untyped) =
+    ## Extension point (RFC 0003 3.5): seeded here so a later simulation
+    ## slice edits this template, never `poll()` itself again.
+    when chronosSimulation:
+      if loop.isSimDispatcher():
+        pollSimSelectBranch(loop, count, hasWakeup)
+      else:
+        pollRealSelectBranch(loop, curTimeout, count, hasWakeup)
+    else:
+      pollRealSelectBranch(loop, curTimeout, count, hasWakeup)
 
   template pollWakeupTouchpoint(loop: PDispatcher, hasWakeup: untyped) =
     ## Extension point (RFC 0003 3.5), same discipline as
