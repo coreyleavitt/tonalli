@@ -54,6 +54,18 @@ suite "digestOf pinned grammar":
   test "digest of two armed deadlines joins with 0x00":
     check $digestOf(@[100'i64, 200'i64]) == "a6d89faff2f023a2"
 
+  test "digest of an io outcome point with no faults":
+    check $digestOf(SimEventId(1'u64), SimEndpointId(2'u32), "read", 64,
+                     newSeq[string]()) == "7797b815e66df923"
+
+  test "digest of an io outcome point changes with maxBytes":
+    check $digestOf(SimEventId(1'u64), SimEndpointId(2'u32), "read", 128,
+                     newSeq[string]()) == "eb74721e31240cc4"
+
+  test "digest of an io outcome point with a fault":
+    check $digestOf(SimEventId(1'u64), SimEndpointId(2'u32), "write", 64,
+                     @["reset"]) == "224e66f4bb617941"
+
 suite "sim decision-log writer":
   test "the header line carries trace name, version, seed, commit, config":
     let path = getTempDir() / "chronos-simtrace-header.ndjson"
@@ -99,4 +111,127 @@ suite "sim decision-log writer":
     let lines = readFile(path).splitLines()
     check "\"i\":0" in lines[1]
     check "\"i\":1" in lines[2]
+    removeFile(path)
+
+  test "an io decision line with an Ok outcome carries its bytes":
+    let path = getTempDir() / "chronos-simtrace-io-ok.ndjson"
+    var writer = openSimTraceWriter(path, seed = 1'u64)
+    writer.writeIoDecision(SimEventId(1'u64), SimEndpointId(2'u32), "read",
+                            64, newSeq[string](), "ok", 64, "")
+    writer.close()
+    let lines = readFile(path).splitLines()
+    let digest = digestOf(SimEventId(1'u64), SimEndpointId(2'u32), "read",
+                           64, newSeq[string]())
+    check lines[1] ==
+      "{\"i\":0,\"kind\":\"io\",\"digest\":\"" & $digest &
+      "\",\"decision\":{\"outcome\":\"ok\",\"bytes\":64}}"
+    removeFile(path)
+
+  test "an io decision line with a Fault outcome carries its fault":
+    let path = getTempDir() / "chronos-simtrace-io-fault.ndjson"
+    var writer = openSimTraceWriter(path, seed = 1'u64)
+    writer.writeIoDecision(SimEventId(1'u64), SimEndpointId(2'u32), "write",
+                            64, @["reset"], "fault", 0, "reset")
+    writer.close()
+    let lines = readFile(path).splitLines()
+    let digest = digestOf(SimEventId(1'u64), SimEndpointId(2'u32), "write",
+                           64, @["reset"])
+    check lines[1] ==
+      "{\"i\":0,\"kind\":\"io\",\"digest\":\"" & $digest &
+      "\",\"decision\":{\"outcome\":\"fault\",\"fault\":\"reset\"}}"
+    removeFile(path)
+
+suite "sim trace reader":
+  test "reads back the header a writer wrote":
+    let path = getTempDir() / "chronos-simtrace-read-header.ndjson"
+    var writer = openSimTraceWriter(path, seed = 12648430'u64,
+                                     commit = "abc123", config = "refc")
+    writer.close()
+    let trace = readSimTrace(path)
+    check trace.header.seed == 12648430'u64
+    check trace.header.commit == "abc123"
+    check trace.header.config == "refc"
+    check trace.records.len == 0
+    removeFile(path)
+
+  test "reads back a time decision":
+    let path = getTempDir() / "chronos-simtrace-read-time.ndjson"
+    var writer = openSimTraceWriter(path, seed = 1'u64)
+    writer.writeTimeDecision(@[100'i64, 200'i64], 150'i64)
+    writer.close()
+    let trace = readSimTrace(path)
+    check trace.records.len == 1
+    check trace.records[0].index == 0
+    check trace.records[0].kind == SimTraceRecordKind.Time
+    check trace.records[0].digest == digestOf(@[100'i64, 200'i64])
+    check trace.records[0].advanceToNanoseconds == 150'i64
+    removeFile(path)
+
+  test "reads back a batch decision":
+    let path = getTempDir() / "chronos-simtrace-read-batch.ndjson"
+    var writer = openSimTraceWriter(path, seed = 1'u64)
+    let deliverable = @[SimEventId(1'u64), SimEventId(2'u64)]
+    let order = @[SimEventId(2'u64), SimEventId(1'u64)]
+    writer.writeBatchDecision(deliverable, order)
+    writer.close()
+    let trace = readSimTrace(path)
+    check trace.records.len == 1
+    check trace.records[0].kind == SimTraceRecordKind.Batch
+    check trace.records[0].digest == digestOf(deliverable)
+    check trace.records[0].order == order
+    removeFile(path)
+
+  test "reads back an io decision with an Ok outcome":
+    let path = getTempDir() / "chronos-simtrace-read-io-ok.ndjson"
+    var writer = openSimTraceWriter(path, seed = 1'u64)
+    writer.writeIoDecision(SimEventId(1'u64), SimEndpointId(2'u32), "read",
+                            64, newSeq[string](), "ok", 64, "")
+    writer.close()
+    let trace = readSimTrace(path)
+    check trace.records.len == 1
+    check trace.records[0].kind == SimTraceRecordKind.Io
+    check trace.records[0].digest ==
+      digestOf(SimEventId(1'u64), SimEndpointId(2'u32), "read", 64,
+               newSeq[string]())
+    check trace.records[0].outcome == "ok"
+    check trace.records[0].bytes == 64
+
+  test "reads back an io decision with a Fault outcome":
+    let path = getTempDir() / "chronos-simtrace-read-io-fault.ndjson"
+    var writer = openSimTraceWriter(path, seed = 1'u64)
+    writer.writeIoDecision(SimEventId(1'u64), SimEndpointId(2'u32), "write",
+                            64, @["reset"], "fault", 0, "reset")
+    writer.close()
+    let trace = readSimTrace(path)
+    check trace.records[0].outcome == "fault"
+    check trace.records[0].fault == "reset"
+    removeFile(path)
+
+  test "the decision index round-trips across multiple records":
+    let path = getTempDir() / "chronos-simtrace-read-index.ndjson"
+    var writer = openSimTraceWriter(path, seed = 1'u64)
+    writer.writeTimeDecision(@[100'i64], 100'i64)
+    writer.writeBatchDecision(@[SimEventId(1'u64)], @[SimEventId(1'u64)])
+    writer.close()
+    let trace = readSimTrace(path)
+    check trace.records[0].index == 0
+    check trace.records[1].index == 1
+    removeFile(path)
+
+  test "a mismatched trace version is refused":
+    let path = getTempDir() / "chronos-simtrace-read-badversion.ndjson"
+    writeFile(path,
+      "{\"trace\":\"chronos-sim\",\"v\":99,\"seed\":1,\"commit\":\"\"," &
+      "\"config\":\"\"}\n")
+    expect SimTraceReadError:
+      discard readSimTrace(path)
+    removeFile(path)
+
+  test "a mismatched trace format name is refused":
+    let path = getTempDir() / "chronos-simtrace-read-badformat.ndjson"
+    writeFile(path,
+      "{\"trace\":\"not-chronos-sim\",\"v\":1,\"seed\":1,\"commit\":\"\"," &
+      "\"config\":\"\"}\n")
+    expect SimTraceReadError:
+      discard readSimTrace(path)
     removeFile(path)

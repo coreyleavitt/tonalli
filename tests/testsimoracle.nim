@@ -229,3 +229,129 @@ suite "sim PCT-primitive oracle (interface freeze gate)":
     # two sources flip winner on the next decision with no new choice type
     let secondDecision = state.simDecideBatch(@[evA, evB])
     check secondDecision.order == @[SimEventId(2'u64), SimEventId(1'u64)]
+
+# --- S7: ReplayOracle, constructed from a recorded trace, verifying each
+# live choice point's digest against the recorded one via the shared
+# `digestOf` and returning the recorded decision (RFC 0003 3.3, 3.7).
+
+suite "sim ReplayOracle":
+  test "replay reproduces a recorded decideBatch decision":
+    let path = getTempDir() / "chronos-simreplay-batch.ndjson"
+    var writer = openSimTraceWriter(path, seed = 1'u64)
+    writer.writeBatchDecision(@[SimEventId(1'u64), SimEventId(2'u64), SimEventId(3'u64)],
+                               @[SimEventId(3'u64), SimEventId(1'u64), SimEventId(2'u64)])
+    writer.close()
+    let oracle = ReplayOracle(path)
+    let state = newSimEngineState(oracle = oracle)
+    let events = deliverableOf([1'u64, 2, 3])
+    let decision = state.simDecideBatch(events)
+    check decision.order == @[SimEventId(3'u64), SimEventId(1'u64), SimEventId(2'u64)]
+    removeFile(path)
+
+  test "replay reproduces a recorded decideTime decision":
+    let path = getTempDir() / "chronos-simreplay-time.ndjson"
+    var writer = openSimTraceWriter(path, seed = 1'u64)
+    writer.writeTimeDecision(@[500'i64, 900'i64], 500'i64)
+    writer.close()
+    let oracle = ReplayOracle(path)
+    let state = newSimEngineState(oracle = oracle)
+    let armed = @[Moment.init(500, Nanosecond), Moment.init(900, Nanosecond)]
+    let advanceTo = state.simDecideTimeAdvance(armed, Moment.init(0, Nanosecond))
+    check advanceTo == armed[0]
+    removeFile(path)
+
+  test "replay reproduces a recorded decideIo decision":
+    let path = getTempDir() / "chronos-simreplay-io.ndjson"
+    var writer = openSimTraceWriter(path, seed = 1'u64)
+    writer.writeIoDecision(SimEventId(1'u64), SimEndpointId(2'u32), "read",
+                            64, newSeq[string](), "ok", 64, "")
+    writer.close()
+    let oracle = ReplayOracle(path)
+    let state = newSimEngineState(oracle = oracle)
+    let cp = IoOutcomePoint(trigger: SimEventId(1'u64),
+      endpoint: SimEndpointId(2'u32), op: SimIoOp.Read, maxBytes: 64,
+      faults: {})
+    let decision = state.simDecideIo(cp)
+    check decision.outcome == SimIoOutcome.Ok
+    check decision.bytes == 64
+    removeFile(path)
+
+  test "a live decideBatch digest mismatch fails as a named divergence":
+    let path = getTempDir() / "chronos-simreplay-mismatch.ndjson"
+    var writer = openSimTraceWriter(path, seed = 1'u64)
+    writer.writeBatchDecision(@[SimEventId(1'u64), SimEventId(2'u64)],
+                               @[SimEventId(2'u64), SimEventId(1'u64)])
+    writer.close()
+    let oracle = ReplayOracle(path)
+    let state = newSimEngineState(oracle = oracle)
+    # a different deliverable set than what was recorded: the live digest
+    # diverges from the recorded one at index 0
+    let events = deliverableOf([1'u64, 2, 3])
+    try:
+      discard state.simDecideBatch(events)
+      check false
+    except AssertionDefect as exc:
+      check "replay divergence" in exc.msg
+      check "index 0" in exc.msg
+    removeFile(path)
+
+  test "a payload-changed io fixture (same ids, different maxBytes) is detected divergence":
+    let path = getTempDir() / "chronos-simreplay-io-mismatch.ndjson"
+    var writer = openSimTraceWriter(path, seed = 1'u64)
+    writer.writeIoDecision(SimEventId(1'u64), SimEndpointId(2'u32), "read",
+                            64, newSeq[string](), "ok", 64, "")
+    writer.close()
+    let oracle = ReplayOracle(path)
+    let state = newSimEngineState(oracle = oracle)
+    # same trigger/endpoint/op/faults as the fixture, but a different
+    # maxBytes: the payload digest diverges even though every id matches
+    let cp = IoOutcomePoint(trigger: SimEventId(1'u64),
+      endpoint: SimEndpointId(2'u32), op: SimIoOp.Read, maxBytes: 128,
+      faults: {})
+    try:
+      discard state.simDecideIo(cp)
+      check false
+    except AssertionDefect as exc:
+      check "replay divergence" in exc.msg
+    removeFile(path)
+
+  test "replay exhaustion is reported, not a silent default decision":
+    let path = getTempDir() / "chronos-simreplay-exhausted.ndjson"
+    var writer = openSimTraceWriter(path, seed = 1'u64)
+    writer.writeBatchDecision(@[SimEventId(1'u64)], @[SimEventId(1'u64)])
+    writer.close()
+    let oracle = ReplayOracle(path)
+    let state = newSimEngineState(oracle = oracle)
+    let events = deliverableOf([1'u64])
+    discard state.simDecideBatch(events)   # consumes the sole recorded decision
+    try:
+      discard state.simDecideBatch(events)
+      check false
+    except AssertionDefect as exc:
+      check "exhausted" in exc.msg
+    removeFile(path)
+
+  test "a recorded-kind mismatch names both the recorded and live choice points":
+    let path = getTempDir() / "chronos-simreplay-kind-mismatch.ndjson"
+    var writer = openSimTraceWriter(path, seed = 1'u64)
+    writer.writeTimeDecision(@[100'i64], 100'i64)
+    writer.close()
+    let oracle = ReplayOracle(path)
+    let state = newSimEngineState(oracle = oracle)
+    let events = deliverableOf([1'u64])
+    try:
+      discard state.simDecideBatch(events)
+      check false
+    except AssertionDefect as exc:
+      check "Time" in exc.msg
+      check "Batch" in exc.msg
+    removeFile(path)
+
+  test "a mismatched trace version is refused at construction":
+    let path = getTempDir() / "chronos-simreplay-badversion.ndjson"
+    writeFile(path,
+      "{\"trace\":\"chronos-sim\",\"v\":99,\"seed\":1,\"commit\":\"\"," &
+      "\"config\":\"\"}\n")
+    expect SimTraceReadError:
+      discard ReplayOracle(path)
+    removeFile(path)

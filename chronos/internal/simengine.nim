@@ -27,7 +27,7 @@
 
 {.push raises: [], gcsafe.}
 
-import std/[algorithm, sets, tables]
+import std/[algorithm, sets, strutils, tables]
 import results
 import ../oserrno
 import ../timer
@@ -118,8 +118,11 @@ type
   SimOracleError* = object
     ## A value, not a `ref` exception, matching every in-tree `Result`
     ## error type (3.3's "Failure channel" note). Shared by every
-    ## choice point.
+    ## choice point. `expected`/`actual` carry a replay digest mismatch
+    ## (RFC 0003 3.3, 3.7's `ReplayOracle`); every other failure leaves
+    ## them at their zero value.
     msg*: string
+    expected*, actual*: SimDigest
 
   SimOracle* = object
     ## Fields private outside the sim modules; `newSimOracle` is the
@@ -256,6 +259,83 @@ proc RandomOracle*(seed: uint64): SimOracle =
       ids[i] = ev.id
     ok(BatchDecision(order: shuffled(rng, ids)))
   newSimOracle(decideBatch, defaultDecideIo, defaultDecideTime)
+
+proc ReplayOracle*(path: string): SimOracle
+                   {.raises: [IOError, SimTraceReadError].} =
+  ## Constructed from a recorded trace (RFC 0003 3.3, 3.7): at each choice
+  ## point, verifies the live digest against the next recorded one - via
+  ## the same `digestOf` the writer uses, so "digest mismatch" cannot mean
+  ## two different things - and returns the recorded decision. A version-
+  ## mismatched trace is refused here, at construction (3.7's version
+  ## gate, enforced by `readSimTrace`); a live digest diverging from the
+  ## recording is reported through the `Result` error channel as a
+  ## structured `SimOracleError` carrying the expected and actual digest,
+  ## never a silent wrong decision and never a Defect raised from inside
+  ## the oracle itself.
+  let records = readSimTrace(path).records
+  var cursor = 0
+
+  proc nextRecord(kind: SimTraceRecordKind, liveDigest: SimDigest):
+      Result[SimTraceRecord, SimOracleError] {.gcsafe, raises: [].} =
+    if cursor >= records.len:
+      return err(SimOracleError(msg: "replay exhausted: no recorded " &
+        "decision at index " & $cursor))
+    let rec = records[cursor]
+    if rec.kind != kind:
+      return err(SimOracleError(msg: "replay divergence at index " &
+        $cursor & ": recorded a " & $rec.kind & " decision, live run " &
+        "asked for " & $kind))
+    if rec.digest != liveDigest:
+      return err(SimOracleError(
+        msg: "replay divergence at index " & $cursor & " (" & $kind &
+          "): expected digest " & $rec.digest & ", live digest " &
+          $liveDigest,
+        expected: rec.digest, actual: liveDigest))
+    inc cursor
+    ok(rec)
+
+  proc decideBatch(cp: SelectBatchPoint):
+      Result[BatchDecision, SimOracleError] {.gcsafe, raises: [].} =
+    var ids = newSeq[SimEventId](cp.deliverable.len)
+    for i, ev in cp.deliverable:
+      ids[i] = ev.id
+    let recorded = nextRecord(SimTraceRecordKind.Batch, digestOf(ids))
+    if recorded.isErr:
+      return err(recorded.error)
+    ok(BatchDecision(order: recorded.get().order))
+
+  proc decideIo(cp: IoOutcomePoint):
+      Result[IoDecision, SimOracleError] {.gcsafe, raises: [].} =
+    var faultNames = newSeq[string]()
+    for f in cp.faults:
+      faultNames.add toLowerAscii($f)
+    let liveDigest = digestOf(cp.trigger, cp.endpoint, toLowerAscii($cp.op),
+                               cp.maxBytes, faultNames)
+    let recorded = nextRecord(SimTraceRecordKind.Io, liveDigest)
+    if recorded.isErr:
+      return err(recorded.error)
+    let rec = recorded.get()
+    if rec.outcome == "ok":
+      return ok(IoDecision(outcome: SimIoOutcome.Ok, bytes: rec.bytes))
+    case rec.fault
+    of "reset":
+      ok(IoDecision(outcome: SimIoOutcome.Fault, fault: SimFault.Reset))
+    else:
+      err(SimOracleError(msg: "replay: unrecognized fault name in " &
+        "trace: " & rec.fault))
+
+  proc decideTime(cp: TimeAdvancePoint):
+      Result[TimeDecision, SimOracleError] {.gcsafe, raises: [].} =
+    var deadlines = newSeq[int64](cp.armed.len)
+    for i, m in cp.armed:
+      deadlines[i] = m.epochNanoSeconds
+    let recorded = nextRecord(SimTraceRecordKind.Time, digestOf(deadlines))
+    if recorded.isErr:
+      return err(recorded.error)
+    ok(TimeDecision(
+      advanceTo: Moment.init(recorded.get().advanceToNanoseconds, Nanosecond)))
+
+  newSimOracle(decideBatch, decideIo, decideTime)
 
 proc newSimEngineState*(startValue: int = 0,
                          oracle: SimOracle = defaultSimOracle()): SimEngineState =
