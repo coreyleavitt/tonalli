@@ -14,12 +14,14 @@
 ## `decideBatch` choice point (readiness/arrival delivery order, oracle
 ## interface, and the registration-routing bookkeeping that lets
 ## sim-minted fds carry armed reader/writer interest with no selector).
+## Also `RandomOracle`, the seeded stock oracle scripted stub oracles are
+## an alternative to.
 ##
-## Imported by `chronos/internal/asyncengine.nim` under
-## `-d:chronosSimulation`; this module never imports it back, so a
-## simulated `Dispatcher`'s construction fork, provenance-guarded touch
-## sites, and poll-loop extension points are the only consumers of the
-## types below.
+## Imports and re-exports `chronos/internal/simtrace.nim` for the
+## entity-id types every choice point and decision carries; this module
+## never imports `chronos/internal/asyncengine.nim` back, so a simulated
+## `Dispatcher`'s construction fork, provenance-guarded touch sites, and
+## poll-loop extension points are the only consumers of the types below.
 
 {.push raises: [], gcsafe.}
 
@@ -29,6 +31,9 @@ import ../oserrno
 import ../timer
 import ../futures
 import ./simclock
+import ./simtrace
+
+export simtrace
 
 type
   SimBarrierError* = object of CatchableError
@@ -50,21 +55,6 @@ type
       ## Engine-validated: must be `>= armed[0]` and `>=` the current
       ## virtual clock. A violation is a structured failure (3.5), never
       ## a silent or backward clock write.
-
-  SimEventId* = distinct uint64
-    ## Monotonic per-run counter (RFC 0003 3.3.1): every `SimEvent`, a
-    ## `Readiness` completion or an `Arrival` batch alike, gets its id
-    ## from one counter owned by `SimEngineState`, so ids sort into a
-    ## single total order regardless of which choice point produced
-    ## them.
-
-  SimEndpointId* = distinct uint32
-    ## The id of a `SimEvent`'s source. At this slice, `Readiness`
-    ## events derive it directly from the sim-minted fd their interest
-    ## was armed against - itself already a `mintSimFd` counter value,
-    ## so this stays pointer-free per 3.3.1 without a second minting
-    ## counter. A real transport endpoint identity (`SimNet`, S11a) may
-    ## supersede this mapping without changing the type.
 
   SimEventKind* {.pure.} = enum
     Readiness  ## a simulated endpoint has a completion for a registered callback
@@ -141,15 +131,6 @@ const
     ## unchanged `Result` signature instead of touching a real fd or a
     ## nil selector.
 
-proc `==`*(a, b: SimEventId): bool {.borrow.}
-proc `<`*(a, b: SimEventId): bool {.borrow.}
-proc `$`*(id: SimEventId): string =
-  "e" & $uint64(id)
-
-proc `==`*(a, b: SimEndpointId): bool {.borrow.}
-proc `$`*(id: SimEndpointId): string =
-  "p" & $uint32(id)
-
 proc newSimOracle*(
     decideBatch: proc(cp: SelectBatchPoint):
       Result[BatchDecision, SimOracleError] {.gcsafe, raises: [].},
@@ -178,6 +159,47 @@ proc defaultSimOracle*(): SimOracle =
   ## jumps straight to the earliest armed deadline (S3), `decideBatch`
   ## delivers everything deliverable in sorted order (S4).
   newSimOracle(defaultDecideBatch, defaultDecideTime)
+
+type
+  SplitMix64 = object
+    ## A self-contained generator, not `std/random`'s global state (RFC
+    ## 0003 3.3's "Statefulness" note: an oracle's mutable state lives in
+    ## its closure captures). Algorithm: Vigna/Steele's splitmix64.
+    state: uint64
+
+proc initSplitMix64(seed: uint64): SplitMix64 =
+  SplitMix64(state: seed)
+
+proc next(rng: var SplitMix64): uint64 =
+  rng.state = rng.state + 0x9E3779B97F4A7C15'u64
+  var z = rng.state
+  z = (z xor (z shr 30)) * 0xBF58476D1CE4E5B9'u64
+  z = (z xor (z shr 27)) * 0x94D049BB133111EB'u64
+  z xor (z shr 31)
+
+proc shuffled(rng: var SplitMix64, ids: seq[SimEventId]): seq[SimEventId] =
+  ## Fisher-Yates over `ids`, draws from `rng`.
+  result = ids
+  for i in countdown(result.high, 1):
+    let j = int(rng.next() mod uint64(i + 1))
+    swap(result[i], result[j])
+
+proc RandomOracle*(seed: uint64): SimOracle =
+  ## A seeded oracle (RFC 0003 3.3, 3.7): the same seed produces the
+  ## same decisions on every run. `decideBatch` shuffles `deliverable`
+  ## into a random legal delivery order, the sim analogue of N2's
+  ## OS-chosen cross-fd batch order; `decideTime` uses the same
+  ## earliest-armed-deadline rule as `defaultSimOracle` - randomizing
+  ## among armed deadlines is exploration-oracle territory (issue #10),
+  ## out of scope here.
+  var rng = initSplitMix64(seed)
+  proc decideBatch(cp: SelectBatchPoint):
+      Result[BatchDecision, SimOracleError] {.gcsafe, raises: [].} =
+    var ids = newSeq[SimEventId](cp.deliverable.len)
+    for i, ev in cp.deliverable:
+      ids[i] = ev.id
+    ok(BatchDecision(order: shuffled(rng, ids)))
+  newSimOracle(decideBatch, defaultDecideTime)
 
 proc newSimEngineState*(startValue: int = 0,
                          oracle: SimOracle = defaultSimOracle()): SimEngineState =

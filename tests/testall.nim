@@ -14,7 +14,7 @@ import
     teststream, testserver, testbugs, testnet, testasyncstream, testhttpserver,
     testshttpserver, testhttpclient, testratelimit, testfutures, testthreadsync,
     testasyncsemaphore, testmpsc, testcallbackqueue, testsimclock,
-    testsimengine, testsimloop,
+    testsimengine, testsimloop, testsimtrace, testsimoracle,
   ]
 
 import
