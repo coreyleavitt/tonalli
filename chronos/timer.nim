@@ -23,9 +23,13 @@
 ##
 ## You can specify which timer you want to use ``-d:asyncTimer=<system/mono>``.
 import stew/base10
+import "."/config
 
 when not (defined(`any`) or defined(standalone)):
   import "."/osdefs
+
+when chronosSimulation:
+  import "."/internal/simclock
 
 const asyncTimer* {.strdefine.} = "mono"
 
@@ -415,6 +419,9 @@ func isInfinite*(a: Duration): bool {.inline.} =
 
 proc now*(t: typedesc[Moment]): Moment {.inline.} =
   ## Returns current moment in time as Moment.
+  when chronosSimulation:
+    if isSimClockActive():
+      return Moment(value: simClockNanoseconds())
   Moment(value: int64(fastEpochTimeNano()))
 
 func init*(t: typedesc[Moment], value: int64, precision: Duration): Moment =

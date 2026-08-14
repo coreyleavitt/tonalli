@@ -118,6 +118,13 @@ const
     ## runtime - enbling this option will cause a panic if it's detected - this
     ## will become the default in future chronos versions.
 
+  chronosSimulation* {.booldefine.}: bool = false
+    ## Build the deterministic simulation substrate (fork-only test
+    ## infrastructure): a virtual clock and, in later slices, a hermetic
+    ## dispatcher driven by a seeded oracle instead of real OS resources.
+    ## Undefined in every release and default build; the substrate is
+    ## additive and compiles out entirely when this is `false`.
+
 when defined(chronosStrictException):
   {.warning: "-d:chronosStrictException has been deprecated in favor of handleException".}
   # In chronos v3, this setting was used as the opposite of
@@ -146,6 +153,7 @@ when defined(debug) or defined(chronosConfig):
       chronosStreamDefaultBufferSize)
     printOption("chronosTLSSessionCacheBufferSize",
       chronosTLSSessionCacheBufferSize)
+    printOption("chronosSimulation", chronosSimulation)
 
 when chronosUseSink:
   template chronosSink*(T: type): type = sink T
