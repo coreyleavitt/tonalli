@@ -20,6 +20,8 @@ import results
 import ../[config, effects, futures, osdefs, oserrno, osutils, timer]
 
 import ./[asyncmacro, callbackqueue, errors]
+when chronosSimulation:
+  import ./simengine
 when defined(windows):
   import ./contextnode
     # For `ContextNodeBase`, naming `CompletionData.context` below -
@@ -899,6 +901,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       else:
         wakeupFd: array[2, cint]
       keys: seq[ReadyKey]
+      when chronosSimulation:
+        simState: SimEngineState
     PDispatcher* = ref Dispatcher
 
   proc `==`*(x, y: AsyncFD): bool {.borrow, gcsafe.}
@@ -961,6 +965,52 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     initAPI(res)
     res
 
+  when chronosSimulation:
+    proc newSimDispatcher*(): PDispatcher =
+      ## Construct a hermetic simulated dispatcher: `selector` stays
+      ## nil, no fd or OS syscall is touched. `isSimDispatcher` and
+      ## every provenance-guarded touch site key off `simState` being
+      ## non-nil rather than off `selector` directly, since a future
+      ## platform fork of this constructor may leave other real-only
+      ## fields at their zero value too.
+      var res = PDispatcher(
+        timers: initHeapQueue[TimerCallback](),
+        callbacks: initCallbackQueue[AsyncCallback](chronosInitialSize),
+        idlers: initCallbackQueue[AsyncCallback](),
+        keys: newSeq[ReadyKey](chronosInitialSize),
+        trackers: initTable[string, TrackerBase](),
+        counters: initTable[string, TrackerCounter](),
+        simState: newSimEngineState(),
+      )
+
+      when not chronosStrictReentrancy:
+        res.callbacks.addLast(SentinelCallback)
+
+      when hasThreadSupport:
+        res.threadCallbacks.init()
+
+      res
+
+    proc isSimDispatcher*(disp: PDispatcher): bool {.inline.} =
+      # `disp` itself may be nil here: `handle()` is also called
+      # internally (`gDisp.handle()` in `callSoon(DispatcherHandle,
+      # ...)`) purely for its pointer value, on a thread whose `gDisp`
+      # has not been initialized yet - that call must stay as safe
+      # against a nil `disp` as `addr disp[]` already is.
+      not disp.isNil and not disp.simState.isNil
+
+    template simProvenanceGuard(disp: PDispatcher, fd: AsyncFD): bool =
+      ## `true` when the call may proceed to touch the real OS selector -
+      ## either `disp` isn't simulated, or `fd` was minted into its own
+      ## sim endpoint table. `false` means the caller must return the
+      ## reserved barrier code instead of touching a nil selector.
+      not isSimDispatcher(disp) or disp.simState.ownsSimFd(int(cint(fd)))
+
+    proc mintSimFd*(disp: PDispatcher): AsyncFD =
+      doAssert isSimDispatcher(disp),
+        "mintSimFd() requires a simulated dispatcher"
+      AsyncFD(cint(disp.simState.mintSimFd()))
+
   var gDisp{.threadvar.}: PDispatcher ## Global dispatcher
 
   proc setThreadDispatcher*(disp: PDispatcher) {.gcsafe, raises: [].}
@@ -972,22 +1022,36 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
 
   proc contains*(disp: PDispatcher, fd: AsyncFD): bool {.inline.} =
     ## Returns ``true`` if ``fd`` is registered in thread's dispatcher.
+    when chronosSimulation:
+      if disp.isSimDispatcher():
+        return disp.simState.ownsSimFd(int(cint(fd)))
     cint(fd) in disp.selector
 
   proc register2*(fd: AsyncFD): Result[void, OSErrorCode] =
     ## Register file descriptor ``fd`` in thread's dispatcher.
+    let loop = getThreadDispatcher()
+    when chronosSimulation:
+      if not simProvenanceGuard(loop, fd):
+        return err(SimBarrierCode)
     var data: SelectorData
-    getThreadDispatcher().selector.registerHandle2(cint(fd), {}, data)
+    loop.selector.registerHandle2(cint(fd), {}, data)
 
   proc unregister2*(fd: AsyncFD): Result[void, OSErrorCode] =
     ## Unregister file descriptor ``fd`` from thread's dispatcher.
-    getThreadDispatcher().selector.unregister2(cint(fd))
+    let loop = getThreadDispatcher()
+    when chronosSimulation:
+      if not simProvenanceGuard(loop, fd):
+        return err(SimBarrierCode)
+    loop.selector.unregister2(cint(fd))
 
   proc addReader2*(fd: AsyncFD, cb: CallbackFunc,
                    udata: pointer = nil): Result[void, OSErrorCode] =
     ## Start watching the file descriptor ``fd`` for read availability and then
     ## call the callback ``cb`` with specified argument ``udata``.
     let loop = getThreadDispatcher()
+    when chronosSimulation:
+      if not simProvenanceGuard(loop, fd):
+        return err(SimBarrierCode)
     var newEvents = {Event.Read}
     withData(loop.selector, cint(fd), adata) do:
       # Assignment overwrite fires =destroy on the prior reader,
@@ -1006,6 +1070,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
   proc removeReader2*(fd: AsyncFD): Result[void, OSErrorCode] =
     ## Stop watching the file descriptor ``fd`` for read availability.
     let loop = getThreadDispatcher()
+    when chronosSimulation:
+      if not simProvenanceGuard(loop, fd):
+        return err(SimBarrierCode)
     var newEvents: set[Event]
     withData(loop.selector, cint(fd), adata) do:
       # Assignment fires =destroy on the prior reader - context released.
@@ -1021,6 +1088,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     ## Start watching the file descriptor ``fd`` for write availability and then
     ## call the callback ``cb`` with specified argument ``udata``.
     let loop = getThreadDispatcher()
+    when chronosSimulation:
+      if not simProvenanceGuard(loop, fd):
+        return err(SimBarrierCode)
     var newEvents = {Event.Write}
     withData(loop.selector, cint(fd), adata) do:
       # Assign via a temp: same write-barrier-elision reason as
@@ -1036,6 +1106,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
   proc removeWriter2*(fd: AsyncFD): Result[void, OSErrorCode] =
     ## Stop watching the file descriptor ``fd`` for write availability.
     let loop = getThreadDispatcher()
+    when chronosSimulation:
+      if not simProvenanceGuard(loop, fd):
+        return err(SimBarrierCode)
     var newEvents: set[Event]
     withData(loop.selector, cint(fd), adata) do:
       # Same as removeReader2 above: assignment fires =destroy on the
@@ -1097,7 +1170,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     let loop = getThreadDispatcher()
 
     proc continuation(udata: pointer) =
-      if SocketHandle(fd) in loop.selector:
+      if loop.contains(fd):
         discard unregister2(fd)
       # `closeFd` might fail if an I/O error occurs during an async I/O
       # operation, but on *most* posix systems this still results in the file
@@ -1112,19 +1185,28 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       discard closeFd(cint(fd))
       if not(isNil(aftercb)): aftercb(nil)
 
-    withData(loop.selector, cint(fd), adata) do:
+    template flushPendingReaderWriter() =
       # We are scheduling reader and writer callbacks to be called
       # explicitly, so they can get an error and continue work.
       # Callbacks marked as deleted so we don't need to get REAL notifications
       # from system queue for this reader and writer.
+      withData(loop.selector, cint(fd), adata) do:
+        if not(isNil(adata.reader.function)):
+          loop.callbacks.addLast(adata.reader)
+          adata.reader.reset()
 
-      if not(isNil(adata.reader.function)):
-        loop.callbacks.addLast(adata.reader)
-        adata.reader.reset()
+        if not(isNil(adata.writer.function)):
+          loop.callbacks.addLast(adata.writer)
+          adata.writer.reset()
 
-      if not(isNil(adata.writer.function)):
-        loop.callbacks.addLast(adata.writer)
-        adata.writer.reset()
+    when chronosSimulation:
+      # A simulated dispatcher has no selector to flush, and no reader/
+      # writer can have been armed against it before registration
+      # routing exists (S4) - nothing to do here yet.
+      if not loop.isSimDispatcher():
+        flushPendingReaderWriter()
+    else:
+      flushPendingReaderWriter()
 
     # We can't unregister file descriptor from system queue here, because
     # in such case processing queue will stuck on poll() call, because there
@@ -1156,6 +1238,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       ## identifier code, which can be used to remove signal callback
       ## via ``removeSignal``.
       let loop = getThreadDispatcher()
+      when chronosSimulation:
+        if loop.isSimDispatcher():
+          return err(SimBarrierCode)
       var data: SelectorData
       let sigfd = ? loop.selector.registerSignal(signal, data)
       withData(loop.selector, sigfd, adata) do:
@@ -1176,6 +1261,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       ## identifier ``pid`` exited. Returns process' descriptor, which can be
       ## used to clear process callback via ``removeProcess``.
       let loop = getThreadDispatcher()
+      when chronosSimulation:
+        if loop.isSimDispatcher():
+          return err(SimBarrierCode)
       var data: SelectorData
       let procfd = ? loop.selector.registerProcess(pid, data)
       withData(loop.selector, procfd, adata) do:
@@ -1191,14 +1279,22 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       ## Remove watching signal ``signal``.
       # SelectorData drop on unregister2 cascades =destroy onto
       # adata.reader's AsyncCallback, releasing its captured context.
-      getThreadDispatcher().selector.unregister2(cint(signalHandle))
+      let loop = getThreadDispatcher()
+      when chronosSimulation:
+        if loop.isSimDispatcher():
+          return err(SimBarrierCode)
+      loop.selector.unregister2(cint(signalHandle))
 
     proc removeProcess2*(procHandle: ProcessHandle): Result[void, OSErrorCode] =
       ## Remove process' watching using process' descriptor ``procfd``.
       # Same as removeSignal2 above: SelectorData drop on unregister2
       # cascades =destroy onto adata.reader's AsyncCallback, releasing
       # its captured context.
-      getThreadDispatcher().selector.unregister2(cint(procHandle))
+      let loop = getThreadDispatcher()
+      when chronosSimulation:
+        if loop.isSimDispatcher():
+          return err(SimBarrierCode)
+      loop.selector.unregister2(cint(procHandle))
 
     proc addSignal*(signal: int, cb: CallbackFunc,
                     udata: pointer = nil): SignalHandle {.
@@ -1244,30 +1340,15 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
         recv(SocketHandle(loop.wakeupFd[1]), addr dummy[0], cint(len(dummy)), cint(0))
       )
 
-  proc poll*() {.tags: [NestedPoll, RootEffect].} =
-    ## Perform single asynchronous step.
-    let loop = getThreadDispatcher()
-    loop.preparePoll()
-
-    var curTime = Moment.now()
-    var curTimeout = 0
-
-    when not chronosStrictReentrancy:
-      # On reentrant `poll` calls from `processCallbacks`, e.g., `waitFor`,
-      # complete pending work of the outer `processCallbacks` call.
-      # On non-reentrant `poll` calls, this only removes sentinel element.
-      # Although reentrancy is not allowed in general, we strive not to crash
-      # if it happens, maintaining a semblance of past behavior.
-      loop.processCallbacks()
-
-    # Moving expired timers to `loop.callbacks` and calculate timeout.
-    loop.processTimersGetTimeout(curTimeout)
-
-    # Processing IO descriptors and all hardware events.
-    let count = loop.selector.selectInto2(curTimeout, loop.keys).valueOr:
+  template pollSelectTouchpoint(loop: PDispatcher, curTimeout,
+                                 count, hasWakeup: untyped) =
+    ## Extension point (RFC 0003 3.5): seeded here so a later simulation
+    ## slice edits this template, never `poll()` itself again. Real-mode
+    ## body only in this slice - unchanged from before the extraction.
+    count = loop.selector.selectInto2(curTimeout, loop.keys).valueOr:
       raiseOsDefect(error, "poll(): Unable to get OS events")
 
-    var hasWakeup = false
+    hasWakeup = false
     for i in 0 ..< count:
       let fd = loop.keys[i].fd
       let events = loop.keys[i].events
@@ -1301,6 +1382,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       # batch more work in a single event loop iteration.
       loop.keys.setLen(min(loop.keys.len * 2, chronosEventsCount))
 
+  template pollWakeupTouchpoint(loop: PDispatcher, hasWakeup: untyped) =
+    ## Extension point (RFC 0003 3.5), same discipline as
+    ## `pollSelectTouchpoint` above.
     when hasThreadSupport:
       if hasWakeup:
         # Drain the wakeup descriptor - this must be done before processing the
@@ -1308,6 +1392,32 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
         # for a callback we did not yet process
         loop.drainWakeupFd()
         loop.processThreadCallbacks()
+
+  proc poll*() {.tags: [NestedPoll, RootEffect].} =
+    ## Perform single asynchronous step.
+    let loop = getThreadDispatcher()
+    loop.preparePoll()
+
+    var curTime = Moment.now()
+    var curTimeout = 0
+
+    when not chronosStrictReentrancy:
+      # On reentrant `poll` calls from `processCallbacks`, e.g., `waitFor`,
+      # complete pending work of the outer `processCallbacks` call.
+      # On non-reentrant `poll` calls, this only removes sentinel element.
+      # Although reentrancy is not allowed in general, we strive not to crash
+      # if it happens, maintaining a semblance of past behavior.
+      loop.processCallbacks()
+
+    # Moving expired timers to `loop.callbacks` and calculate timeout.
+    loop.processTimersGetTimeout(curTimeout)
+
+    # Processing IO descriptors and all hardware events.
+    var count: int
+    var hasWakeup = false
+    pollSelectTouchpoint(loop, curTimeout, count, hasWakeup)
+
+    pollWakeupTouchpoint(loop, hasWakeup)
 
     # Moving expired timers to `loop.callbacks`.
     loop.processTimers()
@@ -1429,18 +1539,18 @@ when hasThreadSupport:
     ## `threadHandle`() - the user must take care that the dispatcher does not
     ## get released while the handle is active.
 
-  proc handle*(disp: PDispatcher): DispatcherHandle =
-    DispatcherHandle(addr disp[])
+  when chronosSimulation:
+    proc handle*(disp: PDispatcher): DispatcherHandle {.raises: [SimBarrierError].} =
+      if disp.isSimDispatcher():
+        raise newException(SimBarrierError,
+          "handle(): refusing to mint a DispatcherHandle for a simulated " &
+          "dispatcher - use simProducer() instead")
+      DispatcherHandle(addr disp[])
+  else:
+    proc handle*(disp: PDispatcher): DispatcherHandle =
+      DispatcherHandle(addr disp[])
 
-  proc wake(disp: ptr Dispatcher) =
-    ## Wake up the event loop associated with dispatcher ``disp`` so that it
-    ## processes pending callbacks from the cross-thread MPSC queue.
-    ##
-    ## This procedure is **thread-safe** — it can be called from any thread.
-    ## It enqueues a sentinel node to the dispatcher's cross-thread queue
-    ## and then signals the underlying OS mechanism (epoll/kqueue/poll/IOCP)
-    ## to unblock the event loop's blocking wait.
-
+  template doWake(disp: ptr Dispatcher) =
     # Wakeups are non-blocking and ignore errors, ie if it's EAGAIN or similar
     # it means that the wakeup notification mechanism is triggered already and
     # we don't need to trigger it again.
@@ -1463,14 +1573,34 @@ when hasThreadSupport:
         send(SocketHandle(disp.wakeupFd[0]), addr dummy, sizeof(dummy), MSG_NOSIGNAL)
       )
 
-  proc callSoon*(disp: DispatcherHandle, cbproc: ThreadCallbackFunc, udata: pointer = nil) =
-    ## Schedule `cbproc` to be called as soon as possible on the thread that `disp`
-    ## belongs to.
-    ## If `disp` is the current thread dispatcher, posts directly to the
-    ## callbacks deque. Otherwise, enqueues to the cross-thread queue
-    ## for the target dispatcher's next poll cycle, waking it in the process.
-    ##
-    ## This function is thread-safe.
+  when chronosSimulation:
+    proc wake(disp: ptr Dispatcher) {.raises: [SimBarrierError].} =
+      ## Wake up the event loop associated with dispatcher ``disp`` so that it
+      ## processes pending callbacks from the cross-thread MPSC queue.
+      ##
+      ## This procedure is **thread-safe** — it can be called from any thread.
+      ## It enqueues a sentinel node to the dispatcher's cross-thread queue
+      ## and then signals the underlying OS mechanism (epoll/kqueue/poll/IOCP)
+      ## to unblock the event loop's blocking wait.
+      if not disp.simState.isNil:
+        raise newException(SimBarrierError,
+          "wake(): refusing to write a simulated dispatcher's (unset) " &
+          "wakeup fd - use simProducer() instead")
+      doWake(disp)
+  else:
+    proc wake(disp: ptr Dispatcher) =
+      ## Wake up the event loop associated with dispatcher ``disp`` so that it
+      ## processes pending callbacks from the cross-thread MPSC queue.
+      ##
+      ## This procedure is **thread-safe** — it can be called from any thread.
+      ## It enqueues a sentinel node to the dispatcher's cross-thread queue
+      ## and then signals the underlying OS mechanism (epoll/kqueue/poll/IOCP)
+      ## to unblock the event loop's blocking wait.
+      doWake(disp)
+
+  template doCallSoonCrossThread(disp: DispatcherHandle,
+                                  cbproc: ThreadCallbackFunc,
+                                  udata: pointer) =
     doAssert(not isNil(cbproc))
     let current = gDisp.handle() # Don't init a new dispatcher with getThreadDispatcher()
     if distinctBase(current) == distinctBase(disp):
@@ -1484,15 +1614,38 @@ when hasThreadSupport:
       node.callback = cbproc
       node.udata = udata
 
-      let disp = distinctBase(disp)
+      let target = distinctBase(disp)
       # First push, then wake - this ensures that the callback is visible in
       # the list by the time the processing loop gets to it.
-      disp.threadCallbacks.push(node)
+      target.threadCallbacks.push(node)
 
       # Since we draing the mpsc queue on wake-up, we only need one wakeup
       # notification per batch of queue writes
-      if not disp.waking.testAndSet(moAcquireRelease):
-        disp.wake()
+      if not target.waking.testAndSet(moAcquireRelease):
+        target.wake()
+
+  when chronosSimulation:
+    proc callSoon*(disp: DispatcherHandle, cbproc: ThreadCallbackFunc,
+                   udata: pointer = nil) {.raises: [SimBarrierError].} =
+      ## Schedule `cbproc` to be called as soon as possible on the thread that `disp`
+      ## belongs to.
+      ## If `disp` is the current thread dispatcher, posts directly to the
+      ## callbacks deque. Otherwise, enqueues to the cross-thread queue
+      ## for the target dispatcher's next poll cycle, waking it in the process.
+      ##
+      ## This function is thread-safe.
+      doCallSoonCrossThread(disp, cbproc, udata)
+  else:
+    proc callSoon*(disp: DispatcherHandle, cbproc: ThreadCallbackFunc,
+                   udata: pointer = nil) =
+      ## Schedule `cbproc` to be called as soon as possible on the thread that `disp`
+      ## belongs to.
+      ## If `disp` is the current thread dispatcher, posts directly to the
+      ## callbacks deque. Otherwise, enqueues to the cross-thread queue
+      ## for the target dispatcher's next poll cycle, waking it in the process.
+      ##
+      ## This function is thread-safe.
+      doCallSoonCrossThread(disp, cbproc, udata)
 
 proc callIdle*(acb: AsyncCallback) =
   ## Schedule ``cbproc`` to be called when there no pending network events
