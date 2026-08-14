@@ -156,8 +156,10 @@ type
     ## every registration/teardown touch site before it acts on a fd,
     ## the counter that mints it, the oracle driving the virtual
     ## clock's `decideTime` and the sim event set's `decideBatch`
-    ## choice points, the registration-routing interest table, and the
-    ## pending readiness/arrival events awaiting delivery.
+    ## choice points, the registration-routing interest table, the
+    ## pending readiness/arrival events awaiting delivery, and the
+    ## harness's (RFC 0003 3.8) decision/time budgets and live trace
+    ## writer.
     endpoints: HashSet[int]
     nextFdValue: int
     oracle: SimOracle
@@ -165,6 +167,12 @@ type
     nextEventId: uint64
     readyQueue: seq[SimReadyEvent]
     arrivalQueue: seq[SimEvent]
+    decisionBudget: int
+    decisionCount: int
+    seed: uint64
+    hasTimeBudget: bool
+    timeBudgetCutoffNanoseconds: int64
+    traceWriter: ptr SimTraceWriter
 
 const
   SimBarrierCode* = OSErrorCode(1_397_835_586'i32)
@@ -338,9 +346,21 @@ proc ReplayOracle*(path: string): SimOracle
   newSimOracle(decideBatch, decideIo, decideTime)
 
 proc newSimEngineState*(startValue: int = 0,
-                         oracle: SimOracle = defaultSimOracle()): SimEngineState =
+                         oracle: SimOracle = defaultSimOracle(),
+                         decisionBudget: int = 0,
+                         seed: uint64 = 0,
+                         hasTimeBudget: bool = false,
+                         timeBudgetCutoffNanoseconds: int64 = 0): SimEngineState =
+  ## `decisionBudget`/`hasTimeBudget`/`timeBudgetCutoffNanoseconds` are
+  ## the harness's livelock bounds (RFC 0003 3.8); zero/`false` (the
+  ## default) means unlimited, which is what every pre-S8 caller of
+  ## this constructor still gets. `seed` is carried only for budget-
+  ## exhaustion messages and the trace writer's records.
   SimEngineState(endpoints: initHashSet[int](), nextFdValue: startValue,
-                  oracle: oracle, interest: initTable[int, SimInterest]())
+                  oracle: oracle, interest: initTable[int, SimInterest](),
+                  decisionBudget: decisionBudget, seed: seed,
+                  hasTimeBudget: hasTimeBudget,
+                  timeBudgetCutoffNanoseconds: timeBudgetCutoffNanoseconds)
 
 proc mintSimFd*(state: SimEngineState): int =
   ## Mints the next sim-owned fd-domain id and records it in the
@@ -361,6 +381,27 @@ proc ownsSimFd*(state: SimEngineState, value: int): bool =
   ## soundly separated by value.
   value in state.endpoints
 
+proc attachTraceWriter*(state: SimEngineState, writer: ptr SimTraceWriter) =
+  ## Wires a live decision-log writer into `state` (RFC 0003 3.7/3.8):
+  ## `chronos/simulation.nim`'s `simulate()` is the sole caller. `nil`
+  ## detaches, which `simulate()` does at teardown so a closed file is
+  ## never touched again by a later call reusing this engine state.
+  state.traceWriter = writer
+
+proc noteDecision(state: SimEngineState) =
+  ## Counts one oracle `decide*` call against the run's decision budget
+  ## (RFC 0003 3.8): the same mechanism bounds a runaway poll loop
+  ## (`decideBatch`/`decideTime`, once per iteration) and a retry spin
+  ## inside one callback (`decideIo`, once per sub-step). Exhaustion is
+  ## a livelock, reported the same structured-Defect way
+  ## `simDecideBatch`/`simDecideTimeAdvance` already report a protocol
+  ## violation - `simulate()` (chronos/simulation.nim) is the boundary
+  ## that converts it into a catchable, structured outcome.
+  inc state.decisionCount
+  if state.decisionBudget > 0 and state.decisionCount > state.decisionBudget:
+    raiseAssert "livelock: decision budget exhausted at decision " &
+      $state.decisionCount & ", seed " & $state.seed
+
 proc isSimBarrier*(code: OSErrorCode): bool {.inline.} =
   code == SimBarrierCode
 
@@ -378,13 +419,14 @@ proc simDecideTimeAdvance*(state: SimEngineState, armed: seq[Moment],
   ##
   ## An oracle failure or a `decideTime` answer outside the engine's
   ## validation rule (`>= armed[0]` and `>= curTime`) is a structured
-  ## simulation-protocol violation. There is no per-seed failure
-  ## channel yet - `simulate`/`sweepSeeds` land in S8 - so for now this
-  ## reports the same way `poll()`'s own `raiseOsDefect` does for an
-  ## unrecoverable real-mode condition: a Defect carrying the message,
-  ## not a silent or backward clock write.
+  ## simulation-protocol violation, reported the same way `poll()`'s own
+  ## `raiseOsDefect` does for an unrecoverable real-mode condition: a
+  ## Defect carrying the message, not a silent or backward clock write.
+  ## `chronos/simulation.nim`'s `simulate()` (S8) is the boundary that
+  ## converts the Defect into a catchable, per-seed `SimulationError`.
   doAssert armed.len > 0,
     "simDecideTimeAdvance(): requires at least one armed deadline"
+  state.noteDecision()
   let decision = state.oracle.decideTimeImpl(TimeAdvancePoint(armed: armed))
   if decision.isErr:
     raiseAssert "simulation oracle error: " & decision.error.msg
@@ -393,7 +435,20 @@ proc simDecideTimeAdvance*(state: SimEngineState, armed: seq[Moment],
     raiseAssert "simulation clock violation: decideTime returned " &
       $advanceTo & ", earlier than the earliest armed deadline or the " &
       "current virtual clock"
+  if state.hasTimeBudget and
+     advanceTo.epochNanoSeconds > state.timeBudgetCutoffNanoseconds:
+    raiseAssert "livelock: virtual-time budget exhausted at decision " &
+      $state.decisionCount & ", seed " & $state.seed & ", virtual time " &
+      $advanceTo.epochNanoSeconds & "ns"
   setSimClockNanoseconds(advanceTo.epochNanoSeconds)
+  if not state.traceWriter.isNil:
+    var armedNs = newSeq[int64](armed.len)
+    for i, m in armed:
+      armedNs[i] = m.epochNanoSeconds
+    try:
+      state.traceWriter[].writeTimeDecision(armedNs, advanceTo.epochNanoSeconds)
+    except IOError as exc:
+      raiseAssert "simulation trace write failure: " & exc.msg
   advanceTo
 
 proc simDecideIo*(state: SimEngineState, cp: IoOutcomePoint): IoDecision =
@@ -404,10 +459,26 @@ proc simDecideIo*(state: SimEngineState, cp: IoOutcomePoint): IoDecision =
   ## oracle error is a structured simulation-protocol violation, the
   ## same `raiseAssert` discipline `simDecideBatch`/`simDecideTimeAdvance`
   ## already use.
+  state.noteDecision()
   let decision = state.oracle.decideIoImpl(cp)
   if decision.isErr:
     raiseAssert "simulation oracle error: " & decision.error.msg
-  decision.get()
+  result = decision.get()
+  if not state.traceWriter.isNil:
+    var faultNames = newSeq[string]()
+    for f in cp.faults:
+      faultNames.add toLowerAscii($f)
+    let outcomeStr = if result.outcome == SimIoOutcome.Ok: "ok" else: "fault"
+    let bytes = if result.outcome == SimIoOutcome.Ok: result.bytes else: 0
+    let faultStr =
+      if result.outcome == SimIoOutcome.Fault: toLowerAscii($result.fault)
+      else: ""
+    try:
+      state.traceWriter[].writeIoDecision(cp.trigger, cp.endpoint,
+        toLowerAscii($cp.op), cp.maxBytes, faultNames, outcomeStr, bytes,
+        faultStr)
+    except IOError as exc:
+      raiseAssert "simulation trace write failure: " & exc.msg
 
 proc simSetReaderInterest*(state: SimEngineState, fd: int,
                             cb: InternalAsyncCallback) =
@@ -488,7 +559,8 @@ proc simDecideBatch*(state: SimEngineState,
   ## `deliverable`, appearing at most once - an oracle answer naming an
   ## unknown or duplicate id is a structured simulation-protocol
   ## violation, the same `raiseAssert` discipline `simDecideTimeAdvance`
-  ## already uses (no per-seed failure channel exists yet; S8 adds one).
+  ## already uses.
+  state.noteDecision()
   let decision = state.oracle.decideBatchImpl(
     SelectBatchPoint(deliverable: deliverable))
   if decision.isErr:
@@ -508,6 +580,14 @@ proc simDecideBatch*(state: SimEngineState,
       raiseAssert "simulation batch violation: decideBatch named id " &
         $id & " more than once"
     seen.incl(uint64(id))
+  if not state.traceWriter.isNil:
+    var deliverableIds = newSeq[SimEventId](deliverable.len)
+    for i, ev in deliverable:
+      deliverableIds[i] = ev.id
+    try:
+      state.traceWriter[].writeBatchDecision(deliverableIds, result.order)
+    except IOError as exc:
+      raiseAssert "simulation trace write failure: " & exc.msg
 
 proc simTakeDelivery*(state: SimEngineState, id: SimEventId):
     tuple[kind: SimEventKind, callback: InternalAsyncCallback] =

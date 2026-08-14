@@ -967,7 +967,10 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     res
 
   when chronosSimulation:
-    proc newSimDispatcher*(oracle: SimOracle = defaultSimOracle()): PDispatcher =
+    proc newSimDispatcher*(oracle: SimOracle = defaultSimOracle(),
+                           decisionBudget: int = 0, seed: uint64 = 0,
+                           hasTimeBudget: bool = false,
+                           timeBudgetCutoffNanoseconds: int64 = 0): PDispatcher =
       ## Construct a hermetic simulated dispatcher: `selector` stays
       ## nil, no fd or OS syscall is touched. `isSimDispatcher` and
       ## every provenance-guarded touch site key off `simState` being
@@ -976,7 +979,10 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       ## fields at their zero value too. `oracle` drives the virtual
       ## clock's `decideTime` choice point (3.4); a scripted stub before
       ## S5's `RandomOracle` exists, defaulting to the earliest-deadline
-      ## advance rule.
+      ## advance rule. `decisionBudget`/`hasTimeBudget`/
+      ## `timeBudgetCutoffNanoseconds` are `simulate()`'s livelock bounds
+      ## (RFC 0003 3.8); every pre-S8 caller leaves them at their
+      ## unlimited default.
       var res = PDispatcher(
         timers: initHeapQueue[TimerCallback](),
         callbacks: initCallbackQueue[AsyncCallback](chronosInitialSize),
@@ -984,7 +990,10 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
         keys: newSeq[ReadyKey](chronosInitialSize),
         trackers: initTable[string, TrackerBase](),
         counters: initTable[string, TrackerCounter](),
-        simState: newSimEngineState(oracle = oracle),
+        simState: newSimEngineState(oracle = oracle,
+          decisionBudget = decisionBudget, seed = seed,
+          hasTimeBudget = hasTimeBudget,
+          timeBudgetCutoffNanoseconds = timeBudgetCutoffNanoseconds),
       )
 
       when not chronosStrictReentrancy:
@@ -1031,6 +1040,23 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       doAssert isSimDispatcher(disp),
         "simScheduleArrival() requires a simulated dispatcher"
       disp.simState.simScheduleArrival()
+
+    proc simDecideIo*(disp: PDispatcher, cp: IoOutcomePoint): IoDecision =
+      ## Test/script entry point (S8's decision-budget proof, ahead of
+      ## S10's transport seam, which becomes the production caller):
+      ## resolves one I/O outcome directly against `disp`'s engine state,
+      ## the same call the seam will make once it exists.
+      doAssert isSimDispatcher(disp),
+        "simDecideIo() requires a simulated dispatcher"
+      disp.simState.simDecideIo(cp)
+
+    proc simAttachTraceWriter*(disp: PDispatcher, writer: ptr SimTraceWriter) =
+      ## Wires a live decision-log writer into `disp`'s run state (RFC
+      ## 0003 3.7/3.8); `chronos/simulation.nim`'s `simulate()` is the
+      ## sole caller.
+      doAssert isSimDispatcher(disp),
+        "simAttachTraceWriter() requires a simulated dispatcher"
+      disp.simState.attachTraceWriter(writer)
 
   var gDisp{.threadvar.}: PDispatcher ## Global dispatcher
 
@@ -1560,6 +1586,24 @@ proc getThreadDispatcher*(): PDispatcher =
   if gDisp.isNil():
     setThreadDispatcher(newDispatcher())
   gDisp
+
+when chronosSimulation:
+  proc getThreadDispatcherOrNil*(): PDispatcher {.gcsafe, raises: [].} =
+    ## Reads the thread's dispatcher without `getThreadDispatcher()`'s
+    ## side effect of constructing (and touching real OS resources for)
+    ## a fresh real dispatcher when none exists yet. `simulate()` (RFC
+    ## 0003 3.8) needs this to save what to restore without itself
+    ## breaking hermeticity on a thread that never had a real one.
+    gDisp
+
+  proc forceSetThreadDispatcher*(disp: PDispatcher) {.gcsafe, raises: [].} =
+    ## The restore half of a save/restore pair, without
+    ## `setThreadDispatcher`'s outgoing-queues-empty assertion (RFC
+    ## 0003 3.8, "Restore is exception-safe"): `simulate()` uses this to
+    ## restore the thread's dispatcher even when the dying sim
+    ## dispatcher's queues are non-empty because its body failed mid-
+    ## flight, so the original failure is never masked by a `doAssert`.
+    gDisp = disp
 
 proc setGlobalDispatcher*(disp: PDispatcher) {.
       gcsafe, deprecated: "Use setThreadDispatcher() instead".} =
