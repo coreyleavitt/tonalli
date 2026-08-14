@@ -10,12 +10,14 @@
 ## Private mechanism backing the deterministic simulation substrate's
 ## dispatcher fork: the fd provenance table and its minting counter, the
 ## reserved barrier error code, `SimBarrierError`, the discrete-event
-## virtual clock's `decideTime` choice point, and the sim event set's
+## virtual clock's `decideTime` choice point, the sim event set's
 ## `decideBatch` choice point (readiness/arrival delivery order, oracle
 ## interface, and the registration-routing bookkeeping that lets
-## sim-minted fds carry armed reader/writer interest with no selector).
-## Also `RandomOracle`, the seeded stock oracle scripted stub oracles are
-## an alternative to.
+## sim-minted fds carry armed reader/writer interest with no selector),
+## and the I/O outcome's `decideIo` choice point (RFC 0003 3.3's D2
+## triple, completed at S6; no live producer wires it before the
+## transport seam at S10). Also `RandomOracle`, the seeded stock oracle
+## scripted stub oracles are an alternative to.
 ##
 ## Imports and re-exports `chronos/internal/simtrace.nim` for the
 ## entity-id types every choice point and decision carries; this module
@@ -76,6 +78,43 @@ type
       ## delivery, legal only with a fallback (armed timers or queued
       ## work - 3.5's deferral protocol).
 
+  SimIoOp* {.pure.} = enum
+    ## `IoOutcomePoint.op`'s membership is finalized in S10 (stream seam)
+    ## and S12a (datagram seam); S6 needs a concrete type to exercise
+    ## `decideIo` ahead of either seam existing, so it takes the two
+    ## names those extraction sites already use.
+    Read
+    Write
+
+  SimFault* {.pure.} = enum
+    ## `IoOutcomePoint.faults`'s full membership is finalized in S11b/
+    ## S12b's fault-injection RED phases (reset, drop, duplicate,
+    ## reorder per 3.3's slice table); S6 needs one concrete member to
+    ## exercise `IoDecision`'s fault branch through the interface.
+    Reset
+
+  IoOutcomePoint* = object
+    ## One I/O completion's decision point (RFC 0003 3.3): asked while a
+    ## callback delivered by an earlier `decideBatch` decision executes
+    ## its transport operation. No live producer wires this before S10;
+    ## S6 exercises it with hand-built values.
+    trigger*: SimEventId
+    endpoint*: SimEndpointId
+    op*: SimIoOp
+    maxBytes*: int
+    faults*: set[SimFault]
+
+  SimIoOutcome* {.pure.} = enum
+    Ok
+    Fault
+
+  IoDecision* = object
+    case outcome*: SimIoOutcome
+    of SimIoOutcome.Ok:
+      bytes*: int
+    of SimIoOutcome.Fault:
+      fault*: SimFault
+
   SimOracleError* = object
     ## A value, not a `ref` exception, matching every in-tree `Result`
     ## error type (3.3's "Failure channel" note). Shared by every
@@ -84,10 +123,11 @@ type
 
   SimOracle* = object
     ## Fields private outside the sim modules; `newSimOracle` is the
-    ## sole constructor (3.3's "Construction discipline"). `decideIo`
-    ## is S10's job, added the same additive-safe way.
+    ## sole constructor (3.3's "Construction discipline").
     decideBatchImpl: proc(cp: SelectBatchPoint):
       Result[BatchDecision, SimOracleError] {.gcsafe, raises: [].}
+    decideIoImpl: proc(cp: IoOutcomePoint):
+      Result[IoDecision, SimOracleError] {.gcsafe, raises: [].}
     decideTimeImpl: proc(cp: TimeAdvancePoint):
       Result[TimeDecision, SimOracleError] {.gcsafe, raises: [].}
 
@@ -134,31 +174,47 @@ const
 proc newSimOracle*(
     decideBatch: proc(cp: SelectBatchPoint):
       Result[BatchDecision, SimOracleError] {.gcsafe, raises: [].},
+    decideIo: proc(cp: IoOutcomePoint):
+      Result[IoDecision, SimOracleError] {.gcsafe, raises: [].},
     decideTime: proc(cp: TimeAdvancePoint):
       Result[TimeDecision, SimOracleError] {.gcsafe, raises: [].}): SimOracle =
-  SimOracle(decideBatchImpl: decideBatch, decideTimeImpl: decideTime)
+  SimOracle(decideBatchImpl: decideBatch, decideIoImpl: decideIo,
+            decideTimeImpl: decideTime)
 
-proc defaultDecideBatch(cp: SelectBatchPoint):
+proc defaultDecideBatch*(cp: SelectBatchPoint):
     Result[BatchDecision, SimOracleError] {.gcsafe, raises: [].} =
   ## The default batch rule: deliver everything deliverable, in the
   ## stable sorted order `cp.deliverable` already carries - the sim
   ## analogue of a real `select()` batch, where nothing is withheld
-  ## absent a reason to explore otherwise.
+  ## absent a reason to explore otherwise. Exported so a test or a
+  ## scripted oracle fixing two of the three choice points can reuse
+  ## it for the third instead of reimplementing it.
   var order = newSeq[SimEventId](cp.deliverable.len)
   for i, ev in cp.deliverable:
     order[i] = ev.id
   ok(BatchDecision(order: order))
 
-proc defaultDecideTime(cp: TimeAdvancePoint):
+proc defaultDecideIo*(cp: IoOutcomePoint):
+    Result[IoDecision, SimOracleError] {.gcsafe, raises: [].} =
+  ## The default I/O rule: complete fully at the requested size with no
+  ## fault, the sim analogue of a real read/write that always succeeds -
+  ## the same "nothing withheld absent a reason to explore otherwise"
+  ## default `defaultDecideBatch` uses.
+  ok(IoDecision(outcome: SimIoOutcome.Ok, bytes: cp.maxBytes))
+
+proc defaultDecideTime*(cp: TimeAdvancePoint):
     Result[TimeDecision, SimOracleError] {.gcsafe, raises: [].} =
+  ## The default time rule: advance to the earliest armed deadline.
+  ## Exported for the same reason as `defaultDecideBatch`.
   ok(TimeDecision(advanceTo: cp.armed[0]))
 
 proc defaultSimOracle*(): SimOracle =
   ## The default choice-point rules every scripted stub oracle falls
   ## back to unless it overrides a `decide*` closure itself: `decideTime`
   ## jumps straight to the earliest armed deadline (S3), `decideBatch`
-  ## delivers everything deliverable in sorted order (S4).
-  newSimOracle(defaultDecideBatch, defaultDecideTime)
+  ## delivers everything deliverable in sorted order (S4), `decideIo`
+  ## completes every operation fully with no fault (S6).
+  newSimOracle(defaultDecideBatch, defaultDecideIo, defaultDecideTime)
 
 type
   SplitMix64 = object
@@ -199,7 +255,7 @@ proc RandomOracle*(seed: uint64): SimOracle =
     for i, ev in cp.deliverable:
       ids[i] = ev.id
     ok(BatchDecision(order: shuffled(rng, ids)))
-  newSimOracle(decideBatch, defaultDecideTime)
+  newSimOracle(decideBatch, defaultDecideIo, defaultDecideTime)
 
 proc newSimEngineState*(startValue: int = 0,
                          oracle: SimOracle = defaultSimOracle()): SimEngineState =
@@ -259,6 +315,19 @@ proc simDecideTimeAdvance*(state: SimEngineState, armed: seq[Moment],
       "current virtual clock"
   setSimClockNanoseconds(advanceTo.epochNanoSeconds)
   advanceTo
+
+proc simDecideIo*(state: SimEngineState, cp: IoOutcomePoint): IoDecision =
+  ## Asks the oracle's `decideIo` closure to resolve one I/O outcome
+  ## (3.3). No live producer wires this before the transport seam (S10);
+  ## S6 exercises it with hand-built `IoOutcomePoint` values to validate
+  ## the choice-point shape ahead of the seam that will drive it. An
+  ## oracle error is a structured simulation-protocol violation, the
+  ## same `raiseAssert` discipline `simDecideBatch`/`simDecideTimeAdvance`
+  ## already use.
+  let decision = state.oracle.decideIoImpl(cp)
+  if decision.isErr:
+    raiseAssert "simulation oracle error: " & decision.error.msg
+  decision.get()
 
 proc simSetReaderInterest*(state: SimEngineState, fd: int,
                             cb: InternalAsyncCallback) =

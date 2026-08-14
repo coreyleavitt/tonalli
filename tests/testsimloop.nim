@@ -44,7 +44,7 @@ suite "sim decideTime advance":
     check advanceTo == earliest
 
   test "a scripted oracle can override the default rule":
-    let oracle = newSimOracle(passthroughDecideBatch, proc(cp: TimeAdvancePoint):
+    let oracle = newSimOracle(passthroughDecideBatch, defaultDecideIo, proc(cp: TimeAdvancePoint):
         Result[TimeDecision, SimOracleError] {.gcsafe, raises: [].} =
       ok(TimeDecision(advanceTo: cp.armed[^1])))
     let state = newSimEngineState(oracle = oracle)
@@ -55,7 +55,7 @@ suite "sim decideTime advance":
     check advanceTo == latest
 
   test "an advance earlier than the earliest armed deadline is a violation":
-    let oracle = newSimOracle(passthroughDecideBatch, proc(cp: TimeAdvancePoint):
+    let oracle = newSimOracle(passthroughDecideBatch, defaultDecideIo, proc(cp: TimeAdvancePoint):
         Result[TimeDecision, SimOracleError] {.gcsafe, raises: [].} =
       ok(TimeDecision(advanceTo: Moment.init(50, Nanosecond))))
     let state = newSimEngineState(oracle = oracle)
@@ -65,7 +65,7 @@ suite "sim decideTime advance":
       discard state.simDecideTimeAdvance(@[armed], curTime)
 
   test "an advance earlier than the current virtual clock is a violation":
-    let oracle = newSimOracle(passthroughDecideBatch, proc(cp: TimeAdvancePoint):
+    let oracle = newSimOracle(passthroughDecideBatch, defaultDecideIo, proc(cp: TimeAdvancePoint):
         Result[TimeDecision, SimOracleError] {.gcsafe, raises: [].} =
       ok(TimeDecision(advanceTo: cp.armed[0])))
     let state = newSimEngineState(oracle = oracle)
@@ -75,7 +75,7 @@ suite "sim decideTime advance":
       discard state.simDecideTimeAdvance(@[armed], curTime)
 
   test "an oracle error is reported, not silently accepted":
-    let oracle = newSimOracle(passthroughDecideBatch, proc(cp: TimeAdvancePoint):
+    let oracle = newSimOracle(passthroughDecideBatch, defaultDecideIo, proc(cp: TimeAdvancePoint):
         Result[TimeDecision, SimOracleError] {.gcsafe, raises: [].} =
       err(SimOracleError(msg: "scripted failure")))
     let state = newSimEngineState(oracle = oracle)
@@ -102,6 +102,7 @@ suite "sim decideBatch and the sim event set":
       proc(cp: SelectBatchPoint): Result[BatchDecision, SimOracleError]
           {.gcsafe, raises: [].} =
         ok(BatchDecision(order: @[SimEventId(999)])),
+      defaultDecideIo,
       proc(cp: TimeAdvancePoint): Result[TimeDecision, SimOracleError]
           {.gcsafe, raises: [].} =
         ok(TimeDecision(advanceTo: cp.armed[0])))
@@ -119,6 +120,7 @@ suite "sim decideBatch and the sim event set":
       proc(cp: SelectBatchPoint): Result[BatchDecision, SimOracleError]
           {.gcsafe, raises: [].} =
         ok(BatchDecision(order: @[cp.deliverable[0].id, cp.deliverable[0].id])),
+      defaultDecideIo,
       proc(cp: TimeAdvancePoint): Result[TimeDecision, SimOracleError]
           {.gcsafe, raises: [].} =
         ok(TimeDecision(advanceTo: cp.armed[0])))
@@ -250,7 +252,7 @@ when defined(chronosSimulation) and compileOption("threads"):
         order[cp.deliverable.len - 1 - i] = ev.id
       ok(BatchDecision(order: order))
     let disp = newSimDispatcher(
-      oracle = newSimOracle(decideBatchReverse, decideTimeEarliest))
+      oracle = newSimOracle(decideBatchReverse, defaultDecideIo, decideTimeEarliest))
     setThreadDispatcher(disp)
     let fdA = disp.mintSimFd()
     let fdB = disp.mintSimFd()
@@ -294,7 +296,7 @@ when defined(chronosSimulation) and compileOption("threads"):
         Result[BatchDecision, SimOracleError] {.gcsafe, raises: [].} =
       ok(BatchDecision(order: @[]))
     let disp = newSimDispatcher(
-      oracle = newSimOracle(decideBatchDefer, decideTimeEarliest))
+      oracle = newSimOracle(decideBatchDefer, defaultDecideIo, decideTimeEarliest))
     setThreadDispatcher(disp)
     let fd = disp.mintSimFd()
     discard addReader2(fd, proc(arg: pointer) {.gcsafe, raises: [].} = discard)

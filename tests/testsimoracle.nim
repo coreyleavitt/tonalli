@@ -11,9 +11,16 @@
 ## 3.7, slice S5) and, combined with `simtrace.nim`'s decision-log writer,
 ## produce byte-identical logs for the same seed and differing logs for
 ## different seeds.
+##
+## Also S6's interface freeze gate (RFC 0003 3.3, 6/S6): `decideIo`/
+## `IoOutcomePoint` exercised with hand-built values ahead of S10's
+## transport seam, and a throwaway priority-permutation oracle (the PCT
+## primitive) proving the `SimOracle` interface admits a structurally
+## different consumer than the blind random/replay oracles.
 
 import unittest2
-import std/[os, algorithm]
+import std/[os, algorithm, tables, strutils]
+import results
 import ../chronos/timer
 import ../chronos/internal/simengine
 import ../chronos/internal/simtrace
@@ -90,3 +97,135 @@ suite "sim decision-log determinism":
     check logA != logC
     removeFile(pathA)
     removeFile(pathC)
+
+# --- S6: decideIo/IoOutcomePoint, completing the decideBatch/decideIo/
+# decideTime triple (RFC 0003 3.3 D2). No live producer exists before S10;
+# these exercise the choice point with hand-built `IoOutcomePoint` values.
+
+suite "sim decideIo and IoOutcomePoint":
+  test "the default oracle completes fully at the requested size":
+    let state = newSimEngineState()
+    let cp = IoOutcomePoint(trigger: SimEventId(1'u64),
+      endpoint: SimEndpointId(0'u32), op: SimIoOp.Read, maxBytes: 256,
+      faults: {})
+    let decision = state.simDecideIo(cp)
+    check decision.outcome == SimIoOutcome.Ok
+    check decision.bytes == 256
+
+  test "a scripted oracle can return a fault outcome":
+    let oracle = newSimOracle(defaultDecideBatch,
+      proc(cp: IoOutcomePoint): Result[IoDecision, SimOracleError]
+          {.gcsafe, raises: [].} =
+        ok(IoDecision(outcome: SimIoOutcome.Fault, fault: SimFault.Reset)),
+      defaultDecideTime)
+    let state = newSimEngineState(oracle = oracle)
+    let cp = IoOutcomePoint(trigger: SimEventId(1'u64),
+      endpoint: SimEndpointId(3'u32), op: SimIoOp.Write, maxBytes: 64,
+      faults: {SimFault.Reset})
+    let decision = state.simDecideIo(cp)
+    check decision.outcome == SimIoOutcome.Fault
+    check decision.fault == SimFault.Reset
+
+  test "an oracle error on decideIo is reported, not silently accepted":
+    let oracle = newSimOracle(defaultDecideBatch,
+      proc(cp: IoOutcomePoint): Result[IoDecision, SimOracleError]
+          {.gcsafe, raises: [].} =
+        err(SimOracleError(msg: "scripted io failure")),
+      defaultDecideTime)
+    let state = newSimEngineState(oracle = oracle)
+    let cp = IoOutcomePoint(trigger: SimEventId(1'u64),
+      endpoint: SimEndpointId(0'u32), op: SimIoOp.Read, maxBytes: 16,
+      faults: {})
+    try:
+      discard state.simDecideIo(cp)
+      check false
+    except AssertionDefect as exc:
+      check "scripted io failure" in exc.msg
+
+# --- S6: the interface freeze gate. A structurally different consumer -
+# a priority-permutation oracle (the PCT primitive, Burckhardt et al.) -
+# built entirely from typed choice-point data, never touching asyncengine
+# or simengine. Throwaway spike wiring (RFC 0003 3.3, 6/S6): it exists to
+# validate D2's shape, not to ship as a real exploration oracle (issue #10).
+
+proc newPctOracle(priorityOf: proc(source: SimEndpointId, kind: SimEventKind):
+    int {.gcsafe, raises: [].}): SimOracle =
+  ## A minimal PCT primitive: `decideBatch` always schedules the
+  ## highest-priority deliverable event first (ties broken by id for
+  ## determinism). Scheduling an event is a priority-change point in the
+  ## Burckhardt sense: the winner's priority drops below every other
+  ## source present in that same decision, so a later decision over the
+  ## same sources is guaranteed to pick someone else, all from the
+  ## closure captures `newSimOracle`'s consumers already use for
+  ## statefulness (3.3's "Statefulness" note).
+  var overrides = initTable[uint32, int]()
+  proc currentPriority(ev: SimEvent): int =
+    overrides.getOrDefault(uint32(ev.source), priorityOf(ev.source, ev.kind))
+  proc decideBatch(cp: SelectBatchPoint):
+      Result[BatchDecision, SimOracleError] {.gcsafe, raises: [].} =
+    var scored = cp.deliverable
+    scored.sort(proc(x, y: SimEvent): int =
+      let px = currentPriority(x)
+      let py = currentPriority(y)
+      if px != py: cmp(py, px)
+      else: cmp(uint64(x.id), uint64(y.id)))
+    if scored.len > 1:
+      let winner = scored[0]
+      var floor = currentPriority(scored[1])
+      for i in 2 ..< scored.len:
+        let p = currentPriority(scored[i])
+        if p < floor: floor = p
+      overrides[uint32(winner.source)] = floor - 1
+    var order = newSeq[SimEventId](scored.len)
+    for i, ev in scored:
+      order[i] = ev.id
+    ok(BatchDecision(order: order))
+  newSimOracle(decideBatch, defaultDecideIo, defaultDecideTime)
+
+suite "sim PCT-primitive oracle (interface freeze gate)":
+  test "always prefers endpoint A's events":
+    let endpointA = SimEndpointId(1'u32)
+    let endpointB = SimEndpointId(2'u32)
+    proc priorityOf(source: SimEndpointId, kind: SimEventKind): int {.gcsafe.} =
+      if source == endpointA: 10 else: 1
+    let oracle = newPctOracle(priorityOf)
+    let state = newSimEngineState(oracle = oracle)
+    let deliverable = @[
+      SimEvent(id: SimEventId(1'u64), kind: SimEventKind.Readiness, source: endpointB),
+      SimEvent(id: SimEventId(2'u64), kind: SimEventKind.Readiness, source: endpointA),
+      SimEvent(id: SimEventId(3'u64), kind: SimEventKind.Readiness, source: endpointB),
+      SimEvent(id: SimEventId(4'u64), kind: SimEventKind.Readiness, source: endpointA)]
+    let decision = state.simDecideBatch(deliverable)
+    check decision.order == @[SimEventId(2'u64), SimEventId(4'u64),
+                               SimEventId(1'u64), SimEventId(3'u64)]
+
+  test "deprioritizes arrival batches":
+    let source = SimEndpointId(0'u32)
+    proc priorityOf(source: SimEndpointId, kind: SimEventKind): int {.gcsafe.} =
+      if kind == SimEventKind.Arrival: -100 else: 5
+    let oracle = newPctOracle(priorityOf)
+    let state = newSimEngineState(oracle = oracle)
+    let deliverable = @[
+      SimEvent(id: SimEventId(1'u64), kind: SimEventKind.Arrival, source: source),
+      SimEvent(id: SimEventId(2'u64), kind: SimEventKind.Readiness, source: source),
+      SimEvent(id: SimEventId(3'u64), kind: SimEventKind.Arrival, source: source),
+      SimEvent(id: SimEventId(4'u64), kind: SimEventKind.Readiness, source: source)]
+    let decision = state.simDecideBatch(deliverable)
+    check decision.order == @[SimEventId(2'u64), SimEventId(4'u64),
+                               SimEventId(1'u64), SimEventId(3'u64)]
+
+  test "a priority-change point lowers the just-scheduled source for the next decision":
+    let endpointA = SimEndpointId(1'u32)
+    let endpointB = SimEndpointId(2'u32)
+    proc priorityOf(source: SimEndpointId, kind: SimEventKind): int {.gcsafe.} =
+      if source == endpointA: 10 else: 9
+    let oracle = newPctOracle(priorityOf)
+    let state = newSimEngineState(oracle = oracle)
+    let evA = SimEvent(id: SimEventId(1'u64), kind: SimEventKind.Readiness, source: endpointA)
+    let evB = SimEvent(id: SimEventId(2'u64), kind: SimEventKind.Readiness, source: endpointB)
+    let firstDecision = state.simDecideBatch(@[evA, evB])
+    check firstDecision.order == @[SimEventId(1'u64), SimEventId(2'u64)]
+    # the change point just dropped A below B's priority (9), so the same
+    # two sources flip winner on the next decision with no new choice type
+    let secondDecision = state.simDecideBatch(@[evA, evB])
+    check secondDecision.order == @[SimEventId(2'u64), SimEventId(1'u64)]
