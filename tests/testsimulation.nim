@@ -147,6 +147,131 @@ when defined(chronosSimulation) and compileOption("threads"):
         msg: "wrong exception type: " & exc.msg)
     probeChan.send(outcome)
 
+  proc probeSweepRunsEverySeedAndPasses() {.thread.} =
+    var outcome = ProbeOutcome(ok: true)
+    let outcomes = sweepSeeds(0'u64 .. 4'u64):
+      discard
+    if outcomes.len != 5:
+      outcome = ProbeOutcome(ok: false,
+        msg: "expected 5 outcomes, got " & $outcomes.len)
+    else:
+      for i, o in outcomes:
+        if not o.passed:
+          outcome = ProbeOutcome(ok: false,
+            msg: "seed " & $o.seed & " unexpectedly failed: " & o.msg)
+        elif o.seed != uint64(i):
+          outcome = ProbeOutcome(ok: false,
+            msg: "outcome " & $i & " carries seed " & $o.seed &
+                 " - not in seed order")
+    probeChan.send(outcome)
+
+  proc probeSweepCollectsEveryFailingSeedNotJustFirst() {.thread.} =
+    var outcome = ProbeOutcome(ok: true)
+    let outcomes = collectSweepSeeds(20'u64 .. 22'u64,
+      simulateDefaultDecisionBudget, simulateDefaultTimeBudget,
+      proc(): Future[void] {.async, gcsafe.} =
+        raise newException(ValueError, "boom from sweep body"))
+    if outcomes.len != 3:
+      outcome = ProbeOutcome(ok: false,
+        msg: "expected 3 outcomes, got " & $outcomes.len)
+    else:
+      var seeds: seq[uint64]
+      for o in outcomes:
+        if o.passed:
+          outcome = ProbeOutcome(ok: false,
+            msg: "seed " & $o.seed & " unexpectedly passed")
+        elif o.kind != SimFailureKind.BodyError:
+          outcome = ProbeOutcome(ok: false,
+            msg: "seed " & $o.seed & " wrong kind: " & $o.kind)
+        elif "boom from sweep body" notin o.msg:
+          outcome = ProbeOutcome(ok: false,
+            msg: "seed " & $o.seed & " lost its message: " & o.msg)
+        seeds.add o.seed
+      if outcome.ok and seeds != @[20'u64, 21'u64, 22'u64]:
+        outcome = ProbeOutcome(ok: false,
+          msg: "not every seed ran, or not in order: " & $seeds)
+    probeChan.send(outcome)
+
+  proc pre703FixtureBody() {.async.} =
+    ## Reconstructs the shape of upstream #703 (RFC 0003 S9a): two
+    ## independent completions race to be observed by a single,
+    ## unrepeated check - the real bug's spawned thread posting two
+    ## `callSoon` callbacks the dispatcher's queue drain could land
+    ## between, with only one drained by the test's single `poll()`.
+    ## `simProducer` (S13) is not built yet, so this reconstructs the
+    ## same race through the sim seams that exist now: two readiness
+    ## events, delivered together in the same batch, in a relative
+    ## order `RandomOracle` controls (`decideBatch`'s shuffle, the only
+    ## seed-dependent degree of freedom the harness exposes yet).
+    ## `producer` models the first post; `reaper` models whatever the
+    ## buggy test's single check depended on having already observed it
+    ## - if the oracle delivers `reaper` first, `producer` fires only
+    ## afterward, past the point its result was needed, the same shape
+    ## as the leftover callback that fired through #703's dangling
+    ## pointer.
+    let disp = getThreadDispatcher()
+    var producerRan = false
+    var reaperSawProducer = false
+    let fdProducer = disp.mintSimFd()
+    let fdReaper = disp.mintSimFd()
+    discard addReader2(fdProducer, proc(arg: pointer) {.gcsafe, raises: [].} =
+      producerRan = true)
+    discard addReader2(fdReaper, proc(arg: pointer) {.gcsafe, raises: [].} =
+      reaperSawProducer = producerRan)
+    discard disp.simMarkReady(fdProducer, SimReadyDirection.Read)
+    discard disp.simMarkReady(fdReaper, SimReadyDirection.Read)
+    # `poll()` cannot be called directly from async code (illegal
+    # `NestedPoll` effect); yielding once is enough, since both
+    # readiness events are already deliverable and land in the same
+    # batch regardless of which poll iteration inside `await` delivers
+    # them.
+    await sleepAsync(0.milliseconds)
+    if not reaperSawProducer:
+      raise newException(ValueError,
+        "pre-#703 shape: the producer callback had not fired by the time " &
+        "its single check ran - reproduces the upstream #703 under-drain")
+
+  proc probePre703FixtureCaughtBySweepWithSeedReplaying() {.thread.} =
+    var outcome = ProbeOutcome(ok: true)
+    let outcomes = collectSweepSeeds(0'u64 .. 15'u64,
+      simulateDefaultDecisionBudget, simulateDefaultTimeBudget,
+      proc(): Future[void] {.async, gcsafe.} =
+        await pre703FixtureBody())
+    var failingSeeds: seq[uint64]
+    var passingSeeds: seq[uint64]
+    for o in outcomes:
+      if o.passed: passingSeeds.add o.seed
+      else: failingSeeds.add o.seed
+    if failingSeeds.len == 0:
+      outcome = ProbeOutcome(ok: false,
+        msg: "no seed in 0..15 reproduced the race - fixture is not " &
+             "exercising the order-dependent hazard")
+    elif passingSeeds.len == 0:
+      outcome = ProbeOutcome(ok: false,
+        msg: "every seed in 0..15 failed - fixture is not seed-dependent")
+    else:
+      let replaySeed = failingSeeds[0]
+      try:
+        simulate(seed = replaySeed):
+          await pre703FixtureBody()
+        outcome = ProbeOutcome(ok: false,
+          msg: "seed " & $replaySeed & " failed under the sweep but " &
+               "passed on direct replay - not deterministic")
+      except SimulationError as exc:
+        if exc.kind != SimFailureKind.BodyError:
+          outcome = ProbeOutcome(ok: false,
+            msg: "replay of seed " & $replaySeed & " raised the wrong " &
+                 "kind: " & $exc.kind)
+        elif "pre-#703 shape" notin exc.msg:
+          outcome = ProbeOutcome(ok: false,
+            msg: "replay of seed " & $replaySeed & " lost the message: " &
+                 exc.msg)
+      except CatchableError as exc:
+        outcome = ProbeOutcome(ok: false,
+          msg: "replay of seed " & $replaySeed & " raised the wrong " &
+               "exception type: " & exc.msg)
+    probeChan.send(outcome)
+
   proc probeDeadlockIsReportedAsSimulationError() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     try:
@@ -191,5 +316,21 @@ when defined(chronosSimulation) and compileOption("threads"):
 
     test "quiescence deadlock is reported as a SimulationError":
       let outcome = runProbe(probeDeadlockIsReportedAsSimulationError)
+      checkpoint outcome.msg
+      check outcome.ok
+
+  suite "sweepSeeds aggregation":
+    test "every seed runs, in order, and a well-behaved body passes all of them":
+      let outcome = runProbe(probeSweepRunsEverySeedAndPasses)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "every seed runs regardless of its siblings, and every failure is collected":
+      let outcome = runProbe(probeSweepCollectsEveryFailingSeedNotJustFirst)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "a pre-#703-shape race is caught by the sweep, with its seed replaying":
+      let outcome = runProbe(probePre703FixtureCaughtBySweepWithSeedReplaying)
       checkpoint outcome.msg
       check outcome.ok

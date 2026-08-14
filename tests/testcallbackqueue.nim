@@ -253,3 +253,75 @@ suite "CallbackQueue: raw-access guardrail":
     check(not compiles(block:
       var q: CallbackQueue[TestItem]
       discard q.tail))
+
+when defined(chronosSimulation) and compileOption("threads"):
+  ## The queue's real caller (`chronos/internal/asyncengine.nim`'s
+  ## `callbacks`/`idlers`/`ticks`) driven through a sim dispatcher and
+  ## `sweepSeeds` (RFC 0003 3.8, slice S9a) - a sweep proof that the
+  ## harness runs unmodified library code correctly, distinct from the
+  ## structural CallbackQueue[T] tests above. Every probe runs on its
+  ## own OS thread, the isolation `tests/testsimulation.nim` uses.
+  import ../chronos
+  import ../chronos/simulation
+
+  type
+    SweepProbeOutcome = object
+      ok: bool
+      msg: string
+
+  var sweepProbeChan: Channel[SweepProbeOutcome]
+  sweepProbeChan.open()
+
+  template runSweepProbe(threadProc: typed): SweepProbeOutcome =
+    var probeThread: Thread[void]
+    createThread(probeThread, threadProc)
+    let outcome = sweepProbeChan.recv()
+    joinThread(probeThread)
+    outcome
+
+  proc probeCallSoonFifoOrderHoldsAcrossSweep() {.thread.} =
+    var outcome = SweepProbeOutcome(ok: true)
+    let outcomes = sweepSeeds(0'u64 .. 9'u64):
+      var order: seq[int]
+      for i in 0 ..< 16:
+        callSoon(proc(arg: pointer) {.gcsafe, raises: [].} =
+          order.add(cast[int](arg)), cast[pointer](i))
+      # `poll()` cannot be called directly from async code (illegal
+      # `NestedPoll` effect); yielding once drains the already-queued
+      # callbacks, since `processCallbacks` always runs to completion
+      # each poll iteration regardless of the timer that wakes it.
+      await sleepAsync(0.milliseconds)
+      var expected: seq[int]
+      for i in 0 ..< 16: expected.add i
+      if order != expected:
+        raise newException(ValueError, "FIFO order violated: " & $order)
+    for o in outcomes:
+      if not o.passed:
+        outcome = SweepProbeOutcome(ok: false,
+          msg: "seed " & $o.seed & " failed: " & o.msg)
+    sweepProbeChan.send(outcome)
+
+  proc probeIdlerFiresOnEmptyBatchAcrossSweep() {.thread.} =
+    var outcome = SweepProbeOutcome(ok: true)
+    let outcomes = sweepSeeds(0'u64 .. 9'u64):
+      var idlerFired = false
+      callIdle(proc(arg: pointer) {.gcsafe, raises: [].} = idlerFired = true)
+      await sleepAsync(0.milliseconds)
+      if not idlerFired:
+        raise newException(ValueError, "idler did not fire on an empty batch")
+    for o in outcomes:
+      if not o.passed:
+        outcome = SweepProbeOutcome(ok: false,
+          msg: "seed " & $o.seed & " failed: " & o.msg)
+    sweepProbeChan.send(outcome)
+
+  suite "CallbackQueue under simulation: sweep proof":
+    test "callSoon() FIFO order holds for every seed in a sweep":
+      let outcome = runSweepProbe(probeCallSoonFifoOrderHoldsAcrossSweep)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "callIdle() fires on an empty batch for every seed in a sweep":
+      let outcome = runSweepProbe(probeIdlerFiresOnEmptyBatchAcrossSweep)
+      checkpoint outcome.msg
+      check outcome.ok
