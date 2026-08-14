@@ -1015,6 +1015,23 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
         "mintSimFd() requires a simulated dispatcher"
       AsyncFD(cint(disp.simState.mintSimFd()))
 
+    proc simMarkReady*(disp: PDispatcher, fd: AsyncFD,
+                        direction: SimReadyDirection): SimEventId =
+      ## Test/script entry point (S4; S10/S11a's transport seam is the
+      ## production source): enqueues a `Readiness` event for `fd`'s
+      ## currently-armed `direction` interest, delivered on a later
+      ## `poll()`'s `decideBatch` per the scripted decision.
+      doAssert isSimDispatcher(disp),
+        "simMarkReady() requires a simulated dispatcher"
+      disp.simState.simMarkReady(int(cint(fd)), direction)
+
+    proc simScheduleArrival*(disp: PDispatcher): SimEventId =
+      ## Test/script entry point for the S4 `Arrival` stub - `simProducer`
+      ## (S13) supersedes this with real actor identity and payload.
+      doAssert isSimDispatcher(disp),
+        "simScheduleArrival() requires a simulated dispatcher"
+      disp.simState.simScheduleArrival()
+
   var gDisp{.threadvar.}: PDispatcher ## Global dispatcher
 
   proc setThreadDispatcher*(disp: PDispatcher) {.gcsafe, raises: [].}
@@ -1037,6 +1054,11 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     when chronosSimulation:
       if not simProvenanceGuard(loop, fd):
         return err(SimBarrierCode)
+      if loop.isSimDispatcher():
+        # Registration routing (RFC 0003 3.2 point 2): a sim-minted fd
+        # has no selector entry to create - the interest table is
+        # populated lazily by addReader2/addWriter2 instead.
+        return ok()
     var data: SelectorData
     loop.selector.registerHandle2(cint(fd), {}, data)
 
@@ -1046,6 +1068,10 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     when chronosSimulation:
       if not simProvenanceGuard(loop, fd):
         return err(SimBarrierCode)
+      if loop.isSimDispatcher():
+        loop.simState.simClearReaderInterest(int(cint(fd)))
+        loop.simState.simClearWriterInterest(int(cint(fd)))
+        return ok()
     loop.selector.unregister2(cint(fd))
 
   proc addReader2*(fd: AsyncFD, cb: CallbackFunc,
@@ -1056,6 +1082,11 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     when chronosSimulation:
       if not simProvenanceGuard(loop, fd):
         return err(SimBarrierCode)
+      if loop.isSimDispatcher():
+        # Registration routing: records interest in the sim event table
+        # instead of a real selector (RFC 0003 3.2 point 2).
+        loop.simState.simSetReaderInterest(int(cint(fd)), capturingCallback(cb, udata))
+        return ok()
     var newEvents = {Event.Read}
     withData(loop.selector, cint(fd), adata) do:
       # Assignment overwrite fires =destroy on the prior reader,
@@ -1077,6 +1108,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     when chronosSimulation:
       if not simProvenanceGuard(loop, fd):
         return err(SimBarrierCode)
+      if loop.isSimDispatcher():
+        loop.simState.simClearReaderInterest(int(cint(fd)))
+        return ok()
     var newEvents: set[Event]
     withData(loop.selector, cint(fd), adata) do:
       # Assignment fires =destroy on the prior reader - context released.
@@ -1095,6 +1129,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     when chronosSimulation:
       if not simProvenanceGuard(loop, fd):
         return err(SimBarrierCode)
+      if loop.isSimDispatcher():
+        loop.simState.simSetWriterInterest(int(cint(fd)), capturingCallback(cb, udata))
+        return ok()
     var newEvents = {Event.Write}
     withData(loop.selector, cint(fd), adata) do:
       # Assign via a temp: same write-barrier-elision reason as
@@ -1113,6 +1150,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     when chronosSimulation:
       if not simProvenanceGuard(loop, fd):
         return err(SimBarrierCode)
+      if loop.isSimDispatcher():
+        loop.simState.simClearWriterInterest(int(cint(fd)))
+        return ok()
     var newEvents: set[Event]
     withData(loop.selector, cint(fd), adata) do:
       # Same as removeReader2 above: assignment fires =destroy on the
@@ -1204,9 +1244,12 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
           adata.writer.reset()
 
     when chronosSimulation:
-      # A simulated dispatcher has no selector to flush, and no reader/
-      # writer can have been armed against it before registration
-      # routing exists (S4) - nothing to do here yet.
+      # A simulated dispatcher has no selector to flush. Registration
+      # routing (S4) lets a sim-minted fd carry armed interest, but
+      # flushing it through this teardown path is deferred: nothing
+      # before S10/S11a's transport seam attaches real interest to a
+      # sim fd in a production code path, so there is nothing yet that
+      # exercises it outside a test deliberately provoking the gap.
       if not loop.isSimDispatcher():
         flushPendingReaderWriter()
     else:
@@ -1389,12 +1432,32 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
 
   when chronosSimulation:
     template pollSimSelectBranch(loop: PDispatcher, count, hasWakeup: untyped) =
-      ## RFC 0003 3.5's sim iteration, S3 scope: no sim event set exists
-      ## yet (S4), so `decideBatch` is never reached. Drain already-queued
-      ## work, else advance the virtual clock past the nearest armed
-      ## timer via `decideTime`, else quiescence.
+      ## RFC 0003 3.5's sim iteration, extended at S4 with the sim event
+      ## set: `decideBatch` is asked every iteration, unconditionally,
+      ## mirroring real `poll()`'s `select()` call, which always runs
+      ## regardless of what else is already queued. `decideTime` stays
+      ## gated behind already-queued work - S3's deliberate inversion of
+      ## the RFC's literal pseudocode order, which would otherwise let a
+      ## clock advance happen while queued callbacks (freshly expired
+      ## timers among them) are waiting to observe the *old* time. S4
+      ## carries that same inversion into the new oracle-deferral branch
+      ## rather than reopening it: `decideBatch` returning an empty
+      ## order with queued work present simply falls through to the
+      ## unchanged "drain continues" branch, exactly as an empty
+      ## `deliverable` always has.
       hasWakeup = false
-      if len(loop.callbacks) > 0 or len(loop.idlers) > 0 or len(loop.ticks) > 0:
+      let deliverable = loop.simState.simDeliverableEvents()
+      let decision = loop.simState.simDecideBatch(deliverable)
+      if decision.order.len > 0:
+        for id in decision.order:
+          let delivery = loop.simState.simTakeDelivery(id)
+          case delivery.kind
+          of SimEventKind.Readiness:
+            loop.callbacks.addLast(delivery.callback)
+          of SimEventKind.Arrival:
+            loop.processThreadCallbacks()
+        count = decision.order.len
+      elif len(loop.callbacks) > 0 or len(loop.idlers) > 0 or len(loop.ticks) > 0:
         count = 0
       else:
         var armed: seq[Moment] = @[]
@@ -1405,6 +1468,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
           sort(armed)
           discard loop.simState.simDecideTimeAdvance(armed, curTime)
           count = 0
+        elif deliverable.len > 0:
+          raiseAssert "oracle deferred all deliverable work with no fallback"
         else:
           raiseAssert "deadlock: no runnable work"
 
