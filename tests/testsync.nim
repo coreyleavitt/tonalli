@@ -156,6 +156,29 @@ suite "Asynchronous sync primitives test suite":
     await allFutures(fut1, fut2, fut3)
     result = stripe
 
+  proc testLockWaitersCount(): Future[bool] {.async.} =
+    var lock = newAsyncLock()
+    await lock.acquire()
+    if lock.waitersCount != 0:
+      return false
+
+    let waiter1 = lock.acquire()
+    let waiter2 = lock.acquire()
+    if lock.waitersCount != 2:
+      return false
+
+    await waiter2.cancelAndWait()
+    if lock.waitersCount != 1:
+      return false
+
+    lock.release()
+    await sleepAsync(0.milliseconds)
+    if lock.waitersCount != 0:
+      return false
+    if not(waiter1.finished()):
+      return false
+
+    return true
 
   proc testEvent(n: int, ev: AsyncEvent) {.async.} =
     await ev.wait()
@@ -178,6 +201,103 @@ suite "Asynchronous sync primitives test suite":
     ## There must be exactly 1 poll() call
     poll()
     result = testEventResult
+
+  proc testEventWaitersCount(): Future[bool] {.async.} =
+    var event = newAsyncEvent()
+    if event.waitersCount != 0:
+      return false
+
+    let waiter1 = event.wait()
+    let waiter2 = event.wait()
+    if event.waitersCount != 2:
+      return false
+
+    await waiter2.cancelAndWait()
+    if event.waitersCount != 1:
+      return false
+
+    event.fire()
+    if event.waitersCount != 0:
+      return false
+    if not(waiter1.finished()):
+      return false
+
+    return true
+
+  proc testEventRaceLoserWaitersCount(): Future[bool] {.async.} =
+    var event = newAsyncEvent()
+
+    let
+      winner = newFuture[void]("winner")
+    winner.complete()
+    discard await race(winner, event.wait())
+    if event.waitersCount != 1:
+      return false
+
+    event.fire()
+    if event.waitersCount != 0:
+      return false
+
+    event.clear()
+
+    let winner2 = newFuture[void]("winner2")
+    winner2.complete()
+    let loser = event.wait()
+    discard await race(winner2, loser)
+    if event.waitersCount != 1:
+      return false
+
+    await loser.cancelAndWait()
+    if event.waitersCount != 0:
+      return false
+
+    return true
+
+  proc testEventOneLoserWaitersCount(): Future[bool] {.async.} =
+    var event = newAsyncEvent()
+
+    let
+      winner = newFuture[void]("winner")
+    winner.complete()
+    discard await one(winner, event.wait())
+    if event.waitersCount != 1:
+      return false
+
+    event.fire()
+    if event.waitersCount != 0:
+      return false
+
+    event.clear()
+
+    let winner2 = newFuture[void]("winner2")
+    winner2.complete()
+    let loser = event.wait()
+    discard await one(winner2, loser)
+    if event.waitersCount != 1:
+      return false
+
+    await loser.cancelAndWait()
+    if event.waitersCount != 0:
+      return false
+
+    return true
+
+  proc testEventWaitAlreadySetWaitersCount(): Future[bool] {.async.} =
+    var event = newAsyncEvent()
+    event.fire()
+    await event.wait()
+    if event.waitersCount != 0:
+      return false
+
+    return true
+
+  proc testEventFireNoWaitersCount(): Future[bool] {.async.} =
+    var event = newAsyncEvent()
+    event.fire()
+    if event.waitersCount != 0:
+      return false
+
+    return true
 
   proc task1(aq: AsyncQueue[int]) {.async.} =
     var item1 = await aq.get()
@@ -313,6 +433,55 @@ suite "Asynchronous sync primitives test suite":
     q.putNoWait(5)
     result = (5 in q and not(6 in q))
 
+  proc testQueueGettersCount(): Future[bool] {.async.} =
+    var queue = newAsyncQueue[int]()
+    if queue.gettersCount != 0:
+      return false
+
+    let getter1 = queue.get()
+    let getter2 = queue.get()
+    if queue.gettersCount != 2:
+      return false
+
+    await getter2.cancelAndWait()
+    if queue.gettersCount != 1:
+      return false
+
+    await queue.put(100)
+    await sleepAsync(0.milliseconds)
+    if not(getter1.finished()):
+      return false
+    if (await getter1) != 100:
+      return false
+    if queue.gettersCount != 0:
+      return false
+
+    return true
+
+  proc testQueuePuttersCount(): Future[bool] {.async.} =
+    var queue = newAsyncQueue[int](1)
+    await queue.put(1)
+    if queue.puttersCount != 0:
+      return false
+
+    let putter1 = queue.put(2)
+    let putter2 = queue.put(3)
+    if queue.puttersCount != 2:
+      return false
+
+    await putter2.cancelAndWait()
+    if queue.puttersCount != 1:
+      return false
+
+    discard await queue.get()
+    await sleepAsync(0.milliseconds)
+    if not(putter1.finished()):
+      return false
+    if queue.puttersCount != 0:
+      return false
+
+    return true
+
   test "AsyncLock() behavior test":
     check:
       test1() == "0123456789"
@@ -336,8 +505,20 @@ suite "Asynchronous sync primitives test suite":
     check waitFor(testDoubleRelease()) == true
   test "AsyncLock() non-acquired release test":
     check waitFor(testNoAcquiredRelease()) == true
+  test "AsyncLock() waitersCount test":
+    check waitFor(testLockWaitersCount()) == true
   test "AsyncEvent() behavior test":
     check test2() == "0123456789"
+  test "AsyncEvent() waitersCount test":
+    check waitFor(testEventWaitersCount()) == true
+  test "AsyncEvent() race() loser waitersCount test":
+    check waitFor(testEventRaceLoserWaitersCount()) == true
+  test "AsyncEvent() one() loser waitersCount test":
+    check waitFor(testEventOneLoserWaitersCount()) == true
+  test "AsyncEvent() wait() on already-set flag waitersCount test":
+    check waitFor(testEventWaitAlreadySetWaitersCount()) == true
+  test "AsyncEvent() fire() with zero waiters test":
+    check waitFor(testEventFireNoWaitersCount()) == true
   test "AsyncQueue() behavior test":
     check test3() == 3000
   test "AsyncQueue() many iterations test":
@@ -352,6 +533,10 @@ suite "Asynchronous sync primitives test suite":
     check test8() == true
   test "AsyncQueue() contains test":
     check test9() == true
+  test "AsyncQueue() gettersCount test":
+    check waitFor(testQueueGettersCount()) == true
+  test "AsyncQueue() puttersCount test":
+    check waitFor(testQueuePuttersCount()) == true
 
   test "AsyncEventQueue() behavior test":
     let eventQueue = newAsyncEventQueue[int]()

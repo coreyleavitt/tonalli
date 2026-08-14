@@ -158,4 +158,24 @@ suite "AsyncSemaphore":
     sema.release()
 
     check await sema.acquire().withTimeout(10.millis)
-    
+
+  asyncTest "waitersCount":
+    let sema = newAsyncSemaphore(1)
+    await sema.acquire()
+    check sema.waitersCount == 0
+
+    let
+      tmp1 = sema.acquire()
+      tmp2 = sema.acquire()
+    check sema.waitersCount == 2
+
+    await tmp2.cancelAndWait()
+    check sema.waitersCount == 1
+
+    sema.release()
+    check tmp1.finished()
+    check sema.waitersCount == 0
+
+    sema.release()
+    check await sema.acquire().withTimeout(10.millis)
+

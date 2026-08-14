@@ -143,6 +143,11 @@ proc locked*(lock: AsyncLock): bool =
   ## Return `true` if the lock ``lock`` is acquired, `false` otherwise.
   lock.locked
 
+proc waitersCount*(lock: AsyncLock): int =
+  ## Return the number of tasks parked in `acquire()` on ``lock``, not
+  ## counting cancelled tasks.
+  countIt(lock.waiters, not(it.cancelled()))
+
 proc release*(lock: AsyncLock) {.raises: [AsyncLockError].} =
   ## Release a lock ``lock``.
   ##
@@ -207,6 +212,11 @@ proc clear*(event: AsyncEvent) =
 proc isSet*(event: AsyncEvent): bool =
   ## Return `true` if and only if the internal flag of ``event`` is `true`.
   event.flag
+
+proc waitersCount*(event: AsyncEvent): int =
+  ## Return the number of tasks parked in `wait()` on ``event``, not
+  ## counting cancelled tasks.
+  countIt(event.waiters, not(it.cancelled()))
 
 proc newAsyncQueue*[T](maxsize: int = 0): AsyncQueue[T] =
   ## Creates a new asynchronous queue ``AsyncQueue``.
@@ -395,6 +405,16 @@ proc len*[T](aq: AsyncQueue[T]): int {.inline.} =
 proc size*[T](aq: AsyncQueue[T]): int {.inline.} =
   ## Return the maximum number of elements in ``aq``.
   len(aq.maxsize)
+
+proc gettersCount*[T](aq: AsyncQueue[T]): int =
+  ## Return the number of tasks parked in `get()`/`popFirst()`/`popLast()`
+  ## on ``aq``, not counting cancelled tasks.
+  countIt(aq.getters, not(it.cancelled()))
+
+proc puttersCount*[T](aq: AsyncQueue[T]): int =
+  ## Return the number of tasks parked in `put()`/`addFirst()`/`addLast()`
+  ## on ``aq``, not counting cancelled tasks.
+  countIt(aq.putters, not(it.cancelled()))
 
 proc `[]`*[T](aq: AsyncQueue[T], i: Natural) : T {.inline.} =
   ## Access the i-th element of ``aq`` by order from first to last.
@@ -658,6 +678,11 @@ proc newAsyncSemaphore*(size: int = 1): AsyncSemaphore =
 
 proc availableSlots*(s: AsyncSemaphore): int =
   return s.availableSlots
+
+proc waitersCount*(s: AsyncSemaphore): int =
+  ## Return the number of tasks parked in `acquire()` on ``s``, not
+  ## counting cancelled tasks.
+  countIt(s.waiters, not(it.cancelled()))
 
 proc tryAcquire*(s: AsyncSemaphore): bool =
   ## Attempts to acquire a resource, if successful returns true, otherwise false.
