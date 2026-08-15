@@ -698,8 +698,11 @@ proc connect(session: HttpSessionRef,
               dualstack = session.dualstack,
             )
           except SimBarrierError as exc:
-            lastError = exc.msg
-            continue
+            # Hermeticity violation - retrying other addresses would reduce
+            # it to a connection-failure string; the Defect envelope keeps
+            # type identity (recovered by runSimulation).
+            raiseAsDefect(exc, "connect() crossed the simulated " &
+              "dispatcher's provenance guard")
           except TransportError as exc:
             lastError = exc.msg
             continue

@@ -1160,11 +1160,12 @@ proc acceptClientLoop(server: HttpServerRef) {.async: (raises: []).} =
             except TransportOsError:
               # Critical OS error
               break mainLoop
-            except SimBarrierError:
-              # The accept-path registration raced a dispatcher teardown, or
-              # a real fd crossed the simulated dispatcher's provenance
-              # guard - treat either the same as a critical OS error.
-              break mainLoop
+            except SimBarrierError as exc:
+              # Hermeticity violation - a silent loop exit would surface as
+              # a generic deadlock; the Defect envelope keeps type identity
+              # (recovered by runSimulation).
+              raiseAsDefect(exc, "acceptClientLoop() crossed the simulated " &
+                "dispatcher's provenance guard")
             except CancelledError:
               # Server being closed, exiting
               break mainLoop
