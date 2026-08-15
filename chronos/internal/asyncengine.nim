@@ -140,6 +140,38 @@ template preparePoll(loop: PDispatcherBase) =
   loop.inEventLoop = true
   defer: loop.inEventLoop = false
 
+when chronosSimulation:
+  template simLedgerOf*(loop: untyped): SimLedgerState =
+    ## `nil` unless `loop` is a sim dispatcher that opted into ledger
+    ## checking (RFC 0003 3.9, slice S14) - the single guarded read
+    ## every hook below goes through, so a real dispatcher (`simState`
+    ## nil) or a sim dispatcher with ledger checking off pays one nil
+    ## test and nothing else. Exported: `internal/asyncfutures.nim`'s
+    ## `finish()` calls this directly to report a future's terminal-
+    ## state transition, the one ledger observation site that lives
+    ## outside this module (futures complete from application code,
+    ## not from a `processCallbacksBody` touchpoint).
+    (if loop.simState.isNil: nil else: loop.simState.simLedgerState())
+
+  template simLedgerNoteEnqueue(loop: untyped, kind: SimLedgerQueueKind) =
+    let simLedgerHookHere = simLedgerOf(loop)
+    if not simLedgerHookHere.isNil:
+      simLedgerHookHere.noteEnqueue(kind)
+
+  template simLedgerCallbacksResidentLen(loop: untyped): int =
+    ## `loop.callbacks`'s real (non-sentinel) length at a checkpoint
+    ## taken from inside `processCallbacksBody`'s drain. Under the
+    ## default non-strict-reentrancy mode a `SentinelCallback` is
+    ## always resident at every such checkpoint - pushed once before
+    ## the drain starts and popped only as the drain's last, loop-
+    ## breaking pop (asyncengine.nim's `poll()`) - so the adjustment is
+    ## the constant `1`, never a dynamically tracked count. Strict-
+    ## reentrancy mode never uses a sentinel at all.
+    when chronosStrictReentrancy:
+      len(loop.callbacks)
+    else:
+      len(loop.callbacks) - 1
+
 template processThreadCallbacks(loop) =
   # Drain cross-thread callbacks to the local callback queue
   when hasThreadSupport:
@@ -161,6 +193,8 @@ template processThreadCallbacks(loop) =
       loop.callbacks.addLast(
         bareCallback(node.callback, node.udata)
       )
+      when chronosSimulation:
+        simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks)
       deallocShared(node)
 
 func getAsyncTimestamp*(a: Duration): auto {.inline.} =
@@ -194,6 +228,8 @@ template processTimersGetTimeout(loop, timeout: untyped) =
 
     let callable = loop.timers.pop().function
     loop.callbacks.addLast(callable)
+    when chronosSimulation:
+      simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks)
 
   if loop.timers.len > 0:
     timeout = (lastFinish - curTime).getAsyncTimestamp()
@@ -219,16 +255,30 @@ template processTimers(loop: untyped) =
       break
     let callable = loop.timers.pop().function
     loop.callbacks.addLast(callable)
+    when chronosSimulation:
+      simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks)
 
 template processIdlers(loop: untyped) =
   if len(loop.idlers) > 0:
     let callable = loop.idlers.popFirst()
     loop.callbacks.addLast(callable)
+    when chronosSimulation:
+      block:
+        let simLedgerHookHere = simLedgerOf(loop)
+        if not simLedgerHookHere.isNil:
+          simLedgerHookHere.noteFired(SimLedgerQueueKind.Idlers)
+          simLedgerHookHere.noteEnqueue(SimLedgerQueueKind.Callbacks)
 
 template processTicks(loop: untyped) =
   while len(loop.ticks) > 0:
     let callable = loop.ticks.popFirst()
     loop.callbacks.addLast(callable)
+    when chronosSimulation:
+      block:
+        let simLedgerHookHere = simLedgerOf(loop)
+        if not simLedgerHookHere.isNil:
+          simLedgerHookHere.noteFired(SimLedgerQueueKind.Ticks)
+          simLedgerHookHere.noteEnqueue(SimLedgerQueueKind.Callbacks)
 
 template fireWithContext(callable: untyped) =
   # Restore the context captured at the callback's scheduling site
@@ -241,6 +291,39 @@ template fireWithContext(callable: untyped) =
     # call on the getter.
     (callable.function)(callable.udata)
 
+template simLedgerFireOne(loop: untyped, callable: untyped) =
+  ## The step-boundary observer (RFC 0003 3.9: one step is one
+  ## outermost `fireWithContext` return) plus the callback-
+  ## conservation check, wrapped around a single real fire. A nested
+  ## `fireWithContext` (a reentrant `waitFor`'s own drain, synchronously
+  ## inside this callback) opens/closes its own `beginStep`/`endStep`
+  ## pair without advancing `stepIndex` - only the outermost pair does
+  ## that - so its own conservation check reports against the *same*
+  ## step index as this one: nested fires account to the enclosing
+  ## step. A synchronous cancellation cascade fires through the sibling
+  ## `fireCancelCallback` mechanism (asyncfutures.nim), never through
+  ## here, so it accounts to whichever step's fire triggered it with no
+  ## extra bookkeeping at all.
+  when chronosSimulation:
+    let simLedgerHookHere = simLedgerOf(loop)
+    if not simLedgerHookHere.isNil:
+      simLedgerHookHere.beginStep()
+  fireWithContext(callable)
+  when chronosSimulation:
+    if not simLedgerHookHere.isNil:
+      simLedgerHookHere.noteFired(SimLedgerQueueKind.Callbacks)
+      simLedgerHookHere.endStep()
+      simLedgerHookHere.checkQueueConservation(SimLedgerQueueKind.Callbacks,
+        simLedgerCallbacksResidentLen(loop))
+
+template simLedgerNilPopOne(loop: untyped) =
+  when chronosSimulation:
+    let simLedgerHookHere = simLedgerOf(loop)
+    if not simLedgerHookHere.isNil:
+      simLedgerHookHere.noteNilPop(SimLedgerQueueKind.Callbacks)
+      simLedgerHookHere.checkQueueConservation(SimLedgerQueueKind.Callbacks,
+        simLedgerCallbacksResidentLen(loop))
+
 template processCallbacksBody(loop: untyped) =
   when chronosStrictReentrancy:
     # Process existing callbacks but not those that follow, to allow the network
@@ -248,14 +331,18 @@ template processCallbacksBody(loop: untyped) =
     for _ in 0 ..< len(loop.callbacks):
       let callable = loop.callbacks.popFirst()
       if not(isNil(callable.function)):
-        fireWithContext(callable)
+        simLedgerFireOne(loop, callable)
+      else:
+        simLedgerNilPopOne(loop)
   else:
     while true:
       let callable = loop.callbacks.popFirst()  # len must be > 0 due to sentinel
       if isSentinel(callable):
         break
       if not(isNil(callable.function)):
-        fireWithContext(callable)
+        simLedgerFireOne(loop, callable)
+      else:
+        simLedgerNilPopOne(loop)
 
 template processCallbacks(loop: untyped) =
   # Debug-only net: every callback batch must exit with the same
@@ -323,6 +410,7 @@ when chronosSimulation:
         case delivery.kind
         of SimEventKind.Readiness:
           loop.callbacks.addLast(delivery.callback)
+          simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks)
         of SimEventKind.Arrival:
           loop.processThreadCallbacks()
       count = decision.order.len
@@ -543,7 +631,8 @@ elif defined(windows):
     proc newSimDispatcher*(oracle: SimOracle = defaultSimOracle(),
                            decisionBudget: int = 0, seed: uint64 = 0,
                            hasTimeBudget: bool = false,
-                           timeBudgetCutoffNanoseconds: int64 = 0): PDispatcher =
+                           timeBudgetCutoffNanoseconds: int64 = 0,
+                           enableLedger: bool = false): PDispatcher =
       ## Construct a hermetic simulated dispatcher: the IOCP analog of
       ## the POSIX constructor leaving `selector` nil. `ioPort` stays at
       ## its zero value - no `createIoCompletionPort` call, no Winsock
@@ -553,7 +642,8 @@ elif defined(windows):
       ## constructor's own reasoning. `oracle`/`decisionBudget`/
       ## `hasTimeBudget`/`timeBudgetCutoffNanoseconds` are `simulate()`'s
       ## livelock bounds (RFC 0003 3.8); every pre-poll-parity caller
-      ## leaves them at their unlimited default.
+      ## leaves them at their unlimited default. `enableLedger` turns on
+      ## the D8 ghost-ledger laws (RFC 0003 3.9, slice S14).
       var res = PDispatcher(
         timers: initHeapQueue[TimerCallback](),
         callbacks: initCallbackQueue[AsyncCallback](64),
@@ -565,7 +655,8 @@ elif defined(windows):
         simState: newSimEngineState(oracle = oracle,
           decisionBudget = decisionBudget, seed = seed,
           hasTimeBudget = hasTimeBudget,
-          timeBudgetCutoffNanoseconds = timeBudgetCutoffNanoseconds),
+          timeBudgetCutoffNanoseconds = timeBudgetCutoffNanoseconds,
+          enableLedger = enableLedger),
       )
 
       when not chronosStrictReentrancy:
@@ -1354,7 +1445,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     proc newSimDispatcher*(oracle: SimOracle = defaultSimOracle(),
                            decisionBudget: int = 0, seed: uint64 = 0,
                            hasTimeBudget: bool = false,
-                           timeBudgetCutoffNanoseconds: int64 = 0): PDispatcher =
+                           timeBudgetCutoffNanoseconds: int64 = 0,
+                           enableLedger: bool = false): PDispatcher =
       ## Construct a hermetic simulated dispatcher: `selector` stays
       ## nil, no fd or OS syscall is touched. `isSimDispatcher` and
       ## every provenance-guarded touch site key off `simState` being
@@ -1366,7 +1458,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       ## advance rule. `decisionBudget`/`hasTimeBudget`/
       ## `timeBudgetCutoffNanoseconds` are `simulate()`'s livelock bounds
       ## (RFC 0003 3.8); every pre-S8 caller leaves them at their
-      ## unlimited default.
+      ## unlimited default. `enableLedger` turns on the D8 ghost-ledger
+      ## laws (RFC 0003 3.9, slice S14).
       var res = PDispatcher(
         timers: initHeapQueue[TimerCallback](),
         callbacks: initCallbackQueue[AsyncCallback](chronosInitialSize),
@@ -1377,7 +1470,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
         simState: newSimEngineState(oracle = oracle,
           decisionBudget = decisionBudget, seed = seed,
           hasTimeBudget = hasTimeBudget,
-          timeBudgetCutoffNanoseconds = timeBudgetCutoffNanoseconds),
+          timeBudgetCutoffNanoseconds = timeBudgetCutoffNanoseconds,
+          enableLedger = enableLedger),
       )
 
       when not chronosStrictReentrancy:
@@ -2035,6 +2129,34 @@ when chronosSimulation:
     ## flight, so the original failure is never masked by a `doAssert`.
     gDisp = disp
 
+  proc simLedgerTeardownCheck*(disp: PDispatcher) =
+    ## The final callback-conservation reconciliation (RFC 0003 3.9): a
+    ## no-op unless `disp` opted into ledger checking. Called by
+    ## `chronos/simulation.nim`'s ledger-aware harness entry point right
+    ## before the dying sim dispatcher's queues are discarded (RFC 0003
+    ## 3.8's unconditional teardown discard), so whatever is drained
+    ## here is exactly the "explicitly dropped at teardown" term the
+    ## law names - draining (rather than reusing `simLedgerFireOne`'s
+    ## per-fire "-1 resident sentinel" constant) is what makes this
+    ## correct even when teardown lands mid-drain: a body's exception,
+    ## a deadlock, or a protocol violation can all unwind from a point
+    ## between `poll()`'s leading drain and its own trailing sentinel
+    ## push, where no sentinel is resident at all - counting what is
+    ## actually there, rather than assuming, is exact regardless. Safe
+    ## to drain unconditionally: the dying dispatcher's queues were
+    ## already headed for abandonment either way.
+    let ledger = simLedgerOf(disp)
+    if ledger.isNil:
+      return
+    var residentCallbacks = 0
+    while len(disp.callbacks) > 0:
+      let callable = disp.callbacks.popFirst()
+      if not isSentinel(callable):
+        inc residentCallbacks
+    ledger.checkQueueConservation(SimLedgerQueueKind.Callbacks, residentCallbacks)
+    ledger.checkQueueConservation(SimLedgerQueueKind.Idlers, len(disp.idlers))
+    ledger.checkQueueConservation(SimLedgerQueueKind.Ticks, len(disp.ticks))
+
 proc setGlobalDispatcher*(disp: PDispatcher) {.
       gcsafe, deprecated: "Use setThreadDispatcher() instead".} =
   setThreadDispatcher(disp)
@@ -2102,7 +2224,10 @@ proc removeTimer*(at: uint64, cb: CallbackFunc, udata: pointer = nil) {.
 proc callSoon*(acb: AsyncCallback) =
   ## Schedule `cbproc` to be called as soon as possible.
   ## The callback is called when control returns to the event loop.
-  getThreadDispatcher().callbacks.addLast(acb)
+  let loop = getThreadDispatcher()
+  loop.callbacks.addLast(acb)
+  when chronosSimulation:
+    simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks)
 
 proc callSoon*(cbproc: CallbackFunc, udata: pointer = nil) =
   ## Schedule `cbproc` to be called as soon as possible.
@@ -2231,7 +2356,10 @@ proc callIdle*(acb: AsyncCallback) =
   ## **WARNING!** Despite the name, "idle" callbacks called on every loop
   ## iteration if there no network events available, not when the loop is
   ## actually "idle".
-  getThreadDispatcher().idlers.addLast(acb)
+  let loop = getThreadDispatcher()
+  loop.idlers.addLast(acb)
+  when chronosSimulation:
+    simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Idlers)
 
 proc callIdle*(cbproc: CallbackFunc, data: pointer) =
   ## Schedule ``cbproc`` to be called when there no pending network events
@@ -2251,7 +2379,10 @@ proc internalCallTick*(acb: AsyncCallback) =
   ## when OS system queue finished processing events. Caller-supplied
   ## AsyncCallback - caller decides whether to use `capturingCallback` or
   ## `bareCallback`.
-  getThreadDispatcher().ticks.addLast(acb)
+  let loop = getThreadDispatcher()
+  loop.ticks.addLast(acb)
+  when chronosSimulation:
+    simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Ticks)
 
 proc internalCallTick*(cbproc: CallbackFunc, data: pointer) =
   ## Schedule ``cbproc`` to be called after all scheduled callbacks when

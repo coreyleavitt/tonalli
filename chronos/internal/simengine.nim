@@ -34,8 +34,9 @@ import ../timer
 import ../futures
 import ./simclock
 import ./simtrace
+import ./simledger
 
-export simtrace
+export simtrace, simledger
 
 type
   SimBarrierError* = object of CatchableError
@@ -226,6 +227,14 @@ type
     streamEndpoints: Table[int, SimStreamEndpoint]
     datagramEndpoints: Table[int, SimDatagramEndpoint]
     nextEndpointIdValue: uint32
+    ledger: SimLedgerState
+      ## `nil` unless the caller opted into ledger checking (RFC 0003
+      ## 3.9, slice S14): `chronos/simulation.nim`'s `simulateWithLedger`
+      ## is the sole caller that constructs one, so the existing
+      ## `simulate()`/`sweepSeeds` entry points and every pre-S14 test
+      ## are unaffected. `simLedgerState()` below is the sole accessor -
+      ## every field on this object stays private to this module, the
+      ## same discipline the rest of `SimEngineState` already follows.
 
 const
   SimBarrierCode* = OSErrorCode(1_397_835_586'i32)
@@ -427,19 +436,28 @@ proc newSimEngineState*(startValue: int = 0,
                          decisionBudget: int = 0,
                          seed: uint64 = 0,
                          hasTimeBudget: bool = false,
-                         timeBudgetCutoffNanoseconds: int64 = 0): SimEngineState =
+                         timeBudgetCutoffNanoseconds: int64 = 0,
+                         enableLedger: bool = false): SimEngineState =
   ## `decisionBudget`/`hasTimeBudget`/`timeBudgetCutoffNanoseconds` are
   ## the harness's livelock bounds (RFC 0003 3.8); zero/`false` (the
   ## default) means unlimited, which is what every pre-S8 caller of
   ## this constructor still gets. `seed` is carried only for budget-
-  ## exhaustion messages and the trace writer's records.
+  ## exhaustion messages and the trace writer's records. `enableLedger`
+  ## (default `false`, so every existing caller is unaffected) turns on
+  ## the D8 ghost-ledger laws (RFC 0003 3.9, slice S14).
   SimEngineState(endpoints: initHashSet[int](), nextFdValue: startValue,
                   oracle: oracle, interest: initTable[int, SimInterest](),
                   decisionBudget: decisionBudget, seed: seed,
                   hasTimeBudget: hasTimeBudget,
                   timeBudgetCutoffNanoseconds: timeBudgetCutoffNanoseconds,
                   streamEndpoints: initTable[int, SimStreamEndpoint](),
-                  datagramEndpoints: initTable[int, SimDatagramEndpoint]())
+                  datagramEndpoints: initTable[int, SimDatagramEndpoint](),
+                  ledger: (if enableLedger: newSimLedgerState() else: nil))
+
+proc simLedgerState*(state: SimEngineState): SimLedgerState {.inline.} =
+  ## `nil` unless the run opted into ledger checking - see the `ledger`
+  ## field's docstring above.
+  state.ledger
 
 proc mintSimFd*(state: SimEngineState): int =
   ## Mints the next sim-owned fd-domain id and records it in the

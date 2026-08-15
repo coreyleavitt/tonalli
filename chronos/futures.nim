@@ -262,6 +262,29 @@ when chronosFutureTracking:
 
   var futureList* {.threadvar.}: FutureList
 
+when chronosSimulation:
+  static:
+    doAssert chronosFutureTracking,
+      "chronosSimulation requires chronosFutureTracking (RFC 0003 3.9): " &
+      "the ghost ledger's future-lifecycle law integrates the existing " &
+      "pending-future tracking rather than reinventing it"
+
+  var simLedgerFuturesCreated* {.threadvar.}: uint64
+    ## Cumulative futures constructed on this thread (RFC 0003 3.9's
+    ## future-lifecycle law: "created equals completed plus cancelled
+    ## plus failed plus still-pending"). A plain thread-local sum, the
+    ## same pattern as `currentAsyncContext`/`futureList` above: this
+    ## module cannot reach the dispatcher (`internal/asyncengine.nim`
+    ## imports `futures.nim`, not the other way around), so the step-
+    ## indexed, identity-aware half of the law lives in
+    ## `internal/asyncfutures.nim`'s `finish()` instead, which already
+    ## imports `asyncengine`. These four counters are read back from
+    ## there (and from `chronos/simulation.nim`'s teardown check) - the
+    ## sum side of the law needs no dispatcher access at all.
+  var simLedgerFuturesCompleted* {.threadvar.}: uint64
+  var simLedgerFuturesCancelled* {.threadvar.}: uint64
+  var simLedgerFuturesFailed* {.threadvar.}: uint64
+
 # Internal utilities - these are not part of the stable API
 proc internalInitFutureBase*(fut: FutureBase, loc: ptr SrcLoc,
                              state: FutureState, flags: FutureFlags) =
@@ -280,6 +303,24 @@ proc internalInitFutureBase*(fut: FutureBase, loc: ptr SrcLoc,
 
   if state != FutureState.Pending:
     fut.internalLocation[LocationKind.Finish] = loc
+
+  when chronosSimulation:
+    # Counts every future regardless of build-in-active ledger state
+    # (RFC 0003 3.9's law is a sum, cheap to keep unconditionally once
+    # `chronosSimulation` is on; whether anything ever reads it is the
+    # opt-in half, in `chronos/simulation.nim`). A future born already
+    # terminal (`Future.completed()`/`Future.failed()`, below - never
+    # linked into `futureList` at all, see the `chronosFutureTracking`
+    # block's `if state == FutureState.Pending` guard) is the one
+    # transition `internal/asyncfutures.nim`'s `finish()` never sees,
+    # since such a future never passes through `finish()` - counted
+    # here instead, the only place its birth-state is visible.
+    inc simLedgerFuturesCreated
+    case state
+    of FutureState.Completed: inc simLedgerFuturesCompleted
+    of FutureState.Cancelled: inc simLedgerFuturesCancelled
+    of FutureState.Failed: inc simLedgerFuturesFailed
+    of FutureState.Pending: discard
 
   when chronosFutureId:
     currentID.inc()

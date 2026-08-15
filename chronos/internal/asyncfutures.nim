@@ -18,6 +18,8 @@ import stew/base10
 
 import ./[asyncengine, raisesfutures]
 import ../[config, futures]
+when chronosSimulation:
+  import ./simledger
 
 export
   raisesfutures.Raising, raisesfutures.InternalRaisesFuture,
@@ -176,11 +178,49 @@ proc checkFinished(future: FutureBase, loc: ptr SrcLoc) =
   else:
     future.internalLocation[LocationKind.Finish] = loc
 
+when chronosSimulation:
+  proc simLedgerDescribeFuture(fut: FutureBase): string =
+    "Future[" & Base10.toString(fut.id) & "] created at " &
+      $fut.location[LocationKind.Create]
+
+  proc simLedgerNoteFutureFinish(fut: FutureBase, state: FutureState) =
+    ## The identity-aware half of RFC 0003 3.9's future-lifecycle law:
+    ## sum counters live in `futures.nim` (which cannot reach the
+    ## dispatcher); this proc, called only after `checkFinished` has
+    ## already passed, additionally records `fut`'s identity so a
+    ## second, distinct transition on the same future - unreachable
+    ## through this path in practice, since `checkFinished` raises an
+    ## uncatchable-by-`simulate()` `FutureDefect` before a real second
+    ## `finish()` call could ever reach here; see
+    ## `simLedgerDebugForceFutureState` for how the RED-phase plant
+    ## reaches it anyway - is caught with the future named.
+    let loop = getThreadDispatcherOrNil()
+    if loop.isNil or not loop.isSimDispatcher():
+      return
+    let ledger = loop.simLedgerOf()
+    if not ledger.isNil:
+      ledger.noteFutureTransition(fut.id, state, simLedgerDescribeFuture(fut))
+
+  proc simLedgerDebugForceFutureState*(fut: FutureBase, state: FutureState) =
+    ## TEST-ONLY escape hatch (RFC 0003 slice S14's RED phase):
+    ## directly overwrites `fut`'s lifecycle state and notifies the
+    ## ledger's identity registry, bypassing `finish()`/`checkFinished`
+    ## entirely - the only way to plant a double-completion for the
+    ## ledger's own detector to catch, since a genuine second call to
+    ## `finish()` can never reach it (see `simLedgerNoteFutureFinish`).
+    ## Reachable from test code only; not part of the stable API, and
+    ## a real second `finish()` call still raises `FutureDefect` as
+    ## always - this hook does not weaken that guard.
+    fut.internalState = state
+    simLedgerNoteFutureFinish(fut, state)
+
 proc finish(fut: FutureBase, state: FutureState, loc: ptr SrcLoc) =
   fut.checkFinished(loc)
 
   fut.internalState = state
   fut.internalCancelcb.reset() # release cancellation callback memory
+  when chronosSimulation:
+    simLedgerNoteFutureFinish(fut, state)
 
   if not(isNil(fut.internalCallback.function)):
     callSoon(move(fut.internalCallback))

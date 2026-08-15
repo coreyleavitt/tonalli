@@ -245,7 +245,22 @@ proc newSimulationError(kind: SimFailureKind, seed: uint64, tracePath, msg: stri
 proc simTracePath(seed: uint64): string =
   getTempDir() / "chronos-sim" / ("seed-" & $seed & ".ndjson")
 
+proc newSimLedgerErrorFrom(disp: PDispatcher, seed: uint64,
+                            msg: string): ref SimLedgerError =
+  ## Reads the structured fields `simledger.nim`'s `raiseLedgerViolation`
+  ## stashed on `disp`'s ledger just before raising the internal
+  ## `Defect` this converts (RFC 0003 3.9): `asyncengine.nim`'s file-
+  ## wide `{.push raises: [].}` is why the violation could not raise
+  ## `SimLedgerError` (a `CatchableError`) directly from inside
+  ## `poll()`'s call tree - see `SimLedgerViolation`'s docstring.
+  let violation = disp.simLedgerOf().lastViolation
+  result = newException(SimLedgerError, msg)
+  result.seed = seed
+  result.step = violation.step
+  result.objectDesc = violation.objectDesc
+
 proc runSimulation(seed: uint64, decisionBudget: int, timeBudget: Duration,
+                    enableLedger: bool,
                     body: proc(): Future[void] {.gcsafe.}) =
   ## The harness core behind the `simulate` template (RFC 0003 3.8):
   ## saves the thread's current dispatcher without side effects,
@@ -255,7 +270,8 @@ proc runSimulation(seed: uint64, decisionBudget: int, timeBudget: Duration,
   ## through the force path - unconditionally, whether `body` completed,
   ## the body raised, or the sim loop itself failed - so the original
   ## failure always survives and the calling thread's real dispatcher
-  ## is always left intact.
+  ## is always left intact. `enableLedger` turns on the D8 ghost-ledger
+  ## laws (RFC 0003 3.9, slice S14); see `simulateWithLedger`.
   let savedDisp = getThreadDispatcherOrNil()
   let tracePath = simTracePath(seed)
   createDir(tracePath.parentDir)
@@ -264,7 +280,8 @@ proc runSimulation(seed: uint64, decisionBudget: int, timeBudget: Duration,
     simClockAnchorNanoseconds + timeBudget.nanoseconds
   let disp = newSimDispatcher(oracle = RandomOracle(seed),
     decisionBudget = decisionBudget, seed = seed, hasTimeBudget = true,
-    timeBudgetCutoffNanoseconds = timeBudgetCutoffNanoseconds)
+    timeBudgetCutoffNanoseconds = timeBudgetCutoffNanoseconds,
+    enableLedger = enableLedger)
   disp.simAttachTraceWriter(addr writer)
 
   stdout.writeLine("[chronos-sim] seed=" & $seed & " trace=" & tracePath)
@@ -279,11 +296,23 @@ proc runSimulation(seed: uint64, decisionBudget: int, timeBudget: Duration,
   resetSimNet()
 
   var failure: ref SimulationError = nil
+  var ledgerFailure: ref SimLedgerError = nil
   try:
     waitFor body()
+    if enableLedger:
+      # Only on a clean body completion (RFC 0003 3.9's teardown check
+      # "so nothing escapes between the last fire and exit" - a body
+      # that already raised has a failure of its own to report, and it
+      # takes priority over a secondary reconciliation issue, the same
+      # priority `Restore is exception-safe` (3.8) already gives the
+      # original failure over a masking restore-time assert).
+      simLedgerTeardownCheck(disp)
   except AssertionDefect as exc:
-    failure = newSimulationError(classifySimFailure(exc.msg), seed, tracePath,
-                                  exc.msg, exc)
+    if exc.msg.startsWith(ledgerViolationPrefix):
+      ledgerFailure = newSimLedgerErrorFrom(disp, seed, exc.msg)
+    else:
+      failure = newSimulationError(classifySimFailure(exc.msg), seed,
+                                    tracePath, exc.msg, exc)
   except CatchableError as exc:
     failure = newSimulationError(SimFailureKind.BodyError, seed, tracePath,
                                   exc.msg, exc)
@@ -293,6 +322,8 @@ proc runSimulation(seed: uint64, decisionBudget: int, timeBudget: Duration,
     forceSetThreadDispatcher(savedDisp)
     writer.close()
 
+  if ledgerFailure != nil:
+    raise ledgerFailure
   if failure != nil:
     raise failure
 
@@ -304,8 +335,27 @@ template simulate*(seed: uint64, body: untyped): untyped =
   ## decision/time budget (RFC 0003 3.8), deadlocks, or hits an oracle/
   ## protocol violation raises `SimulationError`, and so does a raising
   ## `body` (unwrapped as `.parent`). See `simulateWithBudget` to
-  ## override the budgets.
+  ## override the budgets, and `simulateWithLedger` to additionally
+  ## check RFC 0003 3.9's ghost-ledger conservation laws.
   runSimulation(seed, simulateDefaultDecisionBudget, simulateDefaultTimeBudget,
+    enableLedger = false,
+    proc() {.async, gcsafe.} =
+      body)
+
+template simulateWithLedger*(seed: uint64, body: untyped): untyped =
+  ## As `simulate`, additionally checking RFC 0003 3.9's ghost-ledger
+  ## conservation laws (callback conservation, future lifecycle) at
+  ## every step boundary and at teardown - slice S14. A violation
+  ## raises `SimLedgerError`, distinct by type from `SimulationError`
+  ## (3.9: "a test distinguishes a ledger violation from a barrier hit
+  ## or oracle failure by type, never by string-matching the message").
+  ## A separate entry point rather than a flag on `simulate`: every
+  ## pre-S14 caller of `simulate`/`sweepSeeds` is unaffected, since
+  ## ledger checking depends on producer coverage this slice does not
+  ## claim to be exhaustive over (see `tests/testsimledger.nim`'s
+  ## module docstring for the scoping judgment call).
+  runSimulation(seed, simulateDefaultDecisionBudget, simulateDefaultTimeBudget,
+    enableLedger = true,
     proc() {.async, gcsafe.} =
       body)
 
@@ -317,9 +367,44 @@ template simulateWithBudget*(seed: uint64, decisionBudget: int,
   ## sharing a name, resolving a call to either miscompiles `await` in
   ## `body` (reproduced standalone against the Nim 2.2.10 toolchain;
   ## not specific to this module).
-  runSimulation(seed, decisionBudget, timeBudget,
+  runSimulation(seed, decisionBudget, timeBudget, enableLedger = false,
     proc() {.async, gcsafe.} =
       body)
+
+proc simLedgerDebugPlantDroppedEnqueue*(kind: SimLedgerQueueKind) =
+  ## TEST-ONLY escape hatch (RFC 0003 slice S14's RED phase): records
+  ## an `enqueue` the ledger will never observe a matching `fired`/
+  ## `nilPop`/still-queued for, planting the callback-conservation
+  ## law's "dropped callback" violation - the #703 bug class (a queued
+  ## callback surviving the frame that owns its captured state)
+  ## caught structurally, without needing an actual crash to
+  ## reproduce it. Requires a currently-running `simulateWithLedger`
+  ## body; not part of the stable API.
+  let loop = getThreadDispatcher()
+  let ledger = loop.simLedgerOf()
+  doAssert not ledger.isNil,
+    "simLedgerDebugPlantDroppedEnqueue() requires simulateWithLedger()"
+  ledger.noteEnqueue(kind)
+
+proc simLedgerDebugCurrentStep*(): int =
+  ## TEST-ONLY (RFC 0003 slice S14): the ledger's current step index -
+  ## `tests/testsimledger.nim` uses this to pin that a synchronous
+  ## cancellation cascade does not advance it (3.9: cascades account to
+  ## the enclosing step). Requires a currently-running
+  ## `simulateWithLedger` body; not part of the stable API.
+  let loop = getThreadDispatcher()
+  let ledger = loop.simLedgerOf()
+  doAssert not ledger.isNil,
+    "simLedgerDebugCurrentStep() requires simulateWithLedger()"
+  ledger.currentStep()
+
+proc simLedgerDebugNilPopCount*(kind: SimLedgerQueueKind): uint64 =
+  ## TEST-ONLY (RFC 0003 slice S14): see `simLedgerDebugCurrentStep`.
+  let loop = getThreadDispatcher()
+  let ledger = loop.simLedgerOf()
+  doAssert not ledger.isNil,
+    "simLedgerDebugNilPopCount() requires simulateWithLedger()"
+  ledger.nilPopCount(kind)
 
 type
   SimSeedOutcome* = object
@@ -344,7 +429,7 @@ proc runSweepSeed(seed: uint64, decisionBudget: int, timeBudget: Duration,
   ## instead of a raised `SimulationError`: `collectSweepSeeds` is the
   ## loop this drives, one call per seed.
   try:
-    runSimulation(seed, decisionBudget, timeBudget, body)
+    runSimulation(seed, decisionBudget, timeBudget, enableLedger = false, body)
     SimSeedOutcome(seed: seed, tracePath: simTracePath(seed), passed: true)
   except SimulationError as exc:
     SimSeedOutcome(seed: seed, tracePath: exc.tracePath, passed: false,
