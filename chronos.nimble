@@ -126,6 +126,34 @@ task test_v3_compat, "Run all tests in v3 compatibility mode":
 
     run args & " -d:chronosHandleException", "tests/testall"
 
+task test_simulation, "Run the deterministic simulation suites":
+  # The sim substrate is fork-only test infrastructure and pins Nim 2.x
+  # (RFC 0003 3.8): buying back the 1.6 design constraints the
+  # contextvars series had to fight is the whole point of not shipping
+  # it upstream. `chronosEventEngine` is left at its platform default
+  # throughout: the selector backend still compiles as dead code under
+  # `chronosSimulation`, and sim behavior is engine-independent by
+  # construction.
+  if (NimMajor, NimMinor) >= (2, 0):
+    let simArgs =
+      "-d:debug -d:chronosDebug -d:useSysAssert -d:useGcAssert " &
+      "-d:chronosSimulation -d:chronosFutureTracking --threads:on"
+    let simLeafTests = [
+      "tests/testsimclock", "tests/testsimengine", "tests/testsimloop",
+      "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
+    ]
+
+    run simArgs & " --mm:refc", "tests/testall"
+    for t in simLeafTests:
+      run simArgs & " --mm:refc", t
+
+    if (NimMajor, NimMinor) >= (2, 2): # ORC on 2.0 is too broken to investigate
+      run simArgs & " --mm:orc", "tests/testall"
+      for t in simLeafTests:
+        run simArgs & " --mm:orc", t
+  else:
+    echo "test_simulation: skipped, the sim substrate requires Nim >= 2.0 (RFC 0003 3.8)"
+
 task test_libbacktrace, "test with libbacktrace":
   if platform != "x86":
     let allArgs = @[

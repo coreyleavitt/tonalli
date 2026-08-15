@@ -1123,3 +1123,194 @@ suite "contextvars: must-bind async propagation":
 
     waitFor(work())
 
+when defined(chronosSimulation) and compileOption("threads"):
+  ## The sim-legal subset of the propagation coverage above (RFC 0003
+  ## 3.8/5, slice S9b), driven through `simulate()`/`sweepSeeds` instead
+  ## of a bare dispatcher: callSoon/setTimer/sleepAsync/future-handshake
+  ## scheduling only, never addReader/addSignal2/addProcess2 or a real
+  ## cross-thread arrival - the barrier-touching sites invariant 5
+  ## excludes from simulation by construction. Every probe runs on its
+  ## own OS thread, the isolation `tests/testsimulation.nim` and
+  ## `tests/testcallbackqueue.nim`'s sweep-proof suite use.
+  import std/strutils
+  import ../chronos/simulation
+
+  type
+    SimContextProbeOutcome = object
+      ok: bool
+      msg: string
+
+  var simContextProbeChan: Channel[SimContextProbeOutcome]
+  simContextProbeChan.open()
+
+  template runSimContextProbe(threadProc: typed): SimContextProbeOutcome =
+    var probeThread: Thread[void]
+    createThread(probeThread, threadProc)
+    let outcome = simContextProbeChan.recv()
+    joinThread(probeThread)
+    outcome
+
+  proc probeBindingSurvivesSequentialAwaitsAcrossSweep() {.thread.} =
+    var outcome = SimContextProbeOutcome(ok: true)
+    let outcomes = sweepSeeds(0'u64 .. 9'u64):
+      asyncInt.withValue(11):
+        if asyncInt.value != 11:
+          raise newException(ValueError,
+            "wrong binding before first await: " & $asyncInt.value)
+        await sleepAsync(1.milliseconds)
+        if asyncInt.value != 11:
+          raise newException(ValueError,
+            "wrong binding after first await: " & $asyncInt.value)
+        await sleepAsync(1.milliseconds)
+        if asyncInt.value != 11:
+          raise newException(ValueError,
+            "wrong binding after second await: " & $asyncInt.value)
+    for o in outcomes:
+      if not o.passed:
+        outcome = SimContextProbeOutcome(ok: false,
+          msg: "seed " & $o.seed & " failed (" & $o.kind & "): " & o.msg)
+    simContextProbeChan.send(outcome)
+
+  proc probeConcurrentTasksStayIsolatedAcrossSweep() {.thread.} =
+    var outcome = SimContextProbeOutcome(ok: true)
+    let outcomes = sweepSeeds(0'u64 .. 9'u64):
+      var tickA = newFuture[void]("tickA")
+      var tickB = newFuture[void]("tickB")
+
+      proc taskA(): Future[int] {.async: (raises: [CatchableError]).} =
+        asyncInt.withValue(100):
+          await tickA
+          if asyncInt.value != 100:
+            raise newException(ValueError,
+              "task A saw " & $asyncInt.value & " instead of 100")
+          return asyncInt.value
+
+      proc taskB(): Future[int] {.async: (raises: [CatchableError]).} =
+        asyncInt.withValue(200):
+          await tickB
+          if asyncInt.value != 200:
+            raise newException(ValueError,
+              "task B saw " & $asyncInt.value & " instead of 200")
+          return asyncInt.value
+
+      let fa = taskA()
+      let fb = taskB()
+      tickA.complete()
+      tickB.complete()
+      let a = await fa
+      let b = await fb
+      if a != 100 or b != 200:
+        raise newException(ValueError, "wrong results: a=" & $a & " b=" & $b)
+    for o in outcomes:
+      if not o.passed:
+        outcome = SimContextProbeOutcome(ok: false,
+          msg: "seed " & $o.seed & " failed (" & $o.kind & "): " & o.msg)
+    simContextProbeChan.send(outcome)
+
+  proc probeChildInheritsAndDoesNotLeakBackAcrossSweep() {.thread.} =
+    var outcome = SimContextProbeOutcome(ok: true)
+    let outcomes = sweepSeeds(0'u64 .. 9'u64):
+      proc child(): Future[void] {.async: (raises: [CancelledError, ValueError]).} =
+        if asyncInt.value != 42:
+          raise newException(ValueError,
+            "child did not inherit parent's binding: saw " & $asyncInt.value)
+        asyncInt.withValue(999):
+          await sleepAsync(1.milliseconds)
+          if asyncInt.value != 999:
+            raise newException(ValueError,
+              "child's own binding lost across await: saw " & $asyncInt.value)
+        if asyncInt.value != 42:
+          raise newException(ValueError,
+            "child did not revert to parent's binding: saw " & $asyncInt.value)
+
+      asyncInt.withValue(42):
+        await child()
+        if asyncInt.value != 42:
+          raise newException(ValueError,
+            "child's binding leaked back into parent: saw " & $asyncInt.value)
+    for o in outcomes:
+      if not o.passed:
+        outcome = SimContextProbeOutcome(ok: false,
+          msg: "seed " & $o.seed & " failed (" & $o.kind & "): " & o.msg)
+    simContextProbeChan.send(outcome)
+
+  proc probeExceptionAcrossAwaitRevertsBindingAcrossSweep() {.thread.} =
+    var outcome = SimContextProbeOutcome(ok: true)
+    let outcomes = sweepSeeds(0'u64 .. 9'u64):
+      proc work(): Future[void] {.async: (raises: [CancelledError, ValueError]).} =
+        await sleepAsync(1.milliseconds)
+        raise newException(ValueError, "boom across await")
+
+      var reachedUnreachable = false
+      try:
+        asyncInt.withValue(77):
+          await work()
+          reachedUnreachable = true
+      except ValueError as exc:
+        if "boom across await" notin exc.msg:
+          raise newException(ValueError, "wrong exception propagated: " & exc.msg)
+      if reachedUnreachable:
+        raise newException(ValueError, "expected exception did not propagate")
+      if asyncInt.value != 0:
+        raise newException(ValueError,
+          "binding not reverted after exception: saw " & $asyncInt.value)
+    for o in outcomes:
+      if not o.passed:
+        outcome = SimContextProbeOutcome(ok: false,
+          msg: "seed " & $o.seed & " failed (" & $o.kind & "): " & o.msg)
+    simContextProbeChan.send(outcome)
+
+  proc probeCancelledErrorViaTimerRevertsBindingAcrossSweep() {.thread.} =
+    var outcome = SimContextProbeOutcome(ok: true)
+    let outcomes = sweepSeeds(0'u64 .. 9'u64):
+      proc longSleep(): Future[void] {.async: (raises: [CancelledError]).} =
+        await sleepAsync(1.seconds)
+
+      let f = longSleep()
+      var reachedUnreachable = false
+      var observed = -1
+      try:
+        asyncInt.withValue(55):
+          discard setTimer(Moment.now() + 1.milliseconds,
+            proc(_: pointer) {.gcsafe, raises: [].} = f.cancelSoon())
+          await f
+          reachedUnreachable = true
+      except CancelledError:
+        observed = asyncInt.value
+      if reachedUnreachable:
+        raise newException(ValueError, "cancellation did not propagate")
+      if observed != 0:
+        raise newException(ValueError,
+          "binding not reverted after cancellation: saw " & $observed)
+    for o in outcomes:
+      if not o.passed:
+        outcome = SimContextProbeOutcome(ok: false,
+          msg: "seed " & $o.seed & " failed (" & $o.kind & "): " & o.msg)
+    simContextProbeChan.send(outcome)
+
+  suite "contextvars under simulation: sim-legal subset":
+    test "binding survives sequential awaits for every seed in a sweep":
+      let outcome = runSimContextProbe(probeBindingSurvivesSequentialAwaitsAcrossSweep)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "concurrent tasks stay isolated for every seed in a sweep":
+      let outcome = runSimContextProbe(probeConcurrentTasksStayIsolatedAcrossSweep)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "a child inherits and does not leak back for every seed in a sweep":
+      let outcome = runSimContextProbe(probeChildInheritsAndDoesNotLeakBackAcrossSweep)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "an exception across await reverts the binding for every seed in a sweep":
+      let outcome = runSimContextProbe(probeExceptionAcrossAwaitRevertsBindingAcrossSweep)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "timer-driven cancellation reverts the binding for every seed in a sweep":
+      let outcome = runSimContextProbe(probeCancelledErrorViaTimerRevertsBindingAcrossSweep)
+      checkpoint outcome.msg
+      check outcome.ok
+
