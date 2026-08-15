@@ -16,6 +16,7 @@ import
     testasyncsemaphore, testmpsc, testcallbackqueue, testsimclock,
     testsimengine, testsimloop, testsimtrace, testsimoracle,
     testsimulation, testsimstream, testsimnet, testsimdatagram,
+    testsimproducer,
   ]
 
 import

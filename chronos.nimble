@@ -142,6 +142,7 @@ task test_simulation, "Run the deterministic simulation suites":
       "tests/testsimclock", "tests/testsimengine", "tests/testsimloop",
       "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
       "tests/testsimstream", "tests/testsimnet", "tests/testsimdatagram",
+      "tests/testsimproducer",
     ]
 
     run simArgs & " --mm:refc", "tests/testall"
@@ -178,17 +179,22 @@ task check_windows, "Windows parity: semantic-check the library surface (fork is
   # touchpoint-template split shares its sim-mode iteration with
   # POSIX, and the registration surface / dispatcher-level sim
   # wrappers (addReader2/addWriter2/removeReader2/removeWriter2/
-  # unregister2/simMarkReady/simScheduleArrival/simDecideIo) exist for
-  # sim-minted fds, so every sim leaf test - and testall, which imports
-  # them - now checks clean. `testsimstream` (S10) guards its own
-  # probes out under `defined(windows)`: `fastWrite`'s eager path is a
-  # POSIX-only no-op by design (section 4's Windows IOCP-emulation
-  # non-goal), so the file still semantic-checks here even though its
-  # test bodies compile away to nothing on this branch.
+  # unregister2/simMarkReady/simScheduleArrival/simDecideIo/
+  # simProducerPost) exist for sim-minted fds, so every sim leaf test -
+  # and testall, which imports them - now checks clean. `testsimstream`
+  # (S10) guards its own probes out under `defined(windows)`:
+  # `fastWrite`'s eager path is a POSIX-only no-op by design (section
+  # 4's Windows IOCP-emulation non-goal), so the file still
+  # semantic-checks here even though its test bodies compile away to
+  # nothing on this branch. `testsimproducer` (S13) runs unguarded on
+  # every platform: arrival actors are dispatcher-level (the real MPSC
+  # queue and `waking` flag), not seamed I/O, so they need no
+  # Windows-specific carve-out.
   let simLeafTests = [
     "tests/testsimclock", "tests/testsimengine", "tests/testsimloop",
     "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
     "tests/testsimstream", "tests/testsimnet", "tests/testsimdatagram",
+    "tests/testsimproducer",
   ]
   for t in simLeafTests:
     exec nimc & " check " & winCfg &

@@ -615,11 +615,41 @@ elif defined(windows):
       disp.simState.simMarkReady(int(fd), direction)
 
     proc simScheduleArrival*(disp: PDispatcher): SimEventId =
-      ## Test/script entry point for the S4 `Arrival` stub - `simProducer`
-      ## (S13) supersedes this with real actor identity and payload.
+      ## Test/script entry point for the S4 `Arrival` stub, still a
+      ## bare marker after S13: `simProducerPost` calls this internally
+      ## to mint the event once per coalescing window; the actor
+      ## identity and payload travel through the real `threadCallbacks`
+      ## MPSC queue instead (`simScheduleArrival*(state)`'s docstring in
+      ## simengine.nim).
       doAssert isSimDispatcher(disp),
         "simScheduleArrival() requires a simulated dispatcher"
       disp.simState.simScheduleArrival()
+
+    when hasThreadSupport:
+      proc simProducerPost*(disp: PDispatcher, cbproc: ThreadCallbackFunc,
+                             udata: pointer = nil) =
+        ## `simProducer` (S13, RFC 0003 3.6): the sim-legal replacement
+        ## for a cross-thread `callSoon` - `handle()`'s own docstring
+        ## directs callers here instead of minting a `DispatcherHandle`
+        ## for a simulated dispatcher. Pushes onto the same real MPSC
+        ## `threadCallbacks` queue a genuine cross-thread post uses
+        ## (`MpscQueue` push/pop are plain atomics, sound single-threaded
+        ## per 3.6) and schedules one `Arrival` SimEvent only on the
+        ## false-to-true `waking` transition - the same "one wakeup per
+        ## batch of pushes" invariant `doCallSoonCrossThread` enforces
+        ## for a real cross-thread post, so a post landing before the
+        ## still-pending arrival is delivered joins it instead of
+        ## minting a second one (3.6's coalescing constraint: legality,
+        ## not oracle freedom).
+        doAssert isSimDispatcher(disp),
+          "simProducerPost() requires a simulated dispatcher"
+        doAssert(not isNil(cbproc))
+        let node = createShared(ThreadCallbackNode)
+        node.callback = cbproc
+        node.udata = udata
+        disp.threadCallbacks.push(node)
+        if not disp.waking.testAndSet(moAcquireRelease):
+          discard disp.simState.simScheduleArrival()
 
     proc simDecideIo*(disp: PDispatcher, cp: IoOutcomePoint): IoDecision =
       ## Test/script entry point (S8's decision-budget proof, ahead of
@@ -1389,11 +1419,41 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       disp.simState.simMarkReady(int(cint(fd)), direction)
 
     proc simScheduleArrival*(disp: PDispatcher): SimEventId =
-      ## Test/script entry point for the S4 `Arrival` stub - `simProducer`
-      ## (S13) supersedes this with real actor identity and payload.
+      ## Test/script entry point for the S4 `Arrival` stub, still a
+      ## bare marker after S13: `simProducerPost` calls this internally
+      ## to mint the event once per coalescing window; the actor
+      ## identity and payload travel through the real `threadCallbacks`
+      ## MPSC queue instead (`simScheduleArrival*(state)`'s docstring in
+      ## simengine.nim).
       doAssert isSimDispatcher(disp),
         "simScheduleArrival() requires a simulated dispatcher"
       disp.simState.simScheduleArrival()
+
+    when hasThreadSupport:
+      proc simProducerPost*(disp: PDispatcher, cbproc: ThreadCallbackFunc,
+                             udata: pointer = nil) =
+        ## `simProducer` (S13, RFC 0003 3.6): the sim-legal replacement
+        ## for a cross-thread `callSoon` - `handle()`'s own docstring
+        ## directs callers here instead of minting a `DispatcherHandle`
+        ## for a simulated dispatcher. Pushes onto the same real MPSC
+        ## `threadCallbacks` queue a genuine cross-thread post uses
+        ## (`MpscQueue` push/pop are plain atomics, sound single-threaded
+        ## per 3.6) and schedules one `Arrival` SimEvent only on the
+        ## false-to-true `waking` transition - the same "one wakeup per
+        ## batch of pushes" invariant `doCallSoonCrossThread` enforces
+        ## for a real cross-thread post, so a post landing before the
+        ## still-pending arrival is delivered joins it instead of
+        ## minting a second one (3.6's coalescing constraint: legality,
+        ## not oracle freedom).
+        doAssert isSimDispatcher(disp),
+          "simProducerPost() requires a simulated dispatcher"
+        doAssert(not isNil(cbproc))
+        let node = createShared(ThreadCallbackNode)
+        node.callback = cbproc
+        node.udata = udata
+        disp.threadCallbacks.push(node)
+        if not disp.waking.testAndSet(moAcquireRelease):
+          discard disp.simState.simScheduleArrival()
 
     proc simDecideIo*(disp: PDispatcher, cp: IoOutcomePoint): IoDecision =
       ## Test/script entry point (S8's decision-budget proof, ahead of

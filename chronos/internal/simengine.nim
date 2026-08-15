@@ -962,11 +962,16 @@ proc simStreamHalfClose*(state: SimEngineState, fd: int) =
     state.simMarkReadyOnce(peerFd, SimReadyDirection.Read)
 
 proc simScheduleArrival*(state: SimEngineState): SimEventId =
-  ## Schedules a stub `Arrival` event (RFC 0003 3.5/3.6): delivery
-  ## drains through `processThreadCallbacks` unconditionally, with no
-  ## actor identity or payload. `simProducer` (S13) supersedes this;
-  ## it exists now purely so `decideBatch`'s delivery loop has both
-  ## `SimEventKind` branches to route additively.
+  ## Schedules a bare `Arrival` event marker (RFC 0003 3.5/3.6):
+  ## delivery drains through `processThreadCallbacks` unconditionally.
+  ## `simProducer` (S13) still calls this - once, on the false-to-true
+  ## `waking` transition - to mint the event `decideBatch` schedules;
+  ## the actor identity and payload it carries live in the real
+  ## cross-thread `threadCallbacks` MPSC queue `simProducer.post()`
+  ## pushes onto directly, not in this `SimEvent`, which stays a bare
+  ## marker by design: `processThreadCallbacks` already knows how to
+  ## drain that queue without this event carrying a copy of its
+  ## contents.
   let id = SimEventId(state.nextEventId)
   inc state.nextEventId
   state.arrivalQueue.add SimEvent(id: id, kind: SimEventKind.Arrival,

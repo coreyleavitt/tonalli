@@ -101,6 +101,35 @@ proc simNet*(): SimNet =
   doAssert disp.isSimDispatcher(), "simNet() requires a simulated dispatcher"
   SimNet(disp: disp)
 
+type
+  SimProducer* = object
+    ## An arrival actor bound to the current run's sim dispatcher (RFC
+    ## 0003 3.6, S13): the sim-legal replacement for spawning a real OS
+    ## thread and minting a `DispatcherHandle` to call `callSoon`
+    ## cross-thread - both `handle()` and `wake()` barrier under
+    ## simulation and their docstrings point here instead. Platform-
+    ## neutral: the machinery behind `post()` is dispatcher-level
+    ## (the real MPSC `threadCallbacks` queue and `waking` flag), not
+    ## seamed I/O, so it needs no POSIX/Windows split.
+    disp: PDispatcher
+
+proc simProducer*(): SimProducer =
+  ## Attaches to the current run's sim dispatcher (RFC 0003 3.6).
+  let disp = getThreadDispatcher()
+  doAssert disp.isSimDispatcher(), "simProducer() requires a simulated dispatcher"
+  SimProducer(disp: disp)
+
+proc post*(producer: SimProducer, cbproc: ThreadCallbackFunc,
+           udata: pointer = nil) =
+  ## Schedules `cbproc` for cross-thread-style delivery (RFC 0003 3.6):
+  ## fires with `bareCallback` semantics, no captured context, the same
+  ## as a genuine cross-thread `callSoon` - the modeled producer is a
+  ## different (simulated) thread. Delivered as an `Arrival` SimEvent
+  ## through `decideBatch`, subject to the coalescing constraint: a
+  ## post landing before a still-pending arrival's delivery joins it
+  ## rather than minting a second one.
+  simProducerPost(producer.disp, cbproc, udata)
+
 when not defined(windows):
   proc listenStream*(net: SimNet, address: TransportAddress): SimStreamServer =
     ## Binds a sim listener at `address` (RFC 0003 3.8). Idempotent
