@@ -362,7 +362,7 @@ when defined(chronosSimulation) and compileOption("threads"):
       var outcome = ProbeOutcome(ok: true)
       setThreadDispatcher(newSimDispatcher())
 
-      proc body() {.async: (raises: [TransportError, CancelledError]).} =
+      proc body() {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
         let net = simNet()
         var responseFut = Future[string].Raising([CancelledError]).init(
           "datagram.echo.response")
@@ -438,7 +438,7 @@ when defined(chronosSimulation) and compileOption("threads"):
       setThreadDispatcher(
         newSimDispatcher(oracle = resetOnEndpointRead(SimEndpointId(0))))
 
-      proc body() {.async: (raises: [TransportError, CancelledError]).} =
+      proc body() {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
         let net = simNet()
         var responseFut = Future[string].Raising([CancelledError]).init(
           "datagram.reset.response")
@@ -488,7 +488,7 @@ when defined(chronosSimulation) and compileOption("threads"):
           outcome = ProbeOutcome(ok: false,
             msg: "naive fixture completed cleanly; expected a deadlock " &
               "(the swallowed reset leaves responseFut incomplete forever)")
-      except AssertionDefect as exc:
+      except SimEngineError as exc:
         if naive:
           outcome = ProbeOutcome(ok: true, msg: "RED (expected): " & exc.msg)
         else:

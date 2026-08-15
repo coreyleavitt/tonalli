@@ -58,7 +58,7 @@ when defined(chronosSimulation) and compileOption("threads") and
       copyMem(addr result[0], unsafeAddr b[0], b.len)
 
   proc runPipelinedEcho(client, server: StreamTransport):
-      Future[seq[string]] {.async: (raises: [TransportError, CancelledError]).} =
+      Future[seq[string]] {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
     ## The parametrized echo body (RFC 0003 6, S11a's RED criterion):
     ## the client pipelines every write before awaiting any of them,
     ## the server echoes each fixed-size chunk back in arrival order,
@@ -67,7 +67,7 @@ when defined(chronosSimulation) and compileOption("threads") and
     ## deliveries the underlying transport makes (coalesced or split),
     ## so sim and a real byte stream can be held to the same body
     ## without message-framing becoming the thing under test.
-    proc serverLoop() {.async: (raises: [TransportError, CancelledError]).} =
+    proc serverLoop() {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
       for _ in messages:
         var buf = newSeq[byte](chunkSize)
         await server.readExactly(addr buf[0], chunkSize)
@@ -91,7 +91,7 @@ when defined(chronosSimulation) and compileOption("threads") and
     var outcome = ProbeOutcome(ok: true)
     setThreadDispatcher(newSimDispatcher())
 
-    proc body() {.async: (raises: [TransportError, CancelledError]).} =
+    proc body() {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
       let net = simNet()
       let address = initTAddress("127.0.0.1:0")
       let server = net.listenStream(address)
@@ -115,7 +115,7 @@ when defined(chronosSimulation) and compileOption("threads") and
     var outcome = ProbeOutcome(ok: true)
     setThreadDispatcher(newSimDispatcher())
 
-    proc body() {.async: (raises: [TransportError, CancelledError]).} =
+    proc body() {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
       let net = simNet()
       let address = initTAddress("127.0.0.1:0")
       let server = net.listenStream(address)
@@ -150,7 +150,7 @@ when defined(chronosSimulation) and compileOption("threads") and
     var outcome = ProbeOutcome(ok: true)
     setThreadDispatcher(newSimDispatcher())
 
-    proc body() {.async: (raises: [TransportError, CancelledError]).} =
+    proc body() {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
       let net = simNet()
       let address = initTAddress("127.0.0.1:0")
       let server = net.listenStream(address)
@@ -189,7 +189,7 @@ when defined(chronosSimulation) and compileOption("threads") and
     for _ in 0 ..< 5:
       discard disp.mintSimFd()
 
-    proc body() {.async: (raises: [TransportError, CancelledError]).} =
+    proc body() {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
       let net = simNet()
       let address = initTAddress("127.0.0.1:0")
       let server = net.listenStream(address)
@@ -209,7 +209,7 @@ when defined(chronosSimulation) and compileOption("threads") and
     probeChan.send(outcome)
 
   proc realPipelinedEcho(): Future[seq[string]] {.
-      async: (raises: [TransportError, CancelledError]).} =
+      async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
     let server = createStreamServer(initTAddress("127.0.0.1:0"))
     var acceptFut = server.accept()
     let client = await connect(server.localAddress())
@@ -232,14 +232,14 @@ when defined(chronosSimulation) and compileOption("threads") and
     newSimOracle(defaultDecideBatch, decideIo, defaultDecideTime)
 
   proc runShortReadEcho(client, server: StreamTransport):
-      Future[seq[string]] {.async: (raises: [TransportError, CancelledError]).} =
+      Future[seq[string]] {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
     ## Unlike `runPipelinedEcho`'s server loop, which reads with
     ## `readExactly`, this one loops a single-shot `readOnce` itself
     ## until it has the whole chunk - proving short reads are handled
     ## correctly one layer below `readExactly`'s own looping, directly
     ## against the endpoint's leftover-byte accounting (RFC 0003 6,
     ## S11b).
-    proc serverLoop() {.async: (raises: [TransportError, CancelledError]).} =
+    proc serverLoop() {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
       for _ in messages:
         var buf = newSeq[byte](chunkSize)
         var got = 0
@@ -265,7 +265,7 @@ when defined(chronosSimulation) and compileOption("threads") and
     var outcome = ProbeOutcome(ok: true)
     setThreadDispatcher(newSimDispatcher(oracle = chunkedIoOracle(3)))
 
-    proc body() {.async: (raises: [TransportError, CancelledError]).} =
+    proc body() {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
       let net = simNet()
       let address = initTAddress("127.0.0.1:0")
       let server = net.listenStream(address)
