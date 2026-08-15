@@ -7,11 +7,15 @@
 #              MIT license (LICENSE-MIT)
 import unittest2
 import ../chronos, ../chronos/oserrno
+import ../chronos/config
 
 {.used.}
 
 when not defined(windows):
   import posix
+
+when chronosSimulation:
+  from ../chronos/internal/simengine import SimBarrierError
 
 suite "Signal handling test suite":
   proc testSignal(signal, value: int): Future[bool] {.async.} =
@@ -22,7 +26,15 @@ suite "Signal handling test suite":
 
     proc signalHandler(udata: pointer) {.gcsafe.} =
       signalCounter = cast[int](udata)
-      let res = removeSignal2(sigFd)
+      when chronosSimulation:
+        let res =
+          try:
+            removeSignal2(sigFd)
+          except SimBarrierError as exc:
+            raiseAsDefect(exc, "testSignal(): removeSignal2 crossed the " &
+                                "simulated barrier")
+      else:
+        let res = removeSignal2(sigFd)
       if res.isErr():
         handlerFut.fail(newException(ValueError, osErrorMsg(res.error())))
       else:

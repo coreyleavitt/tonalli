@@ -8,8 +8,12 @@
 import std/[strutils, os]
 import ../chronos/unittest2/asynctests
 import ../chronos, ../chronos/[osdefs, oserrno]
+import ../chronos/config
 
 {.used.}
+
+when chronosSimulation:
+  from ../chronos/internal/simengine import SimBarrierError
 
 when defined(windows):
   proc get_osfhandle*(fd: FileHandle): HANDLE {.
@@ -187,13 +191,26 @@ suite "Stream Transport test suite":
         var res: StreamServer
         for i in 0 ..< 10:
           res =
-            try:
-              createStreamServer(port, flags = {ServerFlags.ReuseAddr})
-            except TransportOsError as exc:
-              echo "Unable to create server on port ", currentPort,
-                   " with error: ", exc.msg
-              currentPort = Port(uint16(currentPort) + 1'u16)
-              nil
+            when chronosSimulation:
+              try:
+                createStreamServer(port, flags = {ServerFlags.ReuseAddr})
+              except TransportOsError as exc:
+                echo "Unable to create server on port ", currentPort,
+                     " with error: ", exc.msg
+                currentPort = Port(uint16(currentPort) + 1'u16)
+                nil
+              except SimBarrierError as exc:
+                raiseAsDefect(exc, "performAutoAddressTest(): " &
+                                    "createStreamServer crossed the " &
+                                    "simulated barrier")
+            else:
+              try:
+                createStreamServer(port, flags = {ServerFlags.ReuseAddr})
+              except TransportOsError as exc:
+                echo "Unable to create server on port ", currentPort,
+                     " with error: ", exc.msg
+                currentPort = Port(uint16(currentPort) + 1'u16)
+                nil
           if not(isNil(res)):
             break
         doAssert(not(isNil(res)), "Unable to create server, giving up")
@@ -216,7 +233,15 @@ suite "Stream Transport test suite":
           raiseAssert "Not allowed"
 
     address.port = server.localAddress().port
-    var acceptFut = server.accept()
+    var acceptFut =
+      when chronosSimulation:
+        try:
+          server.accept()
+        except SimBarrierError as exc:
+          raiseAsDefect(exc, "performAutoAddressTest(): server.accept() " &
+                              "crossed the simulated barrier")
+      else:
+        server.accept()
     let
       clientTransp =
         try:
@@ -244,10 +269,19 @@ suite "Stream Transport test suite":
     else:
       pending.add(cancelAndWait(acceptFut))
     await noCancel allFutures(pending)
-    try:
-      server.stop()
-    except TransportError as exc:
-      raiseAssert exc.msg
+    when chronosSimulation:
+      try:
+        server.stop()
+      except TransportError as exc:
+        raiseAssert exc.msg
+      except SimBarrierError as exc:
+        raiseAsDefect(exc, "performAutoAddressTest(): server.stop() " &
+                            "crossed the simulated barrier")
+    else:
+      try:
+        server.stop()
+      except TransportError as exc:
+        raiseAssert exc.msg
     await server.closeWait()
     testResult
 
@@ -265,14 +299,28 @@ suite "Stream Transport test suite":
             res: StreamServer
           for i in 0 ..< 10:
             res =
-              try:
-                createStreamServer(port, host = address1,
-                                   flags = {ServerFlags.ReuseAddr})
-              except TransportOsError as exc:
-                echo "Unable to create server on port ", currentPort,
-                     " with error: ", exc.msg
-                currentPort = Port(uint16(currentPort) + 1'u16)
-                nil
+              when chronosSimulation:
+                try:
+                  createStreamServer(port, host = address1,
+                                     flags = {ServerFlags.ReuseAddr})
+                except TransportOsError as exc:
+                  echo "Unable to create server on port ", currentPort,
+                       " with error: ", exc.msg
+                  currentPort = Port(uint16(currentPort) + 1'u16)
+                  nil
+                except SimBarrierError as exc:
+                  raiseAsDefect(exc, "performAutoAddressTest2(): " &
+                                      "createStreamServer crossed the " &
+                                      "simulated barrier")
+              else:
+                try:
+                  createStreamServer(port, host = address1,
+                                     flags = {ServerFlags.ReuseAddr})
+                except TransportOsError as exc:
+                  echo "Unable to create server on port ", currentPort,
+                       " with error: ", exc.msg
+                  currentPort = Port(uint16(currentPort) + 1'u16)
+                  nil
             if not(isNil(res)):
               break
           doAssert(not(isNil(res)), "Unable to create server, giving up")
@@ -295,7 +343,15 @@ suite "Stream Transport test suite":
         except TransportAddressError as exc:
           raiseAssert "Unable to initialize transport address, " &
                       "reason = " & exc.msg
-      acceptFut = server.accept()
+      acceptFut =
+        when chronosSimulation:
+          try:
+            server.accept()
+          except SimBarrierError as exc:
+            raiseAsDefect(exc, "performAutoAddressTest2(): server.accept() " &
+                                "crossed the simulated barrier")
+        else:
+          server.accept()
 
     let
       clientTransp =
@@ -334,10 +390,19 @@ suite "Stream Transport test suite":
     else:
       pending.add(cancelAndWait(acceptFut))
     await noCancel allFutures(pending)
-    try:
-      server.stop()
-    except TransportError as exc:
-      raiseAssert exc.msg
+    when chronosSimulation:
+      try:
+        server.stop()
+      except TransportError as exc:
+        raiseAssert exc.msg
+      except SimBarrierError as exc:
+        raiseAsDefect(exc, "performAutoAddressTest2(): server.stop() " &
+                            "crossed the simulated barrier")
+    else:
+      try:
+        server.stop()
+      except TransportError as exc:
+        raiseAssert exc.msg
     await server.closeWait()
 
     testResult

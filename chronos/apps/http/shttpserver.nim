@@ -14,6 +14,12 @@ import ../../[asyncloop, asyncsync, config]
 import ../../streams/[asyncstream, tlsstream]
 export asyncloop, asyncsync, httpserver, asyncstream, tlsstream
 
+when chronosSimulation:
+  from ../../internal/simengine import SimBarrierError
+  {.pragma: mayBarrier, raises: [SimBarrierError].}
+else:
+  {.pragma: mayBarrier, raises: [].}
+
 type
   SecureHttpServer* = object of HttpServer
     secureFlags*: set[TLSFlags]
@@ -97,7 +103,7 @@ proc new*(htype: typedesc[SecureHttpServerRef],
           maxHeadersSize: int = 8192,
           maxRequestBodySize: int = 1_048_576,
           dualstack = DualStackType.Auto
-         ): HttpResult[SecureHttpServerRef] =
+         ): HttpResult[SecureHttpServerRef] {.mayBarrier.} =
   doAssert(not(isNil(tlsPrivateKey)), "TLS private key must not be nil!")
   doAssert(not(isNil(tlsCertificate)), "TLS certificate must not be nil!")
   let

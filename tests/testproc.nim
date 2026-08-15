@@ -9,9 +9,13 @@ import std/os
 import stew/[base10, byteutils]
 import ".."/chronos/unittest2/asynctests
 import ".."/chronos/asyncproc
+import ".."/chronos/config
 
 when defined(posix):
   from ".."/chronos/osdefs import SIGKILL
+
+when chronosSimulation:
+  from ".."/chronos/internal/simengine import SimBarrierError
 
 when defined(nimHasUsed): {.used.}
 
@@ -92,7 +96,15 @@ suite "Asynchronous process management test suite":
       processExitCode = process.peekExitCode().valueOr:
         handlerFut.fail(newException(ValueError, osErrorMsg(error)))
         return
-      let res = removeProcess2(pidFd)
+      when chronosSimulation:
+        let res =
+          try:
+            removeProcess2(pidFd)
+          except SimBarrierError as exc:
+            raiseAsDefect(exc, "processHandler(): removeProcess2 crossed " &
+                                "the simulated barrier")
+      else:
+        let res = removeProcess2(pidFd)
       if res.isErr():
         handlerFut.fail(newException(ValueError, osErrorMsg(res.error())))
       else:

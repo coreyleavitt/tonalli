@@ -9,8 +9,12 @@ import std/[strutils, net]
 import stew/byteutils
 import ".."/chronos/unittest2/asynctests
 import ".."/chronos
+import ".."/chronos/config
 
 {.used.}
+
+when chronosSimulation:
+  from ".."/chronos/internal/simengine import SimBarrierError
 
 suite "Datagram Transport test suite":
   teardown:
@@ -646,22 +650,43 @@ suite "Datagram Transport test suite":
     proc process1(transp: DatagramTransport,
                   raddr: TransportAddress): Future[void] {.
          async: (raises: []).} =
-      try:
-        var
-          bmsg = transp.getMessage()
-          smsg = string.fromBytes(bmsg)
-        if smsg == expectRequest1:
-          inc(res)
-          await noCancel transp.sendTo(
-            raddr, addr expectResponse[0], len(expectResponse))
-        elif smsg == expectRequest2:
-          inc(res)
-          await noCancel transp.sendTo(
-            raddr, addr mappedResponse[0], len(mappedResponse))
-      except TransportError as exc:
-        raiseAssert exc.msg
-      except CancelledError as exc:
-        raiseAssert exc.msg
+      when chronosSimulation:
+        try:
+          var
+            bmsg = transp.getMessage()
+            smsg = string.fromBytes(bmsg)
+          if smsg == expectRequest1:
+            inc(res)
+            await noCancel transp.sendTo(
+              raddr, addr expectResponse[0], len(expectResponse))
+          elif smsg == expectRequest2:
+            inc(res)
+            await noCancel transp.sendTo(
+              raddr, addr mappedResponse[0], len(mappedResponse))
+        except TransportError as exc:
+          raiseAssert exc.msg
+        except CancelledError as exc:
+          raiseAssert exc.msg
+        except SimBarrierError as exc:
+          raiseAsDefect(exc, "performAutoAddressTest(): process1's " &
+                              "sendTo crossed the simulated barrier")
+      else:
+        try:
+          var
+            bmsg = transp.getMessage()
+            smsg = string.fromBytes(bmsg)
+          if smsg == expectRequest1:
+            inc(res)
+            await noCancel transp.sendTo(
+              raddr, addr expectResponse[0], len(expectResponse))
+          elif smsg == expectRequest2:
+            inc(res)
+            await noCancel transp.sendTo(
+              raddr, addr mappedResponse[0], len(mappedResponse))
+        except TransportError as exc:
+          raiseAssert exc.msg
+        except CancelledError as exc:
+          raiseAssert exc.msg
 
     proc process2(transp: DatagramTransport,
                   raddr: TransportAddress): Future[void] {.
@@ -788,18 +813,35 @@ suite "Datagram Transport test suite":
       if raddr.family != sendType:
         raiseAssert "Incorrect address family received [" & $raddr &
                     "], expected [" & $sendType & "]"
-      try:
-        let
-          bmsg = transp.getMessage()
-          smsg = string.fromBytes(bmsg)
-        if smsg == expectRequest:
-          inc(res)
-        await noCancel transp.sendTo(
-          raddr, unsafeAddr expectResponse[0], len(expectResponse))
-      except TransportError as exc:
-        raiseAssert exc.msg
-      except CancelledError as exc:
-        raiseAssert exc.msg
+      when chronosSimulation:
+        try:
+          let
+            bmsg = transp.getMessage()
+            smsg = string.fromBytes(bmsg)
+          if smsg == expectRequest:
+            inc(res)
+          await noCancel transp.sendTo(
+            raddr, unsafeAddr expectResponse[0], len(expectResponse))
+        except TransportError as exc:
+          raiseAssert exc.msg
+        except CancelledError as exc:
+          raiseAssert exc.msg
+        except SimBarrierError as exc:
+          raiseAsDefect(exc, "performAutoAddressTest2(): process1's " &
+                              "sendTo crossed the simulated barrier")
+      else:
+        try:
+          let
+            bmsg = transp.getMessage()
+            smsg = string.fromBytes(bmsg)
+          if smsg == expectRequest:
+            inc(res)
+          await noCancel transp.sendTo(
+            raddr, unsafeAddr expectResponse[0], len(expectResponse))
+        except TransportError as exc:
+          raiseAssert exc.msg
+        except CancelledError as exc:
+          raiseAssert exc.msg
 
     proc process2(transp: DatagramTransport,
                   raddr: TransportAddress): Future[void] {.
@@ -893,62 +935,127 @@ suite "Datagram Transport test suite":
         transp: DatagramTransport,
         raddr: TransportAddress
     ): Future[void] {.async: (raises: []).} =
-      try:
-        var message = transp.getMessage()
-        if len(message) == 0:
-          inc(counter1)
-        else:
-          if len(message) == size:
-            inc(counterM)
-        await transp.sendTo(raddr, message)
-      except CancelledError:
-        pcheck1 = false
-        return
-      except TransportError:
-        pcheck1 = false
-        return
+      when chronosSimulation:
+        try:
+          var message = transp.getMessage()
+          if len(message) == 0:
+            inc(counter1)
+          else:
+            if len(message) == size:
+              inc(counterM)
+          await transp.sendTo(raddr, message)
+        except CancelledError:
+          pcheck1 = false
+          return
+        except TransportError:
+          pcheck1 = false
+          return
+        except SimBarrierError as exc:
+          raiseAsDefect(exc, "performPacketSizeTest(): processor1's " &
+                              "sendTo crossed the simulated barrier")
+      else:
+        try:
+          var message = transp.getMessage()
+          if len(message) == 0:
+            inc(counter1)
+          else:
+            if len(message) == size:
+              inc(counterM)
+          await transp.sendTo(raddr, message)
+        except CancelledError:
+          pcheck1 = false
+          return
+        except TransportError:
+          pcheck1 = false
+          return
 
     proc processor2(
         transp: DatagramTransport,
         raddr: TransportAddress
     ): Future[void] {.async: (raises: []).} =
+      when chronosSimulation:
+        try:
+          var message = transp.getMessage()
+          if len(message) == 0:
+            if counter0 > 0:
+              await transp.sendTo(raddr, default(seq[byte]))
+              dec(counter0)
+            else:
+              await transp.sendTo(raddr, generateData(size))
+          else:
+            dec(counterN)
+            if counterN == 0:
+              pcheck2 = true
+              await transp.closeWait()
+              return
+            else:
+              await transp.sendTo(raddr, message)
+        except CancelledError:
+          pcheck2 = false
+          return
+        except TransportError:
+          pcheck2 = false
+          return
+        except SimBarrierError as exc:
+          raiseAsDefect(exc, "performPacketSizeTest(): processor2's " &
+                              "sendTo crossed the simulated barrier")
+      else:
+        try:
+          var message = transp.getMessage()
+          if len(message) == 0:
+            if counter0 > 0:
+              await transp.sendTo(raddr, default(seq[byte]))
+              dec(counter0)
+            else:
+              await transp.sendTo(raddr, generateData(size))
+          else:
+            dec(counterN)
+            if counterN == 0:
+              pcheck2 = true
+              await transp.closeWait()
+              return
+            else:
+              await transp.sendTo(raddr, message)
+        except CancelledError:
+          pcheck2 = false
+          return
+        except TransportError:
+          pcheck2 = false
+          return
+
+    when chronosSimulation:
       try:
-        var message = transp.getMessage()
-        if len(message) == 0:
-          if counter0 > 0:
-            await transp.sendTo(raddr, default(seq[byte]))
-            dec(counter0)
-          else:
-            await transp.sendTo(raddr, generateData(size))
-        else:
-          dec(counterN)
-          if counterN == 0:
-            pcheck2 = true
-            await transp.closeWait()
-            return
-          else:
-            await transp.sendTo(raddr, message)
+        let
+          ta = initTAddress("127.0.0.1:0")
+          dgram1 = newDatagramTransport(processor1, local = ta)
+          dgram2 = newDatagramTransport(processor2, local = ta)
+          lta2 = dgram2.localAddress()
+
+        await dgram1.sendTo(lta2, default(seq[byte]))
+        await dgram2.join()
+        await dgram1.closeWait()
       except CancelledError:
-        pcheck2 = false
-        return
+        return false
       except TransportError:
-        pcheck2 = false
-        return
+        return false
+      except SimBarrierError as exc:
+        raiseAsDefect(exc, "performPacketSizeTest(): crossed the " &
+                            "simulated barrier")
+    else:
+      try:
+        let
+          ta = initTAddress("127.0.0.1:0")
+          dgram1 = newDatagramTransport(processor1, local = ta)
+          dgram2 = newDatagramTransport(processor2, local = ta)
+          lta2 = dgram2.localAddress()
 
-    try:
-      let
-        ta = initTAddress("127.0.0.1:0")
-        dgram1 = newDatagramTransport(processor1, local = ta)
-        dgram2 = newDatagramTransport(processor2, local = ta)
-        lta2 = dgram2.localAddress()
-
-      await dgram1.sendTo(lta2, default(seq[byte]))
-      await dgram2.join()
-      await dgram1.closeWait()
-    except CancelledError:
-      return false
-    except TransportError:
-      return false
+        await dgram1.sendTo(lta2, default(seq[byte]))
+        await dgram2.join()
+        await dgram1.closeWait()
+      except CancelledError:
+        return false
+      except TransportError:
+        return false
 
     pcheck1 and pcheck2 and (counterM == 100) and (counter1 == 100)
 

@@ -18,6 +18,9 @@ from ../../transports/common import TransportAddress, ServerFlags, `$`, `==`
 
 when chronosSimulation:
   from ../../internal/simengine import SimBarrierError
+  {.pragma: mayBarrier, raises: [SimBarrierError].}
+else:
+  {.pragma: mayBarrier, raises: [].}
 
 export asyncloop, asyncsync, httptable, httpcommon, httputils, multipart,
        asyncstream, boundstream, chunkstream, uri, tables, results
@@ -261,7 +264,7 @@ proc new*(
        maxRequestBodySize: int = 1_048_576,
        dualstack = DualStackType.Auto,
        middlewares: openArray[HttpServerMiddlewareRef] = []
-     ): HttpResult[HttpServerRef] =
+     ): HttpResult[HttpServerRef] {.mayBarrier.} =
   let
     serverInstance =
       try:

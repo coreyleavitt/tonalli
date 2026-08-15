@@ -27,6 +27,12 @@ when not defined(windows):
     # only for spawning a child) exists on the epoll/kqueue engines
     # only — same gate testall.nim applies to testsignal/testproc.
     import ../chronos/asyncproc
+    when chronosSimulation:
+      from ../chronos/internal/simengine import SimBarrierError
+
+when chronosSimulation:
+  from ../chronos/internal/simengine import SimEngineError
+  from ../chronos/internal/simledger import SimLedgerError
 
 {.used.}
 
@@ -344,7 +350,15 @@ suite "contextvars: scheduling-site capture coverage":
         let handlerFut = newFuture[void]("ctx.signal.handler")
         proc signalHandler(udata: pointer) {.gcsafe.} =
           seenBinding = asyncInt.value
-          let res = removeSignal2(sigFd)
+          when chronosSimulation:
+            let res =
+              try:
+                removeSignal2(sigFd)
+              except SimBarrierError as exc:
+                raiseAsDefect(exc, "signalHandler(): removeSignal2 crossed " &
+                                    "the simulated barrier")
+          else:
+            let res = removeSignal2(sigFd)
           if res.isErr():
             handlerFut.fail(newException(ValueError, osErrorMsg(res.error())))
           else:
@@ -370,7 +384,15 @@ suite "contextvars: scheduling-site capture coverage":
         var process: AsyncProcessRef
         proc processHandler(udata: pointer) {.gcsafe.} =
           seenBinding = asyncInt.value
-          let res = removeProcess2(pidFd)
+          when chronosSimulation:
+            let res =
+              try:
+                removeProcess2(pidFd)
+              except SimBarrierError as exc:
+                raiseAsDefect(exc, "processHandler(): removeProcess2 " &
+                                    "crossed the simulated barrier")
+          else:
+            let res = removeProcess2(pidFd)
           if res.isErr():
             handlerFut.fail(newException(ValueError, osErrorMsg(res.error())))
           else:
@@ -911,10 +933,22 @@ suite "contextvars: scheduling scenario pins":
       proc outerCb(udata: pointer) {.gcsafe, raises: [].} =
         asyncInt.withValue(500):
           check asyncInt.value == 500
-          try:
-            innerObserved = waitFor(innerWork())
-          except CancelledError:
-            discard
+          when chronosSimulation:
+            try:
+              innerObserved = waitFor(innerWork())
+            except CancelledError:
+              discard
+            except SimEngineError as exc:
+              raiseAsDefect(exc, "outerCb(): waitFor(innerWork()) " &
+                                  "violated the simulated engine")
+            except SimLedgerError as exc:
+              raiseAsDefect(exc, "outerCb(): waitFor(innerWork()) " &
+                                  "violated the simulated ledger")
+          else:
+            try:
+              innerObserved = waitFor(innerWork())
+            except CancelledError:
+              discard
           outerAfterNested = asyncInt.value
         outerFired = true
 

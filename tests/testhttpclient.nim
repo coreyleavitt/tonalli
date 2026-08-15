@@ -14,6 +14,9 @@ import stew/[byteutils, base10]
 
 {.used.}
 
+when chronosSimulation:
+  from ".."/chronos/internal/simengine import SimBarrierError, SimEngineError
+
 # To create self-signed certificate and key you can use openssl
 # openssl req -new -x509 -sha256 -newkey rsa:2048 -nodes \
 # -keyout example-com.key.pem -days 3650 -out example-com.cert.pem
@@ -1528,7 +1531,15 @@ suite "HTTP client testing suite":
       else:
         defaultResponse()
 
-    var server = createServer(initTAddress("127.0.0.1:0"), process, false)
+    var server =
+      when chronosSimulation:
+        try:
+          createServer(initTAddress("127.0.0.1:0"), process, false)
+        except SimBarrierError as exc:
+          raiseAsDefect(exc, "testConnectTunnel(): createServer crossed " &
+                              "the simulated barrier")
+      else:
+        createServer(initTAddress("127.0.0.1:0"), process, false)
     server.start()
     let address = server.instance.localAddress()
     let targetAddress = getAddress(address, HttpClientScheme.NonSecure, "")
@@ -1560,29 +1571,70 @@ suite "HTTP client testing suite":
   .} =
     let
       targetServer =
-        createStreamServer(initTAddress("127.0.0.1:0"), flags = {ServerFlags.ReuseAddr})
+        when chronosSimulation:
+          try:
+            createStreamServer(initTAddress("127.0.0.1:0"),
+                               flags = {ServerFlags.ReuseAddr})
+          except SimBarrierError as exc:
+            raiseAsDefect(exc, "testTunnelConnectionProvider(): " &
+                                "createStreamServer crossed the " &
+                                "simulated barrier")
+        else:
+          createStreamServer(initTAddress("127.0.0.1:0"), flags = {ServerFlags.ReuseAddr})
       targetAddress = targetServer.localAddress()
 
     proc server() {.async: (raises: [CancelledError, TransportError, AsyncTimeoutError]).} =
-      let conn = await targetServer.accept()
-      try:
-        var buf = newString(4096)
-        buf.setLen(await conn.readUntil(addr buf[0], buf.len, stringToBytes("\r\n\r\n")))
-        check:
-          "connect somehost:80" in buf.toLowerAscii()
-          "host: somehost:80" in buf.toLowerAscii()
-          
-        discard await conn.write("HTTP/1.1 200 OK\r\n\r\n")
+      when chronosSimulation:
+        let conn =
+          try:
+            await targetServer.accept()
+          except SimBarrierError as exc:
+            raiseAsDefect(exc, "testTunnelConnectionProvider(): server()'s " &
+                                "accept crossed the simulated barrier")
+        try:
+          var buf = newString(4096)
+          buf.setLen(await conn.readUntil(addr buf[0], buf.len, stringToBytes("\r\n\r\n")))
+          check:
+            "connect somehost:80" in buf.toLowerAscii()
+            "host: somehost:80" in buf.toLowerAscii()
 
-        buf.setLen(4096)
-        buf.setLen(await conn.readUntil(addr buf[0], buf.len, stringToBytes("\r\n\r\n")))
+          discard await conn.write("HTTP/1.1 200 OK\r\n\r\n")
 
-        discard await conn.write("HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\na")
-        await conn.shutdownWait()
-        check:
-          await(conn.read().wait(1.seconds)) == []
-      finally:
-        await conn.closeWait()
+          buf.setLen(4096)
+          buf.setLen(await conn.readUntil(addr buf[0], buf.len, stringToBytes("\r\n\r\n")))
+
+          discard await conn.write("HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\na")
+          await conn.shutdownWait()
+          check:
+            await(conn.read().wait(1.seconds)) == []
+        except SimBarrierError as exc:
+          raiseAsDefect(exc, "testTunnelConnectionProvider(): server() " &
+                              "crossed the simulated barrier")
+        except SimEngineError as exc:
+          raiseAsDefect(exc, "testTunnelConnectionProvider(): server() " &
+                              "violated the simulated engine")
+        finally:
+          await conn.closeWait()
+      else:
+        let conn = await targetServer.accept()
+        try:
+          var buf = newString(4096)
+          buf.setLen(await conn.readUntil(addr buf[0], buf.len, stringToBytes("\r\n\r\n")))
+          check:
+            "connect somehost:80" in buf.toLowerAscii()
+            "host: somehost:80" in buf.toLowerAscii()
+
+          discard await conn.write("HTTP/1.1 200 OK\r\n\r\n")
+
+          buf.setLen(4096)
+          buf.setLen(await conn.readUntil(addr buf[0], buf.len, stringToBytes("\r\n\r\n")))
+
+          discard await conn.write("HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\na")
+          await conn.shutdownWait()
+          check:
+            await(conn.read().wait(1.seconds)) == []
+        finally:
+          await conn.closeWait()
     let
       serverFut = server().wait(1.seconds)
       proxy = targetAddress.getAddress()

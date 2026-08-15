@@ -12,6 +12,13 @@ import ../chronos/config
 
 {.used.}
 
+when chronosSimulation:
+  from ../chronos/internal/simengine import SimEngineError
+  from ../chronos/internal/simledger import SimLedgerError
+  {.pragma: testWaitForNoRaises, raises: [SimEngineError, SimLedgerError].}
+else:
+  {.pragma: testWaitForNoRaises, raises: [].}
+
 type
   RetValueType = proc(n: int): Future[int] {.async.}
   RetImplicitVoidType = proc(n: int) {.async.}
@@ -542,7 +549,7 @@ suite "Exception/effect tracking":
     proc test {.async: (raises: []).} =
       await noCancel testit()
 
-    proc noraises() {.raises: [].} =
+    proc noraises() {.testWaitForNoRaises.} =
       let f = test()
       waitFor(f.cancelAndWait())
       waitFor(f)
