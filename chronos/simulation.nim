@@ -144,6 +144,19 @@ when not defined(windows):
     else:
       server.pending.addLast(serverTransp)
     clientTransp
+
+  proc datagramPair*(net: SimNet, addrA, addrB: TransportAddress,
+                      cbprocA, cbprocB: DatagramCallback,
+                      udataA: pointer = nil, udataB: pointer = nil
+                     ): tuple[a, b: DatagramTransport] {.
+      raises: [TransportOsError].} =
+    ## Mints a connected pair of sim datagram endpoints (RFC 0003 6,
+    ## S12b) - the datagram-flavored analogue of `listenStream`/
+    ## `connectStream`'s stream pairing above, minus the listen/accept
+    ## ceremony: UDP has no connection handshake to mint sim-natively,
+    ## so both sides are wired atomically in one call rather than a
+    ## listener/dialer pair.
+    simDatagramPair(addrA, addrB, cbprocA, cbprocB, udataA, udataB)
 else:
   proc listenStream*(net: SimNet, address: TransportAddress): SimStreamServer =
     ## `SimNet` stream transports are POSIX-only in this slice: the
@@ -163,6 +176,20 @@ else:
   proc connectStream*(net: SimNet, address: TransportAddress):
       Future[StreamTransport] {.async: (raises: [TransportError, CancelledError]).} =
     raiseAssert "SimNet stream transports are not implemented on " &
+      "Windows (RFC 0003 section 4's Windows IOCP-emulation non-goal)"
+
+  proc datagramPair*(net: SimNet, addrA, addrB: TransportAddress,
+                      cbprocA, cbprocB: DatagramCallback,
+                      udataA: pointer = nil, udataB: pointer = nil
+                     ): tuple[a, b: DatagramTransport] {.
+      raises: [TransportOsError].} =
+    ## `SimNet` datagram transports are POSIX-only in this slice, the
+    ## same non-goal `listenStream`/`connectStream` above already
+    ## document: the datagram I/O seam this builds on (S12a) is POSIX-
+    ## only. Compiles and type-checks on Windows - satisfying `nimble
+    ## check_windows` - and fails loudly rather than silently doing
+    ## nothing if ever reached there.
+    raiseAssert "SimNet datagram transports are not implemented on " &
       "Windows (RFC 0003 section 4's Windows IOCP-emulation non-goal)"
 
 proc classifySimFailure(msg: string): SimFailureKind =

@@ -454,17 +454,19 @@ else:
 
   when chronosSimulation:
     proc simRawIo(transp: DatagramTransport, op: SimIoOp, data: pointer,
-                   maxBytes: int): tuple[res: int, err: OSErrorCode] {.inline.} =
+                   maxBytes: int):
+        tuple[res: int, err: OSErrorCode, fromAddr: seq[byte]] {.inline.} =
       ## The sim branch of the datagram injectable I/O primitive (RFC
-      ## 0003 6, slice S12a): dispatches to `simDatagramIo`
-      ## (chronos/internal/simengine.nim), which - seam extraction only,
-      ## no `SimNet` datagram endpoint constructed before S12b - always
-      ## takes S10's original scripted-oracle-only fallback: `decideIo`
-      ## alone picks a byte count (or fault) and no content is copied,
-      ## so `data` is passed through untouched. Either way the answer
-      ## comes back in the same `(res, err)` shape a real syscall plus
-      ## `osLastError()` would have produced, so every downstream
-      ## caller's existing error-classification logic runs unmodified.
+      ## 0003 6, slices S12a/S12b): dispatches to `simDatagramIo`
+      ## (chronos/internal/simengine.nim). A bare minted fd with no live
+      ## `simDatagramPair` endpoint keeps S12a's original fallback:
+      ## `decideIo` alone picks a byte count (or fault), no content is
+      ## copied, `fromAddr` comes back empty. A fd with a live endpoint
+      ## routes real content and, on a successful read, the sender's
+      ## address through `fromAddr`. Either way `(res, err)` comes back
+      ## in the same shape a real syscall plus `osLastError()` would
+      ## have produced, so every downstream caller's existing error-
+      ## classification logic runs unmodified.
       getThreadDispatcher().simDatagramIo(transp.fd, op, data, maxBytes)
 
   proc rawIoRecvfrom(transp: DatagramTransport):
@@ -479,8 +481,19 @@ else:
     ## report - and `simRawIo` answers instead.
     when chronosSimulation:
       if getThreadDispatcher().isSimDispatcher():
-        return simRawIo(transp, SimIoOp.Read, baseAddr transp.buffer,
-                         len(transp.buffer))
+        let simResult = simRawIo(transp, SimIoOp.Read, baseAddr transp.buffer,
+                                  len(transp.buffer))
+        if simResult.res >= 0 and simResult.fromAddr.len > 0:
+          # Mirrors what a real `recvfrom()` does to `transp.raddr`/
+          # `transp.ralen` directly through its pointer out-params
+          # (below): `transp.getRemoteAddress()` (already unmodified
+          # production code, called by both `readDatagramLoop` and this
+          # proc's real-mode branch) decodes whatever is there, sim or
+          # real alike.
+          transp.ralen = SockLen(simResult.fromAddr.len)
+          copyMem(addr transp.raddr, unsafeAddr simResult.fromAddr[0],
+                  simResult.fromAddr.len)
+        return (simResult.res, simResult.err)
     let fd = SocketHandle(transp.fd)
     let res = handleEintr:
       transp.ralen = SockLen(sizeof(Sockaddr_storage))
@@ -503,7 +516,9 @@ else:
     ## runs - `simRawIo` answers instead.
     when chronosSimulation:
       if getThreadDispatcher().isSimDispatcher():
-        return simRawIo(transp, SimIoOp.Write, vector.buf, vector.buflen)
+        let simResult = simRawIo(transp, SimIoOp.Write, vector.buf,
+                                  vector.buflen)
+        return (simResult.res, simResult.err)
     let fd = SocketHandle(transp.fd)
     let res =
       case vector.kind
@@ -522,10 +537,20 @@ else:
     let
       transp = cast[DatagramTransport](udata)
       fd = SocketHandle(transp.fd)
-    if int(fd) == 0:
-      ## This situation can be happen, when there events present
-      ## after transport was closed.
-      return
+    when chronosSimulation:
+      if not getThreadDispatcher().isSimDispatcher() and int(fd) == 0:
+        ## This situation can be happen, when there events present
+        ## after transport was closed. Real-mode-only (RFC 0003 6,
+        ## S12b): a sim-minted fd is a monotonic integer with no OS-
+        ## level reuse, so fd 0 - legitimately the first value
+        ## `mintSimFd` ever mints - is never this stale-event artifact
+        ## under a live sim dispatcher.
+        return
+    else:
+      if int(fd) == 0:
+        ## This situation can be happen, when there events present
+        ## after transport was closed.
+        return
     if TransportState.Closed in transp.state:
       transp.state.incl({ReadPaused})
     else:
@@ -543,10 +568,17 @@ else:
     let
       transp = cast[DatagramTransport](udata)
       fd = SocketHandle(transp.fd)
-    if int(fd) == 0:
-      ## This situation can be happen, when there events present
-      ## after transport was closed.
-      return
+    when chronosSimulation:
+      if not getThreadDispatcher().isSimDispatcher() and int(fd) == 0:
+        ## This situation can be happen, when there events present
+        ## after transport was closed. Real-mode-only, see
+        ## `readDatagramLoop`'s identical guard above.
+        return
+    else:
+      if int(fd) == 0:
+        ## This situation can be happen, when there events present
+        ## after transport was closed.
+        return
     if TransportState.Closed in transp.state:
       transp.state.incl({WritePaused})
     else:
@@ -559,6 +591,17 @@ else:
         else:
           if not(vector.writer.finished()):
             vector.writer.fail(getTransportOsError(err))
+        when chronosSimulation:
+          if len(transp.queue) > 0 and getThreadDispatcher().isSimDispatcher():
+            # A real writable fd stays level-triggered armed and the OS
+            # keeps signaling it (UDP sockets are essentially always
+            # writable, unlike a TCP stream's buffer-full backpressure);
+            # a sim-minted fd has no such OS-driven repeat signal, so
+            # the seam re-arms itself for whatever is still queued
+            # (RFC 0003 6, S12b) - the write-side analogue of
+            # `simStreamIo`'s leftover-bytes re-arm on the read side.
+            discard getThreadDispatcher().simMarkReady(
+              transp.fd, SimReadyDirection.Write)
       else:
         transp.state.incl({WritePaused})
         discard removeWriter2(transp.fd)
@@ -567,6 +610,15 @@ else:
     if WritePaused in transp.state:
       ? addWriter2(transp.fd, writeDatagramLoop, cast[pointer](transp))
       transp.state.excl(WritePaused)
+      when chronosSimulation:
+        if getThreadDispatcher().isSimDispatcher():
+          # A real fd is essentially always immediately writable for
+          # UDP (no backpressure concept the way a TCP stream's buffer
+          # has); a sim-minted fd needs that "immediately writable"
+          # signal synthesized explicitly (RFC 0003 6, S12b) - nothing
+          # else ever marks a datagram fd ready in the write direction.
+          discard getThreadDispatcher().simMarkReady(
+            transp.fd, SimReadyDirection.Write)
     ok()
 
   proc resumeRead(transp: DatagramTransport): Result[void, OSErrorCode] =
@@ -699,6 +751,88 @@ else:
       let rres = res.resumeRead()
       if rres.isErr(): raiseTransportOsError(rres.error())
     res
+
+  when chronosSimulation:
+    proc sockaddrToBytes(saddr: Sockaddr_storage, slen: SockLen): seq[byte] =
+      ## Raw OS-level address bytes (RFC 0003 6, S12b): what
+      ## `simDatagramPair` hands the engine-layer endpoint table as a
+      ## peer's identity, and what `rawIoRecvfrom`'s sim branch copies
+      ## back into `transp.raddr`/`transp.ralen` on a successful read.
+      ## The engine layer never imports `TransportAddress` (the same
+      ## transport-agnostic layering `chronos/simulation.nim`'s `SimNet`
+      ## listener table already keeps for streams), so this conversion
+      ## lives here, the one place that already owns `Sockaddr_storage`
+      ## on both sides of the seam.
+      result = newSeq[byte](int(slen))
+      if slen > 0:
+        copyMem(addr result[0], unsafeAddr saddr, int(slen))
+
+    proc newSimDatagramTransport(cbproc: DatagramCallback, fd: AsyncFD,
+                                  local, remote: TransportAddress,
+                                  udata: pointer,
+                                  bufferSize: int): DatagramTransport {.
+        raises: [TransportOsError].} =
+      ## `newDatagramTransportCommon`'s object-construction tail (lines
+      ## above, from `res.fd = localSock` on), reused for a sim-minted
+      ## fd that never runs `socket()`/`bind()`/`connect()` -
+      ## `simDatagramPair`'s sole caller wraps two of these around an
+      ## already-wired sim endpoint pair. `remote` is pre-set to the
+      ## peer's own address purely for `send()`/`remoteAddress()`
+      ## convenience (a "connected" UDP socket, matching
+      ## `newDatagramTransportCommon`'s own `remote.port != Port(0)`
+      ## concept) - it plays no role in sim-mode routing, which is fixed
+      ## at mint time by the engine's `peerFd`, not by any address a
+      ## caller names (RFC 0003 6, S12b's point-to-point scope
+      ## concession, `simDatagramPair`'s own docstring).
+      doAssert(not isNil(cbproc))
+      var res = DatagramTransport()
+      res.fd = fd
+      res.function = cbproc
+      res.buffer = newSeq[byte](bufferSize)
+      res.queue = initDeque[GramVector]()
+      res.udata = udata
+      res.state = {ReadPaused, WritePaused}
+      res.local = local
+      res.remote = remote
+      res.future = Future[void].Raising([]).init(
+        "datagram.transport", {FutureFlag.OwnCancelSchedule})
+      GC_ref(res)
+      trackCounter(DgramTransportTrackerName)
+      let rres = res.resumeRead()
+      if rres.isErr(): raiseTransportOsError(rres.error())
+      res
+
+    proc simDatagramPair*(localA, localB: TransportAddress,
+                           cbprocA, cbprocB: DatagramCallback,
+                           udataA: pointer = nil, udataB: pointer = nil,
+                           bufferSize = DefaultDatagramBufferSize
+                          ): tuple[a, b: DatagramTransport] {.
+        raises: [TransportOsError].} =
+      ## Sim-native datagram pairing (RFC 0003 6, slice S12b): mints a
+      ## connected pair of sim datagram endpoints and wraps each in a
+      ## real `DatagramTransport`, sharing the S12a seam's exact
+      ## recvfrom/sendto machinery - no `socket()`/`bind()`/`connect()`
+      ## syscall runs. `chronos/simulation.nim`'s `SimNet.datagramPair`
+      ## is the sole caller. Unlike a real UDP socket, which can
+      ## `sendTo()` any address, a sim pair is wired to a fixed peer at
+      ## mint time: `sendTo()`'s explicit destination argument is
+      ## accepted (real mode needs it) but not consulted for routing
+      ## under sim, the same point-to-point scope `SimNet`'s stream side
+      ## already accepts for connection establishment.
+      let disp = getThreadDispatcher()
+      var saddrA, saddrB: Sockaddr_storage
+      var slenA, slenB: SockLen
+      toSAddr(localA, saddrA, slenA)
+      toSAddr(localB, saddrB, slenB)
+      let (fdA, fdB) = disp.simMintDatagramPair(
+        sockaddrToBytes(saddrA, slenA), sockaddrToBytes(saddrB, slenB))
+      discard register2(fdA)
+      discard register2(fdB)
+      let a = newSimDatagramTransport(cbprocA, fdA, localA, localB, udataA,
+                                       bufferSize)
+      let b = newSimDatagramTransport(cbprocB, fdB, localB, localA, udataB,
+                                       bufferSize)
+      (a, b)
 
 proc close*(transp: DatagramTransport) =
   ## Closes and frees resources of transport ``transp``.

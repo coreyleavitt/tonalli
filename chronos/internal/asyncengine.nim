@@ -662,15 +662,25 @@ elif defined(windows):
 
     proc simDatagramIo*(disp: PDispatcher, fd: AsyncFD, op: SimIoOp,
                          data: pointer, maxBytes: int):
-        tuple[res: int, err: OSErrorCode] =
+        tuple[res: int, err: OSErrorCode, fromAddr: seq[byte]] =
       ## `chronos/transports/datagram.nim`'s POSIX-only `simRawIo` is the
-      ## sole caller (RFC 0003 6, S12a). Stays defined here too, like
+      ## sole caller (RFC 0003 6, S12a/S12b). Stays defined here too, like
       ## `simMintStreamPair` above, purely so `chronos/simulation.nim`'s
       ## single shared module type-checks on every OS - the datagram
       ## seam itself is not reached from Windows in this slice.
       doAssert isSimDispatcher(disp),
         "simDatagramIo() requires a simulated dispatcher"
       disp.simState.simDatagramIo(int(fd), op, data, maxBytes)
+
+    proc simMintDatagramPair*(disp: PDispatcher, localA, localB: seq[byte]):
+        tuple[a, b: AsyncFD] =
+      ## `chronos/transports/datagram.nim`'s `simDatagramPair` is the sole
+      ## caller (RFC 0003 6, S12b), the datagram-native counterpart to
+      ## `simMintStreamPair` above - same "stays defined here too" reason.
+      doAssert isSimDispatcher(disp),
+        "simMintDatagramPair() requires a simulated dispatcher"
+      let (a, b) = disp.simState.mintSimDatagramPair(localA, localB)
+      (AsyncFD(a), AsyncFD(b))
 
   var gDisp{.threadvar.}: PDispatcher ## Global dispatcher
 
@@ -1428,12 +1438,21 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
 
     proc simDatagramIo*(disp: PDispatcher, fd: AsyncFD, op: SimIoOp,
                          data: pointer, maxBytes: int):
-        tuple[res: int, err: OSErrorCode] =
+        tuple[res: int, err: OSErrorCode, fromAddr: seq[byte]] =
       ## `chronos/transports/datagram.nim`'s `simRawIo` is the sole
-      ## caller (RFC 0003 6, S12a).
+      ## caller (RFC 0003 6, S12a/S12b).
       doAssert isSimDispatcher(disp),
         "simDatagramIo() requires a simulated dispatcher"
       disp.simState.simDatagramIo(int(cint(fd)), op, data, maxBytes)
+
+    proc simMintDatagramPair*(disp: PDispatcher, localA, localB: seq[byte]):
+        tuple[a, b: AsyncFD] =
+      ## `chronos/transports/datagram.nim`'s `simDatagramPair` is the sole
+      ## caller (RFC 0003 6, S12b).
+      doAssert isSimDispatcher(disp),
+        "simMintDatagramPair() requires a simulated dispatcher"
+      let (a, b) = disp.simState.mintSimDatagramPair(localA, localB)
+      (AsyncFD(cint(a)), AsyncFD(cint(b)))
 
   var gDisp{.threadvar.}: PDispatcher ## Global dispatcher
 

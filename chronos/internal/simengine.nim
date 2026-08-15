@@ -87,11 +87,20 @@ type
     Write
 
   SimFault* {.pure.} = enum
-    ## `IoOutcomePoint.faults`'s full membership is finalized in S11b/
-    ## S12b's fault-injection RED phases (reset, drop, duplicate,
-    ## reorder per 3.3's slice table); S6 needs one concrete member to
-    ## exercise `IoDecision`'s fault branch through the interface.
+    ## `IoOutcomePoint.faults`'s full membership, finalized across S11b/
+    ## S12b's fault-injection RED phases (RFC 0003 3.3's slice table).
+    ## `Reset` is a recv-side choice (S11b/S12b): the local read fails,
+    ## the same real `OSErrorCode` a real platform's ECONNRESET-after-
+    ## ICMP-unreachable would surface (`simFaultToError`). `Drop`/
+    ## `Duplicate`/`Reorder` (S12b, datagram-only so far) are write-side
+    ## choices instead: none of them fail the local send (real UDP never
+    ## fails a send over packet loss) - `simDatagramIo`'s write branch
+    ## intercepts each by name before it would otherwise reach
+    ## `simFaultToError`, which has no translation for them.
     Reset
+    Drop
+    Duplicate
+    Reorder
 
   IoOutcomePoint* = object
     ## One I/O completion's decision point (RFC 0003 3.3): asked while a
@@ -150,6 +159,32 @@ type
     event: SimEvent
     callback: InternalAsyncCallback
 
+  SimDatagramMessage = object
+    ## One queued whole datagram (RFC 0003 6, S12b): unlike a stream
+    ## endpoint's `Deque[byte]`, a datagram endpoint's queue holds
+    ## discrete messages - a read always consumes exactly one, in full
+    ## or truncated, never a byte-sliced view spanning two of them, the
+    ## same convention a real `recvfrom()` enforces. `fromAddr` is the
+    ## sender's own address at send time, in raw OS-level bytes (never a
+    ## `TransportAddress` - the engine layer stays transport-agnostic,
+    ## the same layering `chronos/simulation.nim`'s `SimNet` listener
+    ## table already keeps; `chronos/transports/datagram.nim` is the one
+    ## place that converts to/from `Sockaddr_storage` on both ends of
+    ## this seam).
+    data: seq[byte]
+    fromAddr: seq[byte]
+
+  SimDatagramEndpoint = object
+    ## One side of a minted sim datagram pair (RFC 0003 6, S12b):
+    ## `peerFd` routes a write to the other side's `inbound` queue, the
+    ## same fixed-pair scope `SimStreamEndpoint.peerFd` already accepts
+    ## for streams - a real UDP socket can `sendTo()` any address, but a
+    ## sim pair is wired at mint time, not per send.
+    id: SimEndpointId
+    peerFd: int
+    localAddr: seq[byte]
+    inbound: Deque[SimDatagramMessage]
+
   SimStreamEndpoint = object
     ## One side of an in-memory stream endpoint pair (RFC 0003 3.2's
     ## sim-native connection setup, slice S11a): `id` is this
@@ -189,6 +224,7 @@ type
     timeBudgetCutoffNanoseconds: int64
     traceWriter: ptr SimTraceWriter
     streamEndpoints: Table[int, SimStreamEndpoint]
+    datagramEndpoints: Table[int, SimDatagramEndpoint]
     nextEndpointIdValue: uint32
 
 const
@@ -278,8 +314,16 @@ proc RandomOracle*(seed: uint64): SimOracle =
   ## not a separate case; `decideTime` uses the same
   ## earliest-armed-deadline rule as `defaultSimOracle` - randomizing
   ## among armed deadlines is exploration-oracle territory (issue #10),
-  ## out of scope here. Faults are never synthesized here: the faults
-  ## menu is empty until S12b (datagram-side).
+  ## out of scope here. Faults are never synthesized here even though
+  ## the `SimFault` menu is no longer empty as of S12b: fault injection
+  ## stays scripted-oracle territory (`testsimstream.nim`/
+  ## `testsimdatagram.nim`'s own scripted `decideIo` overrides), the
+  ## same deliberate split `decideBatch`'s exploration-oracle carve-out
+  ## above already draws. A live datagram endpoint's write under this
+  ## oracle can still draw a partial byte count the same as a stream
+  ## write does - datagram sends are atomic on a real platform, so this
+  ## is a known, recorded gap rather than a modeled behavior; no test in
+  ## this slice exercises a datagram endpoint under `RandomOracle`.
   var rng = initSplitMix64(seed)
   proc decideBatch(cp: SelectBatchPoint):
       Result[BatchDecision, SimOracleError] {.gcsafe, raises: [].} =
@@ -355,6 +399,12 @@ proc ReplayOracle*(path: string): SimOracle
     case rec.fault
     of "reset":
       ok(IoDecision(outcome: SimIoOutcome.Fault, fault: SimFault.Reset))
+    of "drop":
+      ok(IoDecision(outcome: SimIoOutcome.Fault, fault: SimFault.Drop))
+    of "duplicate":
+      ok(IoDecision(outcome: SimIoOutcome.Fault, fault: SimFault.Duplicate))
+    of "reorder":
+      ok(IoDecision(outcome: SimIoOutcome.Fault, fault: SimFault.Reorder))
     else:
       err(SimOracleError(msg: "replay: unrecognized fault name in " &
         "trace: " & rec.fault))
@@ -388,7 +438,8 @@ proc newSimEngineState*(startValue: int = 0,
                   decisionBudget: decisionBudget, seed: seed,
                   hasTimeBudget: hasTimeBudget,
                   timeBudgetCutoffNanoseconds: timeBudgetCutoffNanoseconds,
-                  streamEndpoints: initTable[int, SimStreamEndpoint]())
+                  streamEndpoints: initTable[int, SimStreamEndpoint](),
+                  datagramEndpoints: initTable[int, SimDatagramEndpoint]())
 
 proc mintSimFd*(state: SimEngineState): int =
   ## Mints the next sim-owned fd-domain id and records it in the
@@ -529,19 +580,23 @@ proc simFaultToError*(fault: SimFault): OSErrorCode {.inline.} =
   ## transport layer's error-classification helpers already recognize,
   ## so a sim-mode fault flows through the exact same
   ## `isConnResetError`/`setReadError`/`handleError` logic a real error
-  ## would (RFC 0003 3.2 N4). Only `Reset` exists in this slice
-  ## (S11b/S12b add the rest); each future member gets its own arm
-  ## here rather than an `else`, so a new `SimFault` forces a compile
-  ## error here instead of silently falling through. This module is
-  ## platform-neutral (unlike `stream.nim`'s POSIX-only seam), so the
-  ## code is named per platform the way `transports/common.nim` does
-  ## throughout: Windows has no bare `ECONNRESET`, only `WSAECONNRESET`.
+  ## would (RFC 0003 3.2 N4). Each member gets its own arm here rather
+  ## than an `else`, so a new `SimFault` forces a compile error here
+  ## instead of silently falling through. This module is platform-
+  ## neutral (unlike `stream.nim`'s POSIX-only seam), so the code is
+  ## named per platform the way `transports/common.nim` does throughout:
+  ## Windows has no bare `ECONNRESET`, only `WSAECONNRESET`.
   case fault
   of SimFault.Reset:
     when defined(windows):
       oserrno.WSAECONNRESET
     else:
       oserrno.ECONNRESET
+  of SimFault.Drop, SimFault.Duplicate, SimFault.Reorder:
+    raiseAssert "simFaultToError(): " & $fault & " has no OS error " &
+      "translation - it is a delivery-fate fault (RFC 0003 6, S12b) " &
+      "the datagram write path resolves before any error would reach " &
+      "the caller, so it should never reach this translation"
 
 proc simMintStreamPair*(state: SimEngineState): tuple[a, b: int] =
   ## Mints a connected pair of sim stream endpoints (RFC 0003 3.2's
@@ -730,21 +785,161 @@ proc simStreamIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
     of SimIoOutcome.Fault:
       (-1, simFaultToError(decision.fault))
 
+proc mintSimDatagramPair*(state: SimEngineState, localA, localB: seq[byte]):
+    tuple[a, b: int] =
+  ## Mints a connected pair of sim datagram endpoints (RFC 0003 6, S12b),
+  ## the datagram-native counterpart to `simMintStreamPair`: two sim fds,
+  ## each wired as the other's peer, each carrying its own address (raw
+  ## OS-level bytes, opaque to this layer) and its own real
+  ## `SimEndpointId`. `chronos/transports/datagram.nim`'s
+  ## `simDatagramPair` is the sole production caller.
+  let
+    fdA = state.mintSimFd()
+    fdB = state.mintSimFd()
+  state.datagramEndpoints[fdA] = SimDatagramEndpoint(
+    id: state.mintSimEndpointId(), peerFd: fdB, localAddr: localA,
+    inbound: initDeque[SimDatagramMessage]())
+  state.datagramEndpoints[fdB] = SimDatagramEndpoint(
+    id: state.mintSimEndpointId(), peerFd: fdA, localAddr: localB,
+    inbound: initDeque[SimDatagramMessage]())
+  (fdA, fdB)
+
+proc simDatagramTake(state: SimEngineState, fd: int, n: int,
+                      data: pointer): seq[byte] =
+  ## Pops exactly one queued datagram off `fd`'s own inbound queue
+  ## (message-oriented: never a byte slice spanning two queued
+  ## datagrams) and copies up to `n` (already validated `<=` that
+  ## message's length by the caller) bytes of it into `data`, discarding
+  ## whatever is left of that message unread - the same truncate-and-
+  ## drop convention a real `recvfrom()` uses when the caller's buffer is
+  ## smaller than the datagram. Returns the message's sender address for
+  ## the caller to report back, the sim analogue of `recvfrom()`'s
+  ## `fromaddr` out-param.
+  var ep = state.datagramEndpoints.getOrDefault(fd)
+  let msg = ep.inbound.popFirst()
+  state.datagramEndpoints[fd] = ep
+  if n > 0 and msg.data.len > 0:
+    let dst = cast[ptr UncheckedArray[byte]](data)
+    for i in 0 ..< min(n, msg.data.len):
+      dst[i] = msg.data[i]
+  msg.fromAddr
+
+proc simDatagramDeliver(state: SimEngineState, fd: int, data: pointer, n: int,
+                         reorder: bool) =
+  ## Queues one whole datagram (`n` bytes copied out of `data`, this
+  ## message's own atomic unit - no leftover-byte bookkeeping the way
+  ## `simStreamDeliver` needs) onto the peer's inbound queue, tagged with
+  ## the sender's own address, and wakes an already-armed peer reader
+  ## (`simMarkReadyOnce`, unchanged from S11a). `reorder`, when true and
+  ## the peer already has a message queued, inserts at the front instead
+  ## of the back - this write is delivered to the peer before whatever
+  ## it already had pending, the RFC 0003 6 S12b reorder fault's
+  ## placement (write-side, per-op `decideIo`; see `simDatagramIo`'s
+  ## docstring for the full rationale). A no-op reorder (falls back to
+  ## normal back-of-queue delivery) when nothing is pending yet - there
+  ## is nothing to arrive out of order against.
+  let peerFd = state.datagramEndpoints.getOrDefault(fd).peerFd
+  var payload = newSeq[byte](n)
+  if n > 0:
+    let src = cast[ptr UncheckedArray[byte]](data)
+    for i in 0 ..< n:
+      payload[i] = src[i]
+  let msg = SimDatagramMessage(data: payload,
+    fromAddr: state.datagramEndpoints.getOrDefault(fd).localAddr)
+  var peer = state.datagramEndpoints.getOrDefault(peerFd)
+  if reorder and peer.inbound.len > 0:
+    peer.inbound.addFirst(msg)
+  else:
+    peer.inbound.addLast(msg)
+  state.datagramEndpoints[peerFd] = peer
+  state.simMarkReadyOnce(peerFd, SimReadyDirection.Read)
+
 proc simDatagramIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
-                     maxBytes: int): tuple[res: int, err: OSErrorCode] =
-  ## The sim datagram seam's orchestration (RFC 0003 6, slice S12a):
-  ## seam extraction only, mirroring S10 - no `SimNet` datagram endpoint
-  ## table exists yet (S12b's scope per the RFC's slice table), so every
-  ## fd takes `simStreamIo`'s `fd notin state.streamEndpoints` fallback
-  ## unconditionally. `decideIo` alone picks a byte count or fault; `data`
-  ## is never touched, matching that same fallback's "no content copied"
-  ## behavior for a bare minted fd.
-  let decision = state.simDecideIo(IoOutcomePoint(
-    trigger: SimEventId(0), endpoint: SimEndpointId(uint32(fd)), op: op,
-    maxBytes: maxBytes, faults: {}))
-  case decision.outcome
-  of SimIoOutcome.Ok: (decision.bytes, OSErrorCode(0))
-  of SimIoOutcome.Fault: (-1, simFaultToError(decision.fault))
+                     maxBytes: int):
+    tuple[res: int, err: OSErrorCode, fromAddr: seq[byte]] =
+  ## The sim datagram seam's orchestration (RFC 0003 6, slices S12a/
+  ## S12b). A fd with no live endpoint (a bare minted fd, e.g.
+  ## `testsimdatagram.nim`'s seam probes) keeps S12a's original
+  ## fallback: `decideIo` alone picks a byte count or fault, `data` is
+  ## never touched, no address is ever reported.
+  ##
+  ## A fd with a live endpoint routes through the endpoint table: a read
+  ## with nothing queued answers "would block" without consulting the
+  ## oracle at all (the same structural-fact rule `simStreamIo` already
+  ## applies to an empty inbound queue) - unlike a stream's EOF case,
+  ## there is no "peer closed" fallback to check, since datagrams have
+  ## no half-close/EOF concept. Once a message is queued, `decideIo`
+  ## adjudicates its `Reset` fault (S12b): reset is a recv-side choice,
+  ## mirroring the real platform's ECONNRESET-after-ICMP-unreachable
+  ## behavior (ejected here rather than at write time because the
+  ## fault's whole point is "the peer is unreachable, discovered on the
+  ## next attempt to receive from it" - `readDatagramLoop`'s own error
+  ## path is what actually surfaces it to a caller). Drop/duplicate/
+  ## reorder (S12b) are write-side choices instead: unlike Reset, none
+  ## of them fail the local `sendto()`-equivalent call (real UDP never
+  ## fails a send over packet loss), so they cannot flow through the
+  ## generic `IoDecision.Fault` branch a stream write already reuses for
+  ## Reset - `simDatagramIo`'s write branch intercepts each by name
+  ## before it would otherwise translate to an `OSErrorCode`.
+  if fd notin state.datagramEndpoints:
+    let decision = state.simDecideIo(IoOutcomePoint(
+      trigger: SimEventId(0), endpoint: SimEndpointId(uint32(fd)), op: op,
+      maxBytes: maxBytes, faults: {}))
+    return case decision.outcome
+      of SimIoOutcome.Ok: (decision.bytes, OSErrorCode(0), newSeq[byte]())
+      of SimIoOutcome.Fault:
+        (-1, simFaultToError(decision.fault), newSeq[byte]())
+
+  let endpointId = state.datagramEndpoints.getOrDefault(fd).id
+  case op
+  of SimIoOp.Read:
+    let avail = state.datagramEndpoints.getOrDefault(fd).inbound.len
+    if avail == 0:
+      when defined(windows):
+        return (-1, oserrno.WSAEWOULDBLOCK, newSeq[byte]())
+      else:
+        return (-1, oserrno.EWOULDBLOCK, newSeq[byte]())
+    let msgLen = state.datagramEndpoints.getOrDefault(fd).inbound[0].data.len
+    let decision = state.simDecideIo(IoOutcomePoint(
+      trigger: SimEventId(0), endpoint: endpointId, op: op,
+      maxBytes: min(maxBytes, msgLen), faults: {SimFault.Reset}))
+    case decision.outcome
+    of SimIoOutcome.Ok:
+      let fromAddr = state.simDatagramTake(fd, decision.bytes, data)
+      if state.datagramEndpoints.getOrDefault(fd).inbound.len > 0:
+        # More than one datagram was queued: level-triggered readiness
+        # (S11a's `simMarkReadyOnce` rule) needs a fresh event for the
+        # rest, the same re-arm `simStreamIo` performs for leftover
+        # bytes of a partially-read stream - here, leftover *messages*.
+        state.simMarkReadyOnce(fd, SimReadyDirection.Read)
+      (decision.bytes, OSErrorCode(0), fromAddr)
+    of SimIoOutcome.Fault:
+      (-1, simFaultToError(decision.fault), newSeq[byte]())
+  of SimIoOp.Write:
+    let decision = state.simDecideIo(IoOutcomePoint(
+      trigger: SimEventId(0), endpoint: endpointId, op: op,
+      maxBytes: maxBytes,
+      faults: {SimFault.Drop, SimFault.Duplicate, SimFault.Reorder}))
+    case decision.outcome
+    of SimIoOutcome.Ok:
+      state.simDatagramDeliver(fd, data, decision.bytes, reorder = false)
+      (decision.bytes, OSErrorCode(0), newSeq[byte]())
+    of SimIoOutcome.Fault:
+      case decision.fault
+      of SimFault.Reset:
+        (-1, simFaultToError(SimFault.Reset), newSeq[byte]())
+      of SimFault.Drop:
+        # Silently vanishes: the local send still succeeds (real UDP
+        # never fails a send over packet loss), only delivery is
+        # skipped.
+        (maxBytes, OSErrorCode(0), newSeq[byte]())
+      of SimFault.Duplicate:
+        state.simDatagramDeliver(fd, data, maxBytes, reorder = false)
+        state.simDatagramDeliver(fd, data, maxBytes, reorder = false)
+        (maxBytes, OSErrorCode(0), newSeq[byte]())
+      of SimFault.Reorder:
+        state.simDatagramDeliver(fd, data, maxBytes, reorder = true)
+        (maxBytes, OSErrorCode(0), newSeq[byte]())
 
 proc simStreamHalfClose*(state: SimEngineState, fd: int) =
   ## Sim-mode half-close (RFC 0003 3.2: `closeWait`/`shutdownWait`
