@@ -154,6 +154,39 @@ task test_simulation, "Run the deterministic simulation suites":
   else:
     echo "test_simulation: skipped, the sim substrate requires Nim >= 2.0 (RFC 0003 3.8)"
 
+task check_windows, "Windows parity: semantic-check the library surface (fork issue #20)":
+  # The dev container has no mingw (fork issue #20 gap 4), so this
+  # substitutes `nim check`'s full semantic analysis - no C compiler
+  # needed - for an actual cross-compile: every symbol/type error a
+  # real Windows build would hit at the front end, though not
+  # codegen-only issues, which stay CI's job.
+  let winCfg = cfg & " --os:windows -d:windows"
+
+  # (a) define-off: the real (non-simulation) Windows build must stay
+  # unaffected by the sim substrate (RFC 0003 principle 2).
+  exec nimc & " check " & winCfg & " chronos.nim"
+
+  # (b) define-on: the sim substrate's public surface, with the
+  # dispatcher construction fork and provenance guards this slice
+  # mirrors onto the Windows (IOCP) branch.
+  exec nimc & " check " & winCfg &
+    " -d:chronosSimulation -d:chronosFutureTracking --threads:on chronos/simulation.nim"
+
+  # (c) sim test files, scoped to what checks cleanly on Windows today.
+  # testsimengine/testsimloop/testsimulation (and testall, which
+  # imports them) drive the POSIX-only readiness registration surface
+  # (addReader2/addWriter2 have no Windows analog - IOCP has no
+  # per-direction interest registration to mirror it onto) and a
+  # POSIX-shaped construction probe (`getIoHandler().isNil`, valid for
+  # a `Selector` ref, not a Windows `HANDLE`). Both are the sim poll
+  # loop's territory (fork issue #20 gap 2), not this slice's.
+  let simLeafTests = [
+    "tests/testsimclock", "tests/testsimoracle", "tests/testsimtrace",
+  ]
+  for t in simLeafTests:
+    exec nimc & " check " & winCfg &
+      " -d:chronosSimulation -d:chronosFutureTracking --threads:on " & t & ".nim"
+
 task test_libbacktrace, "test with libbacktrace":
   if platform != "x86":
     let allArgs = @[

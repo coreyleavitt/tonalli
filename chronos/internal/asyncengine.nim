@@ -363,6 +363,8 @@ elif defined(windows):
       getQueuedCompletionStatusEx*: LPFN_GETQUEUEDCOMPLETIONSTATUSEX
       disconnectEx*: WSAPROC_DISCONNECTEX
       flags: set[DispatcherFlag]
+      when chronosSimulation:
+        simState: SimEngineState
     PDispatcher* = ref Dispatcher
 
     PtrCustomOverlapped* = ptr CustomOverlapped
@@ -486,6 +488,71 @@ elif defined(windows):
     initAPI(res)
     res
 
+  when chronosSimulation:
+    proc newSimDispatcher*(oracle: SimOracle = defaultSimOracle(),
+                           decisionBudget: int = 0, seed: uint64 = 0,
+                           hasTimeBudget: bool = false,
+                           timeBudgetCutoffNanoseconds: int64 = 0): PDispatcher =
+      ## Construct a hermetic simulated dispatcher: the IOCP analog of
+      ## the POSIX constructor leaving `selector` nil. `ioPort` stays at
+      ## its zero value - no `createIoCompletionPort` call, no Winsock
+      ## control socket, no handle is touched. `isSimDispatcher` and
+      ## every provenance-guarded touch site key off `simState` being
+      ## non-nil rather than off `ioPort` directly, matching the POSIX
+      ## constructor's own reasoning. `oracle`/`decisionBudget`/
+      ## `hasTimeBudget`/`timeBudgetCutoffNanoseconds` are `simulate()`'s
+      ## livelock bounds (RFC 0003 3.8); every pre-poll-parity caller
+      ## leaves them at their unlimited default.
+      var res = PDispatcher(
+        timers: initHeapQueue[TimerCallback](),
+        callbacks: initCallbackQueue[AsyncCallback](64),
+        idlers: initCallbackQueue[AsyncCallback](),
+        ticks: initCallbackQueue[AsyncCallback](),
+        trackers: initTable[string, TrackerBase](),
+        counters: initTable[string, TrackerCounter](),
+        handles: initHashSet[AsyncFD](),
+        simState: newSimEngineState(oracle = oracle,
+          decisionBudget = decisionBudget, seed = seed,
+          hasTimeBudget = hasTimeBudget,
+          timeBudgetCutoffNanoseconds = timeBudgetCutoffNanoseconds),
+      )
+
+      when not chronosStrictReentrancy:
+        res.callbacks.addLast(SentinelCallback)
+
+      when hasThreadSupport:
+        res.threadCallbacks.init()
+
+      res
+
+    proc isSimDispatcher*(disp: PDispatcher): bool {.inline.} =
+      # `disp` itself may be nil here: `handle()` is also called
+      # internally (`gDisp.handle()` in `callSoon(DispatcherHandle,
+      # ...)`) purely for its pointer value, on a thread whose `gDisp`
+      # has not been initialized yet - that call must stay as safe
+      # against a nil `disp` as `addr disp[]` already is.
+      not disp.isNil and not disp.simState.isNil
+
+    template simProvenanceGuard(disp: PDispatcher, fd: AsyncFD): bool =
+      ## `true` when the call may proceed to touch IOCP or a real
+      ## handle - either `disp` isn't simulated, or `fd` was minted into
+      ## its own sim endpoint table. `false` means the caller must
+      ## return the reserved barrier code instead.
+      not isSimDispatcher(disp) or disp.simState.ownsSimFd(int(fd))
+
+    proc mintSimFd*(disp: PDispatcher): AsyncFD =
+      doAssert isSimDispatcher(disp),
+        "mintSimFd() requires a simulated dispatcher"
+      AsyncFD(disp.simState.mintSimFd())
+
+    proc simAttachTraceWriter*(disp: PDispatcher, writer: ptr SimTraceWriter) =
+      ## Wires a live decision-log writer into `disp`'s run state (RFC
+      ## 0003 3.7/3.8); `chronos/simulation.nim`'s `simulate()` is the
+      ## sole caller.
+      doAssert isSimDispatcher(disp),
+        "simAttachTraceWriter() requires a simulated dispatcher"
+      disp.simState.attachTraceWriter(writer)
+
   var gDisp{.threadvar.}: PDispatcher ## Global dispatcher
 
   proc setThreadDispatcher*(disp: PDispatcher) {.gcsafe, raises: [].}
@@ -499,6 +566,15 @@ elif defined(windows):
   proc register2*(fd: AsyncFD): Result[void, OSErrorCode] =
     ## Register file descriptor ``fd`` in thread's dispatcher.
     let loop = getThreadDispatcher()
+    when chronosSimulation:
+      if not simProvenanceGuard(loop, fd):
+        return err(SimBarrierCode)
+      if loop.isSimDispatcher():
+        # Registration routing (RFC 0003 3.2 point 2): a sim-minted fd
+        # has no IOCP association to create - `loop.handles` bookkeeping
+        # is all `contains()` needs.
+        loop.handles.incl(fd)
+        return ok()
     if createIoCompletionPort(HANDLE(fd), loop.ioPort, cast[CompletionKey](fd),
                               1) == osdefs.INVALID_HANDLE_VALUE:
       return err(osLastError())
@@ -609,6 +685,9 @@ elif defined(windows):
     ## identifier ``pid`` exited. Returns process identifier, which can be
     ## used to clear process callback via ``removeProcess``.
     doAssert(pid > 0, "Process identifier must be positive integer")
+    when chronosSimulation:
+      if getThreadDispatcher().isSimDispatcher():
+        return err(SimBarrierCode)
     let
       hProcess = openProcess(SYNCHRONIZE, WINBOOL(0), DWORD(pid))
       flags = WT_EXECUTEINWAITTHREAD or WT_EXECUTEONLYONCE
@@ -636,6 +715,9 @@ elif defined(windows):
 
   proc removeProcess2*(procHandle: ProcessHandle): Result[void, OSErrorCode] =
     ## Remove process' watching using process' descriptor ``procHandle``.
+    when chronosSimulation:
+      if getThreadDispatcher().isSimDispatcher():
+        return err(SimBarrierCode)
     let waitableHandle = WaitableHandle(procHandle)
     doAssert(not(isNil(waitableHandle)))
     ? closeWaitable(waitableHandle)
@@ -687,6 +769,9 @@ elif defined(windows):
     const supportedSignals = [SIGINT, SIGTERM, SIGQUIT]
     doAssert(cint(signal) in supportedSignals, "Signal is not supported")
     let loop = getThreadDispatcher()
+    when chronosSimulation:
+      if loop.isSimDispatcher():
+        return err(SimBarrierCode)
     var hWait: WaitableHandle = nil
 
     proc continuation(ucdata: pointer) {.gcsafe.} =
@@ -715,6 +800,9 @@ elif defined(windows):
 
   proc removeSignal2*(signalHandle: SignalHandle): Result[void, OSErrorCode] =
     ## Remove watching signal ``signal``.
+    when chronosSimulation:
+      if getThreadDispatcher().isSimDispatcher():
+        return err(SimBarrierCode)
     ? closeWaitable(WaitableHandle(signalHandle))
     ok()
 
@@ -871,6 +959,13 @@ elif defined(windows):
     ## are not exposed to the public and not supposed to be used/reused).
     ## Please use closeSocket(AsyncFD) and closeHandle(AsyncFD) instead.
     doAssert(fd != AsyncFD(osdefs.INVALID_SOCKET))
+    when chronosSimulation:
+      let loop = getThreadDispatcher()
+      if not simProvenanceGuard(loop, fd):
+        return err(SimBarrierCode)
+      if loop.isSimDispatcher():
+        loop.handles.excl(fd)
+        return ok()
     unregister(fd)
     if closeFd(SocketHandle(fd)) != 0:
       err(osLastError())
@@ -879,6 +974,9 @@ elif defined(windows):
 
   proc contains*(disp: PDispatcher, fd: AsyncFD): bool =
     ## Returns ``true`` if ``fd`` is registered in thread's dispatcher.
+    when chronosSimulation:
+      if disp.isSimDispatcher():
+        return disp.simState.ownsSimFd(int(fd))
     fd in disp.handles
 
 elif defined(macosx) or defined(freebsd) or defined(netbsd) or
