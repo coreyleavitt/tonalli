@@ -18,11 +18,14 @@
 ## construction. The `Callbacks`-queue enqueue instrumentation wired
 ## into `asyncengine.nim` for this slice covers every producer this
 ## file's own scenarios exercise (timer expiry, `callSoon`, sim
-## readiness delivery, `callIdle`/`internalCallTick`) but not every
-## producer in the codebase (e.g. the Windows IOCP completion path, or
-## the close/teardown flush paths `SimNet`/transport tests would
-## exercise) - extending it to those is follow-on work, not claimed
-## here. `SimLedgerError`'s message and `.objectDesc` are checked with
+## readiness delivery, `callIdle`/`internalCallTick`) and, as of the
+## RFC 0003 review round that added `probeTransportCloseConservation`
+## below, the sim close/teardown flush paths `SimNet`/transport tests
+## exercise (`closeSocket`/`closeHandle`'s `simFlushCloseInterest`, and
+## POSIX `closeSocket`'s own flush branch and continuation callback) -
+## but not every producer in the codebase (e.g. the Windows IOCP
+## completion path), which stays follow-on work, not claimed here.
+## `SimLedgerError`'s message and `.objectDesc` are checked with
 ## `notin`/`in` substring assertions rather than pinned verbatim, to
 ## avoid over-fitting the pinning discipline S3-S5 use for genuine
 ## ordering guarantees onto a diagnostic message with no such contract.
@@ -511,6 +514,32 @@ when defined(chronosSimulation) and compileOption("threads"):
         msg: "wrong exception type: " & $exc.name & ": " & exc.msg)
     probeChan.send(outcome)
 
+  # --- transport close-flush: callback conservation across teardown --------
+
+  when not defined(windows):
+    proc probeTransportCloseConservation() {.thread.} =
+      ## The `SimNet` idiom `tests/testsimnet.nim` runs under plain
+      ## `simulate()` (ledger checking off), exercised here under
+      ## `simulateWithLedger()` instead: `closeWait` drives `closeSocket`'s
+      ## sim flush branch and its POSIX continuation callback, both of
+      ## which enqueue onto `Callbacks` outside this slice's original
+      ## instrumentation.
+      var outcome = ProbeOutcome(ok: true)
+      try:
+        simulateWithLedger(seed = 1234'u64):
+          let net = simNet()
+          let address = initTAddress("127.0.0.1:0")
+          let server = net.listenStream(address)
+          let acceptFut = server.accept()
+          let client = await net.connectStream(address)
+          let serverTransp = await acceptFut
+          await client.closeWait()
+          await serverTransp.closeWait()
+      except CatchableError as exc:
+        outcome = ProbeOutcome(ok: false,
+          msg: "unexpected " & $exc.name & ": " & exc.msg)
+      probeChan.send(outcome)
+
   suite "ghost ledgers: callback conservation and future lifecycle":
     test "the happy path raises nothing":
       let outcome = runProbe(probeHappyPathRaisesNothing)
@@ -571,3 +600,9 @@ when defined(chronosSimulation) and compileOption("threads"):
       let outcome = runProbe(probeLeakedAsyncEventQueueWaiterCaughtAtTeardown)
       checkpoint outcome.msg
       check outcome.ok
+
+    when not defined(windows):
+      test "closing a SimNet transport pair does not falsely violate callback conservation":
+        let outcome = runProbe(probeTransportCloseConservation)
+        checkpoint outcome.msg
+        check outcome.ok

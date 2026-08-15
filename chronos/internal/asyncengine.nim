@@ -1408,10 +1408,17 @@ elif defined(windows):
     let interest = loop.simState.simFlushInterest(int(fd))
     if not isNil(interest.reader.function):
       loop.callbacks.addLast(interest.reader)
+      simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks,
+                            not isNil(interest.reader.context))
     if not isNil(interest.writer.function):
       loop.callbacks.addLast(interest.writer)
+      simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks,
+                            not isNil(interest.writer.context))
     if not(isNil(aftercb)):
-      loop.callbacks.addLast(capturingCallback(aftercb))
+      let acb = capturingCallback(aftercb)
+      loop.callbacks.addLast(acb)
+      simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks,
+                            not isNil(acb.context))
 
   proc closeSocket*(fd: AsyncFD, aftercb: CallbackFunc = nil) =
     ## Closes a socket and ensures that it is unregistered.
@@ -1922,6 +1929,13 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     ## are not exposed to the public and not supposed to be used/reused).
     ## Please use closeSocket(AsyncFD) and closeHandle(AsyncFD) instead.
     doAssert(fd != AsyncFD(osdefs.INVALID_SOCKET))
+    when chronosSimulation:
+      let loop = getThreadDispatcher()
+      if not simProvenanceGuard(loop, fd):
+        raiseSimBarrier("unregisterAndCloseFd()")
+      if loop.isSimDispatcher():
+        discard unregister2(fd)
+        return ok()
     ? unregister2(fd)
     if closeFd(cint(fd)) != 0:
       err(osLastError())
@@ -2016,8 +2030,12 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
         let interest = loop.simState.simFlushInterest(int(fd))
         if not isNil(interest.reader.function):
           loop.callbacks.addLast(interest.reader)
+          simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks,
+                                not isNil(interest.reader.context))
         if not isNil(interest.writer.function):
           loop.callbacks.addLast(interest.writer)
+          simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks,
+                                not isNil(interest.writer.context))
       else:
         flushPendingReaderWriter()
     else:
@@ -2028,6 +2046,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     # can be no file descriptors registered in system queue.
     var acb = capturingCallback(continuation)
     loop.callbacks.addLast(acb)
+    when chronosSimulation:
+      simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks,
+                            not isNil(acb.context))
 
   proc closeHandle*(fd: AsyncFD, aftercb: CallbackFunc = nil) =
     ## Close asynchronous file/pipe handle.

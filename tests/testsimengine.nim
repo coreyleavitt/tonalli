@@ -25,6 +25,8 @@ when defined(chronosSimulation):
   import ../chronos/config
   when defined(windows):
     import ../chronos/osdefs
+  else:
+    import std/posix
 
 {.used.}
 
@@ -132,6 +134,34 @@ when defined(chronosSimulation) and compileOption("threads"):
       outcome = ProbeOutcome(ok: false, msg: "unexpected raise: " & exc.msg)
     probeChan.send(outcome)
 
+  when not defined(windows):
+    proc probeUnregisterAndCloseFdSparesRealFdUnderSim() {.thread.} =
+      ## With `mintSimFd` starting at 0, the first minted fd collides
+      ## with a real fd already open at that integer (stdin, here) -
+      ## `unregisterAndCloseFd` must never reach the real `closeFd` for
+      ## a sim-owned fd, only `unregister2`'s sim-table clear.
+      var outcome = ProbeOutcome(ok: true)
+      let disp = newSimDispatcher()
+      setThreadDispatcher(disp)
+      let fd = disp.mintSimFd()
+      if fcntl(cint(fd), F_GETFD) == -1:
+        outcome = ProbeOutcome(ok: false,
+          msg: "test setup: no real fd at " & $int(fd) & " to protect")
+      else:
+        try:
+          let res = unregisterAndCloseFd(fd)
+          if res.isErr:
+            outcome = ProbeOutcome(ok: false,
+              msg: "unregisterAndCloseFd returned an error: " & $int(res.error))
+          elif fcntl(cint(fd), F_GETFD) == -1:
+            outcome = ProbeOutcome(ok: false,
+              msg: "real fd " & $int(fd) &
+                   " was closed by a sim-owned unregisterAndCloseFd")
+        except CatchableError as exc:
+          outcome = ProbeOutcome(ok: false,
+            msg: "unexpected " & $exc.name & ": " & exc.msg)
+      probeChan.send(outcome)
+
   proc probeHandleBarrier() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     let disp = newSimDispatcher()
@@ -179,6 +209,12 @@ when defined(chronosSimulation) and compileOption("threads"):
       let outcome = runProbe(probeCloseSocketNoCrash)
       checkpoint outcome.msg
       check outcome.ok
+
+    when not defined(windows):
+      test "unregisterAndCloseFd spares the real fd at a sim-minted int":
+        let outcome = runProbe(probeUnregisterAndCloseFdSparesRealFdUnderSim)
+        checkpoint outcome.msg
+        check outcome.ok
 
     test "handle() refuses to mint a DispatcherHandle for a sim dispatcher":
       let outcome = runProbe(probeHandleBarrier)
