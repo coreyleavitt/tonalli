@@ -39,6 +39,87 @@ when chronosSimulation:
     # reachable through the unconditional `asyncloop` import above) but
     # `asyncengine.nim` itself only imports `simengine`, never exports it.
 
+  # Fork issue #19 workstream 2's typed sim error channel - see
+  # `chronos/transports/datagram.nim`'s copy of these aliases for the
+  # toolchain quirks each one works around. `mayBoth` is not part of
+  # that module's own set (its call sites never need both types on the
+  # same proc); this module's `write*` family does, since a single
+  # write both reaches the POSIX-only I/O seam (`SimEngineError`, via
+  # `fastWrite`/`rawIoWrite`) and re-arms write notifications
+  # (`SimBarrierError`, via `resumeWrite`'s `addWriter2`) — so it is
+  # minted here instead of reused from `asyncengine.nim`'s own
+  # differently-scoped `mayViolate` alias.
+  {.pragma: mayBarrier, raises: [SimBarrierError].}
+  {.pragma: mayBarrierOsErr, raises: [TransportOsError, SimBarrierError].}
+  {.pragma: mayViolate, raises: [SimEngineError].}
+  {.pragma: mayBoth, raises: [SimBarrierError, SimEngineError].}
+else:
+  {.pragma: mayBarrier, raises: [].}
+  {.pragma: mayBarrierOsErr, raises: [TransportOsError].}
+  {.pragma: mayViolate, raises: [].}
+  {.pragma: mayBoth, raises: [].}
+
+# As `chronos/transports/datagram.nim`'s own `simBoundaryGuard`/`safe*`
+# family: every `CallbackFunc`/`CompletionData.cb`-typed continuation in
+# this module (`raises: []` by that fixed type, unwidenable per build)
+# that reaches a registration guard (a `SimBarrierError` this slice
+# proves unreachable at some sites, and genuinely reachable at others -
+# the accept-path registrations can race a dispatcher teardown) or,
+# POSIX-only, the stream I/O seam (a `SimEngineError` an oracle answer
+# can genuinely trigger) is caught here, by type, and escalated to a
+# `Defect` (`raiseAsDefect`) instead of letting either propagate
+# normally; `chronos/simulation.nim`'s `runSimulation` unwraps it back
+# into the original typed error. Unlike `datagram.nim`, this is not
+# gated to POSIX: the Windows accept/pipe-connect continuations are
+# `CompletionData.cb`-typed exactly like the POSIX reader/writer
+# callbacks, so they hit the same fixed-`raises: []` problem even
+# though this platform never reaches `simStreamIo` directly. Defined
+# unconditionally (not nested under `when chronosSimulation:`) because
+# its call sites are themselves unconditional - outside simulation it
+# is a transparent passthrough, since the real `register2`/`addReader2`/
+# etc. never raise these types on that build.
+template simBoundaryGuard(body: untyped): untyped =
+  when chronosSimulation:
+    try:
+      body
+    except SimBarrierError as excSimBoundary:
+      raiseAsDefect(excSimBoundary,
+        "simulation barrier reached from a CallbackFunc boundary")
+    except SimEngineError as excSimBoundary:
+      raiseAsDefect(excSimBoundary,
+        "simulation engine violation reached from a CallbackFunc boundary")
+  else:
+    body
+
+proc safeRegister2(fd: AsyncFD): Result[void, OSErrorCode] {.raises: [].} =
+  simBoundaryGuard(register2(fd))
+
+when defined(windows):
+  proc safeCreateAsyncSocket2(domain: Domain, sockType: SockType,
+                              protocol: Protocol,
+                              inherit = true): Result[AsyncFD, OSErrorCode]
+                             {.raises: [].} =
+    simBoundaryGuard(createAsyncSocket2(domain, sockType, protocol, inherit))
+else:
+  # `addReader2`/`removeReader2`/`addWriter2`/`removeWriter2` only exist
+  # on Windows under `chronosSimulation` (real Windows transports arm
+  # overlapped I/O directly and never call them - see
+  # `chronos/internal/asyncengine.nim`'s own Windows registration-
+  # routing comment); this module's Windows landmines never call them,
+  # nor `unregisterAndCloseFd` (used only by POSIX `connect*`'s
+  # `continuation`), so these three `safe*` wrappers are POSIX-only.
+  proc safeRemoveReader2(fd: AsyncFD): Result[void, OSErrorCode]
+                         {.raises: [].} =
+    simBoundaryGuard(removeReader2(fd))
+
+  proc safeRemoveWriter2(fd: AsyncFD): Result[void, OSErrorCode]
+                         {.raises: [].} =
+    simBoundaryGuard(removeWriter2(fd))
+
+  proc safeUnregisterAndCloseFd(fd: AsyncFD): Result[void, OSErrorCode]
+                                {.raises: [].} =
+    simBoundaryGuard(unregisterAndCloseFd(fd))
+
 export results
 
 type
@@ -712,7 +793,8 @@ when defined(windows):
                 flags: set[SocketFlags] = {},
                 dualstack = DualStackType.Auto
                ): Future[StreamTransport] {.
-               async: (raw: true, raises: [TransportError, CancelledError]).} =
+               async: (raw: true, raises: [TransportError, CancelledError]),
+               mayBarrier.} =
     ## Open new connection to remote peer with address ``address`` and create
     ## new transport object ``StreamTransport`` for established connection.
     ## ``bufferSize`` is size of internal buffer for transport.
@@ -858,7 +940,7 @@ when defined(windows):
             else:
               retFuture.fail(getTransportOsError(err))
           else:
-            register2(AsyncFD(pipeHandle)).isOkOr:
+            safeRegister2(AsyncFD(pipeHandle)).isOkOr:
               retFuture.fail(getTransportOsError(error))
               return
 
@@ -871,7 +953,8 @@ when defined(windows):
 
     return retFuture
 
-  proc createAcceptPipe(server: StreamServer): Result[AsyncFD, OSErrorCode] =
+  proc createAcceptPipe(server: StreamServer): Result[AsyncFD, OSErrorCode]
+                        {.mayBarrier.} =
     let
       pipeSuffix = $cast[cstring](baseAddr server.local.address_un)
       pipeName = ? toWideString(PipeHeaderName & pipeSuffix)
@@ -968,7 +1051,7 @@ when defined(windows):
             raiseOsDefect(osLastError(), "acceptPipeLoop(): Unable to create " &
                                          "new pipe")
           server.sock = AsyncFD(pipeHandle)
-          let wres = register2(server.sock)
+          let wres = safeRegister2(server.sock)
           if wres.isErr():
             raiseOsDefect(wres.error(), "acceptPipeLoop(): Unable to " &
                                         "register new pipe in dispatcher")
@@ -1053,8 +1136,9 @@ when defined(windows):
         if server.status notin {ServerStatus.Stopped, ServerStatus.Closed}:
           server.apending = true
           # TODO No way to report back errors!
-          server.asock = createAsyncSocket2(server.domain, SockType.SOCK_STREAM,
-                                            Protocol.IPPROTO_TCP).valueOr:
+          server.asock = safeCreateAsyncSocket2(server.domain,
+                                                SockType.SOCK_STREAM,
+                                                Protocol.IPPROTO_TCP).valueOr:
             raiseOsDefect(error, "acceptLoop(): Unablet to create new socket")
 
           var dwBytesReceived = DWORD(0)
@@ -1109,7 +1193,7 @@ when defined(windows):
   proc accept*(server: StreamServer): Future[StreamTransport] {.
       async: (raw: true, raises: [TransportUseClosedError,
               TransportTooManyError, TransportAbortedError, TransportOsError,
-              CancelledError]).} =
+              CancelledError]), mayBarrier.} =
     var retFuture = newFuture[StreamTransport]("stream.server.accept")
 
     doAssert(server.status != ServerStatus.Running,
@@ -1222,7 +1306,7 @@ when defined(windows):
           else:
             ntransp = newStreamPipeTransport(server.sock, server.bufferSize,
                                              nil, flags)
-          server.sock = server.createAcceptPipe().valueOr:
+          server.sock = simBoundaryGuard(server.createAcceptPipe()).valueOr:
             server.sock = asyncInvalidSocket
             server.errorCode = error
             retFuture.fail(getTransportOsError(error))
@@ -1237,7 +1321,7 @@ when defined(windows):
           server.clean()
         else:
           discard closeHandle(HANDLE(server.sock))
-          server.sock = server.createAcceptPipe().valueOr:
+          server.sock = simBoundaryGuard(server.createAcceptPipe()).valueOr:
             server.sock = asyncInvalidSocket
             server.errorCode = error
             retFuture.fail(getTransportOsError(error))
@@ -1351,7 +1435,8 @@ else:
 
   when chronosSimulation:
     proc simRawIo(transp: StreamTransport, op: SimIoOp, data: pointer,
-                   maxBytes: int): tuple[res: int, err: OSErrorCode] {.inline.} =
+                   maxBytes: int): tuple[res: int, err: OSErrorCode]
+                  {.inline, mayViolate.} =
       ## The sim branch of the injectable I/O primitive (RFC 0003 3.2
       ## N4): dispatches to `simStreamIo` (chronos/internal/simengine.nim),
       ## which - for a `SimNet`-minted endpoint (S11a) - moves real
@@ -1365,7 +1450,7 @@ else:
       getThreadDispatcher().simStreamIo(transp.fd, op, data, maxBytes)
 
   proc rawIoRead(transp: StreamTransport, data: pointer, size: int):
-      tuple[res: int, err: OSErrorCode] {.inline.} =
+      tuple[res: int, err: OSErrorCode] {.inline, mayViolate.} =
     ## The injectable I/O primitive's read side (RFC 0003 3.2 N4): the
     ## sole `recv`/`read` call site. Real mode is exactly the syscall
     ## `readIntoBuffer` used to issue directly; under simulation, no fd
@@ -1385,7 +1470,7 @@ else:
     if res < 0: (res, osLastError()) else: (res, OSErrorCode(0))
 
   proc rawIoWrite(transp: StreamTransport, data: pointer, size: int):
-      tuple[res: int, err: OSErrorCode] {.inline.} =
+      tuple[res: int, err: OSErrorCode] {.inline, mayViolate.} =
     ## The injectable I/O primitive's write side (RFC 0003 3.2 N4): the
     ## shared `send`/`write` call site behind both `writerCb`'s queued
     ## `DataBuffer` path and `fastWrite`'s eager path - the two RFC
@@ -1464,7 +1549,8 @@ else:
       var vector = transp.queue.popFirst()
       case vector.kind
       of VectorKind.DataBuffer:
-        let (res, err) = rawIoWrite(transp, vector.buf, vector.buflen)
+        let (res, err) = simBoundaryGuard(rawIoWrite(transp, vector.buf,
+                                                      vector.buflen))
 
         if res >= 0:
           if vector.buflen == res:
@@ -1501,9 +1587,9 @@ else:
     # All writers are already scheduled, so its impossible to notify about an
     # error.
     transp.state.incl(WritePaused)
-    discard removeWriter2(transp.fd)
+    discard safeRemoveWriter2(transp.fd)
 
-  proc readIntoBuffer(transp: StreamTransport): bool =
+  proc readIntoBuffer(transp: StreamTransport): bool {.mayViolate.} =
     # Try to read some data from the stream, returning true if there was progress
     let
       (data, size) =
@@ -1552,7 +1638,7 @@ else:
     # During close, we inject an artifical reader event to clear the pending
     # reader - the socket gets unregistered from further events in `closeSocket`
     if TransportState.Closed notin transp.state:
-      let progress = transp.readIntoBuffer()
+      let progress = simBoundaryGuard(transp.readIntoBuffer())
       doAssert progress, "Expecting progress since we're being notified"
 
       # The reader callback mechanism is level-triggered meaning that another
@@ -1567,7 +1653,7 @@ else:
         # * we're using direct reads (direct reads will continue in readLoop)
         transp.state.incl(ReadPaused)
 
-        removeReader2(transp.fd).isOkOr:
+        safeRemoveReader2(transp.fd).isOkOr:
           # This should never happen but if it does, don't overwrite existing
           # error
           if ReadError notin transp.state:
@@ -1615,7 +1701,7 @@ else:
 
   when chronosSimulation:
     proc simStreamPair*(bufferSize = DefaultStreamBufferSize):
-        tuple[a, b: StreamTransport] =
+        tuple[a, b: StreamTransport] {.mayBarrier.} =
       ## Sim-native connection setup (RFC 0003 3.2): mints a connected
       ## pair of sim stream endpoints and wraps each in a real
       ## `StreamTransport` (`TransportKind.Socket`, matching what a
@@ -1643,7 +1729,8 @@ else:
                 flags: set[SocketFlags] = {},
                 dualstack = DualStackType.Auto,
                ): Future[StreamTransport] {.
-               async: (raw: true, raises: [TransportError, CancelledError]).} =
+               async: (raw: true, raises: [TransportError, CancelledError]),
+               mayBarrier.} =
     ## Open new connection to remote peer with address ``address`` and create
     ## new transport object ``StreamTransport`` for established connection.
     ## ``bufferSize`` - size of internal buffer for transport.
@@ -1720,18 +1807,18 @@ else:
 
     proc continuation(udata: pointer) =
       if not(retFuture.finished()):
-        removeWriter2(sock).isOkOr:
-          discard unregisterAndCloseFd(sock)
+        safeRemoveWriter2(sock).isOkOr:
+          discard safeUnregisterAndCloseFd(sock)
           retFuture.fail(getTransportOsError(error))
           return
 
         let err = sock.getSocketError2().valueOr:
-          discard unregisterAndCloseFd(sock)
+          discard safeUnregisterAndCloseFd(sock)
           retFuture.fail(getTransportOsError(error))
           return
 
         if err != 0:
-          discard unregisterAndCloseFd(sock)
+          discard safeUnregisterAndCloseFd(sock)
           retFuture.fail(getTransportOsError(OSErrorCode(err)))
           return
 
@@ -1799,7 +1886,7 @@ else:
                         addr slen, flags)
     if sres.isOk():
       let sock = AsyncFD(sres.get())
-      let rres = register2(sock)
+      let rres = safeRegister2(sock)
       if rres.isOk():
         let ntransp =
           if not(isNil(server.init)):
@@ -1822,13 +1909,15 @@ else:
         # acceptLoop() reader callback is already scheduled.
         raiseOsDefect(errorCode, "acceptCb(): Unable to accept connection")
 
-  proc resumeAccept(server: StreamServer): Result[void, OSErrorCode] =
+  proc resumeAccept(server: StreamServer): Result[void, OSErrorCode]
+                    {.mayBarrier.} =
     addReader2(server.sock, acceptCb, cast[pointer](server))
 
-  proc pauseAccept(server: StreamServer): Result[void, OSErrorCode] =
+  proc pauseAccept(server: StreamServer): Result[void, OSErrorCode]
+                   {.mayBarrier.} =
     removeReader2(server.sock)
 
-  proc resumeRead(transp: StreamTransport) =
+  proc resumeRead(transp: StreamTransport) {.mayBarrier.} =
     if ReadPaused in transp.state:
       transp.state.excl(ReadPaused)
 
@@ -1846,7 +1935,7 @@ else:
         transp.state.incl(ReadPaused)
         transp.completeReader()
 
-  proc resumeWrite(transp: StreamTransport) =
+  proc resumeWrite(transp: StreamTransport) {.mayBarrier.} =
     if transp.queue.len() == 1:
       # onWriteEvent keeps writing until queue is empty - we should not call
       # resumeWrite under any other condition than when the items are
@@ -1863,7 +1952,7 @@ else:
   proc accept*(server: StreamServer): Future[StreamTransport] {.
       async: (raw: true, raises: [TransportUseClosedError,
               TransportTooManyError, TransportAbortedError, TransportOsError,
-              CancelledError]).} =
+              CancelledError]), mayBarrier.} =
     var retFuture = newFuture[StreamTransport]("stream.server.accept")
 
     doAssert(server.status != ServerStatus.Running,
@@ -1899,13 +1988,13 @@ else:
             else:
               retFuture.fail(getTransportOsError(errorCode))
             # Error is already happened so we ignore removeReader2() errors.
-            discard removeReader2(server.sock)
+            discard safeRemoveReader2(server.sock)
           else:
             let
               sock = AsyncFD(sres.get())
-              rres = register2(sock)
+              rres = safeRegister2(sock)
             if rres.isOk():
-              let res = removeReader2(server.sock)
+              let res = safeRemoveReader2(server.sock)
               if res.isOk():
                 let ntransp =
                   if not(isNil(server.init)):
@@ -1924,14 +2013,14 @@ else:
                 retFuture.fail(getConnectionAbortedError(errorMsg))
             else:
               # Error is already happened so we ignore errors.
-              discard removeReader2(server.sock)
+              discard safeRemoveReader2(server.sock)
               discard closeFd(cint(sock))
               let errorMsg = osErrorMsg(rres.error())
               retFuture.fail(getConnectionAbortedError(errorMsg))
 
     proc cancellation(udata: pointer) =
       if not(retFuture.finished()):
-        discard removeReader2(server.sock)
+        discard safeRemoveReader2(server.sock)
 
     let res = addReader2(server.sock, continuation, nil)
     if res.isErr():
@@ -1940,7 +2029,7 @@ else:
       retFuture.cancelCallback = cancellation
     return retFuture
 
-proc start2*(server: StreamServer): Result[void, OSErrorCode] =
+proc start2*(server: StreamServer): Result[void, OSErrorCode] {.mayBarrier.} =
   ## Starts ``server``.
   doAssert(not(isNil(server.function)), "You should not start the server " &
            "unless you have processing callback configured!")
@@ -1955,7 +2044,7 @@ proc start2*(server: StreamServer): Result[void, OSErrorCode] =
     server.status = ServerStatus.Running
   ok()
 
-proc stop2*(server: StreamServer): Result[void, OSErrorCode] =
+proc stop2*(server: StreamServer): Result[void, OSErrorCode] {.mayBarrier.} =
   ## Stops ``server``.
   if server.status == ServerStatus.Running:
     if not(isNil(server.function)):
@@ -1965,12 +2054,12 @@ proc stop2*(server: StreamServer): Result[void, OSErrorCode] =
     server.status = ServerStatus.Stopped
   ok()
 
-proc start*(server: StreamServer) {.raises: [TransportOsError].} =
+proc start*(server: StreamServer) {.mayBarrierOsErr.} =
   ## Starts ``server``.
   let res = start2(server)
   if res.isErr(): raiseTransportOsError(res.error())
 
-proc stop*(server: StreamServer) {.raises: [TransportOsError].} =
+proc stop*(server: StreamServer) {.mayBarrierOsErr.} =
   ## Stops ``server``.
   let res = stop2(server)
   if res.isErr(): raiseTransportOsError(res.error())
@@ -1987,7 +2076,8 @@ proc connect*(address: TransportAddress,
               localAddress = TransportAddress(),
               dualstack = DualStackType.Auto
              ): Future[StreamTransport] {.
-             async: (raw: true, raises: [TransportError, CancelledError]).} =
+             async: (raw: true, raises: [TransportError, CancelledError]),
+             mayBarrier.} =
   # Retro compatibility with TransportFlags
   var mappedFlags: set[SocketFlags]
   if TcpNoDelay in flags: mappedFlags.incl(SocketFlags.TcpNoDelay)
@@ -2059,7 +2149,7 @@ proc createStreamServer*(host: TransportAddress,
                          init: TransportInitCallback = nil,
                          udata: pointer = nil,
                          dualstack = DualStackType.Auto): StreamServer {.
-    raises: [TransportOsError].} =
+    mayBarrierOsErr.} =
   ## Create new TCP stream server.
   ##
   ## ``host`` - address to which server will be bound.
@@ -2311,7 +2401,7 @@ proc createStreamServer*(host: TransportAddress,
                          init: TransportInitCallback = nil,
                          udata: pointer = nil,
                          dualstack = DualStackType.Auto): StreamServer {.
-    raises: [TransportOsError],
+    mayBarrierOsErr,
     deprecated: "Callback must not raise exceptions, annotate with {.async: (raises: []).}".} =
   proc wrap(server: StreamServer,
             client: StreamTransport) {.async: (raises: []).} =
@@ -2333,7 +2423,7 @@ proc createStreamServer*(host: TransportAddress,
                          init: TransportInitCallback = nil,
                          udata: pointer = nil,
                          dualstack = DualStackType.Auto): StreamServer {.
-    raises: [TransportOsError].} =
+    mayBarrierOsErr.} =
   createStreamServer(host, StreamCallback2(nil), flags, sock, backlog, bufferSize,
                      child, init, cast[pointer](udata), dualstack)
 
@@ -2347,7 +2437,7 @@ proc createStreamServer*(port: Port,
                          init: TransportInitCallback = nil,
                          udata: pointer = nil,
                          dualstack = DualStackType.Auto): StreamServer {.
-    raises: [TransportOsError].} =
+    mayBarrierOsErr.} =
   ## Create stream server which will be bound to:
   ## 1. IPv6 address `::`, if IPv6 is available
   ## 2. IPv4 address `0.0.0.0`, if IPv6 is not available.
@@ -2371,7 +2461,7 @@ proc createStreamServer*(cbproc: StreamCallback2,
                          init: TransportInitCallback = nil,
                          udata: pointer = nil,
                          dualstack = DualStackType.Auto): StreamServer {.
-    raises: [TransportOsError].} =
+    mayBarrierOsErr.} =
   ## Create stream server which will be bound to:
   ## 1. IPv6 address `::`, if IPv6 is available
   ## 2. IPv4 address `0.0.0.0`, if IPv6 is not available.
@@ -2393,7 +2483,7 @@ proc createStreamServer*[T](host: TransportAddress,
                             child: StreamServer = nil,
                             init: TransportInitCallback = nil,
                             dualstack = DualStackType.Auto): StreamServer {.
-    raises: [TransportOsError].} =
+    mayBarrierOsErr.} =
   var fflags = flags + {GCUserData}
   GC_ref(udata)
   createStreamServer(host, cbproc, fflags, sock, backlog, bufferSize,
@@ -2409,7 +2499,7 @@ proc createStreamServer*[T](host: TransportAddress,
                             child: StreamServer = nil,
                             init: TransportInitCallback = nil,
                             dualstack = DualStackType.Auto): StreamServer {.
-    raises: [TransportOsError],
+    mayBarrierOsErr,
     deprecated: "Callback must not raise exceptions, annotate with {.async: (raises: []).}".} =
   var fflags = flags + {GCUserData}
   GC_ref(udata)
@@ -2425,7 +2515,7 @@ proc createStreamServer*[T](host: TransportAddress,
                             child: StreamServer = nil,
                             init: TransportInitCallback = nil,
                             dualstack = DualStackType.Auto): StreamServer {.
-    raises: [TransportOsError].} =
+    mayBarrierOsErr.} =
   var fflags = flags + {GCUserData}
   GC_ref(udata)
   createStreamServer(host, StreamCallback2(nil), fflags, sock, backlog, bufferSize,
@@ -2442,7 +2532,7 @@ proc createStreamServer*[T](cbproc: StreamCallback2,
                             child: StreamServer = nil,
                             init: TransportInitCallback = nil,
                             dualstack = DualStackType.Auto): StreamServer {.
-    raises: [TransportOsError].} =
+    mayBarrierOsErr.} =
   ## Create stream server which will be bound to:
   ## 1. IPv6 address `::`, if IPv6 is available
   ## 2. IPv4 address `0.0.0.0`, if IPv6 is not available.
@@ -2466,7 +2556,7 @@ proc createStreamServer*[T](port: Port,
                             child: StreamServer = nil,
                             init: TransportInitCallback = nil,
                             dualstack = DualStackType.Auto): StreamServer {.
-    raises: [TransportOsError].} =
+    mayBarrierOsErr.} =
   ## Create stream server which will be bound to:
   ## 1. IPv6 address `::`, if IPv6 is available
   ## 2. IPv4 address `0.0.0.0`, if IPv6 is not available.
@@ -2517,7 +2607,8 @@ template fastWrite(transp: auto, pbytes: var ptr byte, rbytes: var int,
 
 proc write*(transp: StreamTransport, pbytes: pointer,
             nbytes: int): Future[int] {.
-            async: (raw: true, raises: [TransportError, CancelledError]).} =
+            async: (raw: true, raises: [TransportError, CancelledError]),
+            mayBoth.} =
   ## Write data from buffer ``pbytes`` with size ``nbytes`` using transport
   ## ``transp``.
   var retFuture = newFuture[int]("stream.transport.write(pointer)")
@@ -2538,7 +2629,8 @@ proc write*(transp: StreamTransport, pbytes: pointer,
 
 proc write*(transp: StreamTransport, msg: string,
             msglen = -1): Future[int] {.
-            async: (raw: true, raises: [TransportError, CancelledError]).} =
+            async: (raw: true, raises: [TransportError, CancelledError]),
+            mayBoth.} =
   ## Write data from string ``msg`` using transport ``transp``.
   var retFuture = newFuture[int]("stream.transport.write(string)")
   transp.checkClosed(retFuture)
@@ -2568,7 +2660,8 @@ proc write*(transp: StreamTransport, msg: string,
 
 proc write*[T](transp: StreamTransport, msg: seq[T],
                msglen = -1): Future[int] {.
-               async: (raw: true, raises: [TransportError, CancelledError]).} =
+               async: (raw: true, raises: [TransportError, CancelledError]),
+               mayBoth.} =
   ## Write sequence ``msg`` using transport ``transp``.
   var retFuture = newFuture[int]("stream.transport.write(seq)")
   transp.checkClosed(retFuture)
@@ -2599,7 +2692,8 @@ proc write*[T](transp: StreamTransport, msg: seq[T],
 
 proc writeFile*(transp: StreamTransport, handle: int,
                 offset: uint = 0, size: int = 0): Future[int] {.
-                async: (raw: true, raises: [TransportError, CancelledError]).} =
+                async: (raw: true, raises: [TransportError, CancelledError]),
+                mayBarrier.} =
   ## Write data from file descriptor ``handle`` to transport ``transp``.
   ##
   ## You can specify starting ``offset`` in opened file and number of bytes
@@ -2671,18 +2765,23 @@ template readLoop(name, body: untyped): untyped =
           transp.reader = nil
           raise exc
 
-proc readExactly*(transp: StreamTransport, pbytes: pointer,
-                  nbytes: int) {.
-                  async: (raises: [TransportError, CancelledError]).} =
-  ## Read exactly ``nbytes`` bytes from transport ``transp`` and store it to
-  ## ``pbytes``. ``pbytes`` must not be ``nil`` pointer and ``nbytes`` should
-  ## be Natural.
-  ##
-  ## If ``nbytes == 0`` this operation will return immediately.
-  ##
-  ## If EOF is received and ``nbytes`` is not yet read, the procedure
-  ## will raise ``TransportIncompleteError``, potentially with some bytes
-  ## already written.
+# The trap behind this dual-definition family (fork issue #19 workstream
+# 2): a bare `{.async.}`/`{.async: (raises: [...]).}` proc (no
+# `raw: true`) type-checks fine with an extra pragma alias appended
+# alongside it, but the async macro then silently emits a plain
+# `Future[T]` instead of an `InternalRaisesFuture[T, (tuple)]` - no
+# error, just a wrong return type that breaks `asyncstream.nim`'s typed
+# vtables unconditionally, define-off builds included. The safe fix is
+# two full definitions per proc, each with its own explicit `raises`
+# argument (widened to name `SimBarrierError`/`SimEngineError` under
+# simulation, `resumeRead`'s `addReader2` and `readIntoBuffer`'s
+# injectable I/O primitive respectively - `readLoop`'s `body` may reach
+# either), sharing a single copy of the actual logic via a body
+# template - `readLoop` itself already relies on identifiers (`transp`)
+# resolving from its call site rather than its own parameter list, and
+# `readExactlyBody`/`readOnceBody` below lean on the same mechanism for
+# their own local `data`/`size` templates.
+template readExactlyBody(): untyped =
   doAssert(not(isNil(pbytes)), "pbytes must not be nil")
   doAssert(nbytes >= 0, "nbytes must be non-negative integer")
 
@@ -2715,13 +2814,37 @@ proc readExactly*(transp: StreamTransport, pbytes: pointer,
     size -= consumed
     (consumed: consumed, done: size == 0)
 
-proc readOnce*(transp: StreamTransport, pbytes: pointer,
-               nbytes: int): Future[int] {.
-               async: (raises: [TransportError, CancelledError]).} =
-  ## Perform one read operation on transport ``transp``.
-  ##
-  ## If internal buffer is not empty, ``nbytes`` bytes will be transferred from
-  ## internal buffer, otherwise it will wait until some bytes will be received.
+when chronosSimulation:
+  proc readExactly*(transp: StreamTransport, pbytes: pointer,
+                    nbytes: int) {.
+      async: (raises: [TransportError, CancelledError, SimBarrierError,
+                       SimEngineError]).} =
+    ## Read exactly ``nbytes`` bytes from transport ``transp`` and store it to
+    ## ``pbytes``. ``pbytes`` must not be ``nil`` pointer and ``nbytes`` should
+    ## be Natural.
+    ##
+    ## If ``nbytes == 0`` this operation will return immediately.
+    ##
+    ## If EOF is received and ``nbytes`` is not yet read, the procedure
+    ## will raise ``TransportIncompleteError``, potentially with some bytes
+    ## already written.
+    readExactlyBody()
+else:
+  proc readExactly*(transp: StreamTransport, pbytes: pointer,
+                    nbytes: int) {.
+                    async: (raises: [TransportError, CancelledError]).} =
+    ## Read exactly ``nbytes`` bytes from transport ``transp`` and store it to
+    ## ``pbytes``. ``pbytes`` must not be ``nil`` pointer and ``nbytes`` should
+    ## be Natural.
+    ##
+    ## If ``nbytes == 0`` this operation will return immediately.
+    ##
+    ## If EOF is received and ``nbytes`` is not yet read, the procedure
+    ## will raise ``TransportIncompleteError``, potentially with some bytes
+    ## already written.
+    readExactlyBody()
+
+template readOnceBody(): untyped =
   doAssert(not(isNil(pbytes)), "pbytes must not be nil")
   doAssert(nbytes > 0, "nbytes must be positive integer")
 
@@ -2751,21 +2874,27 @@ proc readOnce*(transp: StreamTransport, pbytes: pointer,
 
   nbytes - size
 
-proc readUntil*(transp: StreamTransport, pbytes: pointer, nbytes: int,
-                sep: seq[byte]): Future[int] {.
-                async: (raises: [TransportError, CancelledError]).} =
-  ## Read data from the transport ``transp`` until separator ``sep`` is found.
-  ##
-  ## On success, the data and separator will be removed from the internal
-  ## buffer (consumed). Returned data will include the separator at the end.
-  ##
-  ## If EOF is received, and `sep` was not found, procedure will raise
-  ## ``TransportIncompleteError``.
-  ##
-  ## If ``nbytes`` bytes has been received and `sep` was not found, procedure
-  ## will raise ``TransportLimitError``.
-  ##
-  ## Procedure returns actual number of bytes read.
+when chronosSimulation:
+  proc readOnce*(transp: StreamTransport, pbytes: pointer,
+                 nbytes: int): Future[int] {.
+      async: (raises: [TransportError, CancelledError, SimBarrierError,
+                       SimEngineError]).} =
+    ## Perform one read operation on transport ``transp``.
+    ##
+    ## If internal buffer is not empty, ``nbytes`` bytes will be transferred from
+    ## internal buffer, otherwise it will wait until some bytes will be received.
+    readOnceBody()
+else:
+  proc readOnce*(transp: StreamTransport, pbytes: pointer,
+                 nbytes: int): Future[int] {.
+                 async: (raises: [TransportError, CancelledError]).} =
+    ## Perform one read operation on transport ``transp``.
+    ##
+    ## If internal buffer is not empty, ``nbytes`` bytes will be transferred from
+    ## internal buffer, otherwise it will wait until some bytes will be received.
+    readOnceBody()
+
+template readUntilBody(): untyped =
   doAssert(not(isNil(pbytes)), "pbytes must not be nil")
   doAssert(len(sep) > 0, "separator must not be empty")
   doAssert(nbytes >= 0, "nbytes must be non-negative integer")
@@ -2792,19 +2921,43 @@ proc readUntil*(transp: StreamTransport, pbytes: pointer, nbytes: int,
     (consumed, done)
   k
 
-proc readLine*(transp: StreamTransport, limit = 0,
-               sep = "\r\n"): Future[string] {.
-               async: (raises: [TransportError, CancelledError]).} =
-  ## Read one line from transport ``transp``, where "line" is a sequence of
-  ## bytes ending with ``sep`` (default is "\r\n").
-  ##
-  ## If EOF is received, and ``sep`` was not found, the method will return the
-  ## partial read bytes.
-  ##
-  ## If the EOF was received and the internal buffer is empty, return an
-  ## empty string.
-  ##
-  ## If ``limit`` more then 0, then read is limited to ``limit`` bytes.
+when chronosSimulation:
+  proc readUntil*(transp: StreamTransport, pbytes: pointer, nbytes: int,
+                  sep: seq[byte]): Future[int] {.
+      async: (raises: [TransportError, CancelledError, SimBarrierError,
+                       SimEngineError]).} =
+    ## Read data from the transport ``transp`` until separator ``sep`` is found.
+    ##
+    ## On success, the data and separator will be removed from the internal
+    ## buffer (consumed). Returned data will include the separator at the end.
+    ##
+    ## If EOF is received, and `sep` was not found, procedure will raise
+    ## ``TransportIncompleteError``.
+    ##
+    ## If ``nbytes`` bytes has been received and `sep` was not found, procedure
+    ## will raise ``TransportLimitError``.
+    ##
+    ## Procedure returns actual number of bytes read.
+    readUntilBody()
+else:
+  proc readUntil*(transp: StreamTransport, pbytes: pointer, nbytes: int,
+                  sep: seq[byte]): Future[int] {.
+                  async: (raises: [TransportError, CancelledError]).} =
+    ## Read data from the transport ``transp`` until separator ``sep`` is found.
+    ##
+    ## On success, the data and separator will be removed from the internal
+    ## buffer (consumed). Returned data will include the separator at the end.
+    ##
+    ## If EOF is received, and `sep` was not found, procedure will raise
+    ## ``TransportIncompleteError``.
+    ##
+    ## If ``nbytes`` bytes has been received and `sep` was not found, procedure
+    ## will raise ``TransportLimitError``.
+    ##
+    ## Procedure returns actual number of bytes read.
+    readUntilBody()
+
+template readLineBody(): untyped =
   var
     res: string
     state: int
@@ -2817,11 +2970,39 @@ proc readLine*(transp: StreamTransport, limit = 0,
 
   res
 
-proc read*(transp: StreamTransport): Future[seq[byte]] {.
-    async: (raises: [TransportError, CancelledError]).} =
-  ## Read all bytes from transport ``transp``.
-  ##
-  ## This procedure allocates buffer seq[byte] and return it as result.
+when chronosSimulation:
+  proc readLine*(transp: StreamTransport, limit = 0,
+                 sep = "\r\n"): Future[string] {.
+      async: (raises: [TransportError, CancelledError, SimBarrierError,
+                       SimEngineError]).} =
+    ## Read one line from transport ``transp``, where "line" is a sequence of
+    ## bytes ending with ``sep`` (default is "\r\n").
+    ##
+    ## If EOF is received, and ``sep`` was not found, the method will return the
+    ## partial read bytes.
+    ##
+    ## If the EOF was received and the internal buffer is empty, return an
+    ## empty string.
+    ##
+    ## If ``limit`` more then 0, then read is limited to ``limit`` bytes.
+    readLineBody()
+else:
+  proc readLine*(transp: StreamTransport, limit = 0,
+                 sep = "\r\n"): Future[string] {.
+                 async: (raises: [TransportError, CancelledError]).} =
+    ## Read one line from transport ``transp``, where "line" is a sequence of
+    ## bytes ending with ``sep`` (default is "\r\n").
+    ##
+    ## If EOF is received, and ``sep`` was not found, the method will return the
+    ## partial read bytes.
+    ##
+    ## If the EOF was received and the internal buffer is empty, return an
+    ## empty string.
+    ##
+    ## If ``limit`` more then 0, then read is limited to ``limit`` bytes.
+    readLineBody()
+
+template readAllBody(): untyped =
   var res: seq[byte]
   readLoop("stream.transport.read"):
     if transp.atEof():
@@ -2833,11 +3014,23 @@ proc read*(transp: StreamTransport): Future[seq[byte]] {.
       (bytesRead, false)
   res
 
-proc read*(transp: StreamTransport, n: int): Future[seq[byte]] {.
-    async: (raises: [TransportError, CancelledError]).} =
-  ## Read all bytes (n <= 0) or up to `n` bytes from transport ``transp``.
-  ##
-  ## This procedure allocates buffer seq[byte] and return it as result.
+when chronosSimulation:
+  proc read*(transp: StreamTransport): Future[seq[byte]] {.
+      async: (raises: [TransportError, CancelledError, SimBarrierError,
+                       SimEngineError]).} =
+    ## Read all bytes from transport ``transp``.
+    ##
+    ## This procedure allocates buffer seq[byte] and return it as result.
+    readAllBody()
+else:
+  proc read*(transp: StreamTransport): Future[seq[byte]] {.
+      async: (raises: [TransportError, CancelledError]).} =
+    ## Read all bytes from transport ``transp``.
+    ##
+    ## This procedure allocates buffer seq[byte] and return it as result.
+    readAllBody()
+
+template readNBody(): untyped =
   if n <= 0:
     await transp.read()
   else:
@@ -2852,11 +3045,23 @@ proc read*(transp: StreamTransport, n: int): Future[seq[byte]] {.
         (bytesRead, len(res) == n)
     res
 
-proc consume*(transp: StreamTransport): Future[int] {.
-    async: (raises: [TransportError, CancelledError]).} =
-  ## Consume all bytes from transport ``transp`` and discard it.
-  ##
-  ## Return number of bytes actually consumed and discarded.
+when chronosSimulation:
+  proc read*(transp: StreamTransport, n: int): Future[seq[byte]] {.
+      async: (raises: [TransportError, CancelledError, SimBarrierError,
+                       SimEngineError]).} =
+    ## Read all bytes (n <= 0) or up to `n` bytes from transport ``transp``.
+    ##
+    ## This procedure allocates buffer seq[byte] and return it as result.
+    readNBody()
+else:
+  proc read*(transp: StreamTransport, n: int): Future[seq[byte]] {.
+      async: (raises: [TransportError, CancelledError]).} =
+    ## Read all bytes (n <= 0) or up to `n` bytes from transport ``transp``.
+    ##
+    ## This procedure allocates buffer seq[byte] and return it as result.
+    readNBody()
+
+template consumeAllBody(): untyped =
   var res = 0
   readLoop("stream.transport.consume"):
     if transp.atEof():
@@ -2867,12 +3072,23 @@ proc consume*(transp: StreamTransport): Future[int] {.
       (used, false)
   res
 
-proc consume*(transp: StreamTransport, n: int): Future[int] {.
-    async: (raises: [TransportError, CancelledError]).} =
-  ## Consume all bytes (n <= 0) or ``n`` bytes from transport ``transp`` and
-  ## discard it.
-  ##
-  ## Return number of bytes actually consumed and discarded.
+when chronosSimulation:
+  proc consume*(transp: StreamTransport): Future[int] {.
+      async: (raises: [TransportError, CancelledError, SimBarrierError,
+                       SimEngineError]).} =
+    ## Consume all bytes from transport ``transp`` and discard it.
+    ##
+    ## Return number of bytes actually consumed and discarded.
+    consumeAllBody()
+else:
+  proc consume*(transp: StreamTransport): Future[int] {.
+      async: (raises: [TransportError, CancelledError]).} =
+    ## Consume all bytes from transport ``transp`` and discard it.
+    ##
+    ## Return number of bytes actually consumed and discarded.
+    consumeAllBody()
+
+template consumeNBody(): untyped =
   if n <= 0:
     await transp.consume()
   else:
@@ -2888,34 +3104,91 @@ proc consume*(transp: StreamTransport, n: int): Future[int] {.
         (count, res == n)
     res
 
-proc readMessage*(transp: StreamTransport,
-                  predicate: ReadMessagePredicate) {.
-                  async: (raises: [TransportError, CancelledError]).} =
-  ## Read all bytes from transport ``transp`` until ``predicate`` callback
-  ## will not be satisfied.
-  ##
-  ## ``predicate`` callback should return tuple ``(consumed, result)``, where
-  ## ``consumed`` is the number of bytes processed and ``result`` is a
-  ## completion flag (``true`` if readMessage() should stop reading data,
-  ## or ``false`` if readMessage() should continue to read data from transport).
-  ##
-  ## ``predicate`` callback must copy all the data from ``data`` array and
-  ## return number of bytes it is going to consume.
-  ## ``predicate`` callback will receive (zero-length) openArray, if transport
-  ## is at EOF.
-  readLoop("stream.transport.readMessage"):
-    if len(transp.buffer) == 0:
-      if transp.atEof():
-        predicate([])
+when chronosSimulation:
+  proc consume*(transp: StreamTransport, n: int): Future[int] {.
+      async: (raises: [TransportError, CancelledError, SimBarrierError,
+                       SimEngineError]).} =
+    ## Consume all bytes (n <= 0) or ``n`` bytes from transport ``transp`` and
+    ## discard it.
+    ##
+    ## Return number of bytes actually consumed and discarded.
+    consumeNBody()
+else:
+  proc consume*(transp: StreamTransport, n: int): Future[int] {.
+      async: (raises: [TransportError, CancelledError]).} =
+    ## Consume all bytes (n <= 0) or ``n`` bytes from transport ``transp`` and
+    ## discard it.
+    ##
+    ## Return number of bytes actually consumed and discarded.
+    consumeNBody()
+
+# Not factored through a shared body template like its neighbors above:
+# `predicate`'s `tuple[consumed: int, done: bool]` result type, spelled
+# out again for the local `res`, resolves its `done` field name against
+# `asyncfutures.nim`'s exported `proc done*(future: FutureBase): bool`
+# instead of declaring a fresh field when nested inside a `template` on
+# this toolchain ("cannot use symbol of kind 'proc' as a 'field'") -
+# harmless directly inside a `proc` body (as before this slice), so the
+# two branches keep their own copy of this one proc's body instead.
+when chronosSimulation:
+  proc readMessage*(transp: StreamTransport,
+                    predicate: ReadMessagePredicate) {.
+      async: (raises: [TransportError, CancelledError, SimBarrierError,
+                       SimEngineError]).} =
+    ## Read all bytes from transport ``transp`` until ``predicate`` callback
+    ## will not be satisfied.
+    ##
+    ## ``predicate`` callback should return tuple ``(consumed, result)``, where
+    ## ``consumed`` is the number of bytes processed and ``result`` is a
+    ## completion flag (``true`` if readMessage() should stop reading data,
+    ## or ``false`` if readMessage() should continue to read data from transport).
+    ##
+    ## ``predicate`` callback must copy all the data from ``data`` array and
+    ## return number of bytes it is going to consume.
+    ## ``predicate`` callback will receive (zero-length) openArray, if transport
+    ## is at EOF.
+    readLoop("stream.transport.readMessage"):
+      if len(transp.buffer) == 0:
+        if transp.atEof():
+          predicate([])
+        else:
+          # Case, when transport's buffer is not yet filled with data.
+          (0, false)
       else:
-        # Case, when transport's buffer is not yet filled with data.
-        (0, false)
-    else:
-      var res: tuple[consumed: int, done: bool]
-      for (region, rsize) in transp.buffer.regions():
-        res = predicate(region.makeOpenArray(rsize ))
-        break
-      res
+        var res: tuple[consumed: int, done: bool]
+        for (region, rsize) in transp.buffer.regions():
+          res = predicate(region.makeOpenArray(rsize ))
+          break
+        res
+else:
+  proc readMessage*(transp: StreamTransport,
+                    predicate: ReadMessagePredicate) {.
+                    async: (raises: [TransportError, CancelledError]).} =
+    ## Read all bytes from transport ``transp`` until ``predicate`` callback
+    ## will not be satisfied.
+    ##
+    ## ``predicate`` callback should return tuple ``(consumed, result)``, where
+    ## ``consumed`` is the number of bytes processed and ``result`` is a
+    ## completion flag (``true`` if readMessage() should stop reading data,
+    ## or ``false`` if readMessage() should continue to read data from transport).
+    ##
+    ## ``predicate`` callback must copy all the data from ``data`` array and
+    ## return number of bytes it is going to consume.
+    ## ``predicate`` callback will receive (zero-length) openArray, if transport
+    ## is at EOF.
+    readLoop("stream.transport.readMessage"):
+      if len(transp.buffer) == 0:
+        if transp.atEof():
+          predicate([])
+        else:
+          # Case, when transport's buffer is not yet filled with data.
+          (0, false)
+      else:
+        var res: tuple[consumed: int, done: bool]
+        for (region, rsize) in transp.buffer.regions():
+          res = predicate(region.makeOpenArray(rsize ))
+          break
+        res
 
 proc join*(transp: StreamTransport): Future[void] {.
     async: (raw: true, raises: [CancelledError]).} =
@@ -3084,7 +3357,7 @@ proc shutdownWait*(transp: StreamTransport): Future[void] {.
 
 proc fromPipe2*(fd: AsyncFD, child: StreamTransport = nil,
                 bufferSize = DefaultStreamBufferSize
-               ): Result[StreamTransport, OSErrorCode] =
+               ): Result[StreamTransport, OSErrorCode] {.mayBarrier.} =
   ## Create new transport object using pipe's file descriptor.
   ##
   ## ``bufferSize`` is size of internal buffer for transport.
@@ -3096,7 +3369,7 @@ proc fromPipe2*(fd: AsyncFD, child: StreamTransport = nil,
 
 proc fromPipe*(fd: AsyncFD, child: StreamTransport = nil,
                bufferSize = DefaultStreamBufferSize): StreamTransport {.
-    raises: [TransportOsError].} =
+    mayBarrierOsErr.} =
   ## Create new transport object using pipe's file descriptor.
   ##
   ## ``bufferSize`` is size of internal buffer for transport.
