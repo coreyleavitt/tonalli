@@ -165,6 +165,7 @@ proc new*(htype: typedesc[SecureHttpServerRef],
           maxRequestBodySize: int = 1_048_576,
           dualstack = DualStackType.Auto
          ): HttpResult[SecureHttpServerRef] {.
+     mayBarrier,
      deprecated: "Callback could raise only CancelledError, annotate with " &
                  "{.async: (raises: [CancelledError]).}".} =
 

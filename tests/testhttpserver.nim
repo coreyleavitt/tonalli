@@ -9,9 +9,20 @@ import std/[strutils, algorithm]
 import ".."/chronos/unittest2/asynctests,
        ".."/chronos,
        ".."/chronos/apps/http/[httpserver, httpcommon, httpdebug]
+import ".."/chronos/config
 import stew/base10
 
 {.used.}
+
+when chronosSimulation:
+  proc pinDeprecatedHttpServerNewRaises() {.used.} =
+    proc process(r: RequestFence): Future[HttpResponseRef] {.
+         gcsafe, raises: [].} =
+      newFuture[HttpResponseRef]("pin.process")
+
+    {.push warning[Deprecated]: off.}
+    discard HttpServerRef.new(initTAddress("127.0.0.1:0"), process)
+    {.pop.}
 
 # Trouble finding this if defined near its use for `data2.sorted`, etc. likely
 # related to "generic sandwich" issues.  If any test ever wants to `sort` a

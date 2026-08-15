@@ -320,6 +320,7 @@ proc new*(
        dualstack = DualStackType.Auto,
        middlewares: openArray[HttpServerMiddlewareRef] = []
      ): HttpResult[HttpServerRef] {.
+     mayBarrier,
      deprecated: "Callback could raise only CancelledError, annotate with " &
                  "{.async: (raises: [CancelledError]).}".} =
 

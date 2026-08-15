@@ -9,6 +9,7 @@ import std/strutils
 import ".."/chronos/unittest2/asynctests
 import ".."/chronos,
        ".."/chronos/apps/http/shttpserver
+import ".."/chronos/config
 import stew/base10
 
 {.used.}
@@ -72,6 +73,21 @@ nV5vnGadH5Lvfxb/BCpuONabeRdOxMt9u9yQ89vNpxFtRdZDCpGKZBCfmUP+5m3m
 N8r5CwGcIX/XPC3lKazzbZ8baA==
 -----END CERTIFICATE-----
 """
+
+when chronosSimulation:
+  proc pinDeprecatedSecureHttpServerNewRaises() {.used.} =
+    proc process(r: RequestFence): Future[HttpResponseRef] {.
+         gcsafe, raises: [].} =
+      newFuture[HttpResponseRef]("pin.process")
+
+    let
+      secureKey = TLSPrivateKey.init(HttpsSelfSignedRsaKey)
+      secureCert = TLSCertificate.init(HttpsSelfSignedRsaCert)
+
+    {.push warning[Deprecated]: off.}
+    discard SecureHttpServerRef.new(initTAddress("127.0.0.1:0"), process,
+                                    secureKey, secureCert)
+    {.pop.}
 
 
 suite "Secure HTTP server testing suite":
