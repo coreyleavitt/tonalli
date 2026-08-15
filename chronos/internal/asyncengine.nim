@@ -630,6 +630,36 @@ elif defined(windows):
         "simDecideIo() requires a simulated dispatcher"
       disp.simState.simDecideIo(cp)
 
+    proc simMintStreamPair*(disp: PDispatcher): tuple[a, b: AsyncFD] =
+      ## `chronos/transports/stream.nim`'s `simStreamPair` is the sole
+      ## caller (RFC 0003 3.2's sim-native connection setup, S11a): the
+      ## stream I/O seam itself is POSIX-only (RFC section 4's Windows
+      ## IOCP-emulation non-goal, S10), so this is not reached from
+      ## Windows in this slice - it stays defined here for the same
+      ## reason every other engine-level sim wrapper is defined on both
+      ## platforms, so `chronos/simulation.nim`'s single shared module
+      ## type-checks on every OS.
+      doAssert isSimDispatcher(disp),
+        "simMintStreamPair() requires a simulated dispatcher"
+      let (a, b) = disp.simState.simMintStreamPair()
+      (AsyncFD(a), AsyncFD(b))
+
+    proc simStreamIo*(disp: PDispatcher, fd: AsyncFD, op: SimIoOp,
+                       data: pointer, maxBytes: int):
+        tuple[res: int, err: OSErrorCode] =
+      ## `stream.nim`'s POSIX-only `simRawIo` is the sole caller (RFC
+      ## 0003 3.2 N4, S11a).
+      doAssert isSimDispatcher(disp),
+        "simStreamIo() requires a simulated dispatcher"
+      disp.simState.simStreamIo(int(fd), op, data, maxBytes)
+
+    proc simStreamHalfClose*(disp: PDispatcher, fd: AsyncFD) =
+      ## `stream.nim`'s `close`/`shutdownWait` are the callers (RFC
+      ## 0003 3.2's half-close semantics, S11a).
+      doAssert isSimDispatcher(disp),
+        "simStreamHalfClose() requires a simulated dispatcher"
+      disp.simState.simStreamHalfClose(int(fd))
+
   var gDisp{.threadvar.}: PDispatcher ## Global dispatcher
 
   proc setThreadDispatcher*(disp: PDispatcher) {.gcsafe, raises: [].}
@@ -1109,10 +1139,29 @@ elif defined(windows):
       # All callbacks done, skip `processCallbacks` at start.
       loop.callbacks.prependNoGrow(SentinelCallback)
 
+  template simFlushCloseInterest(loop, fd, aftercb: untyped) =
+    ## The `closeSocket`/`closeHandle` sim teardown-flush judgment call
+    ## (S4-deferred, settled at S11a): a sim-minted fd has no real
+    ## handle to close and no selector-backed `flushPendingReaderWriter`
+    ## to run, but a reader or writer still armed on it must be fired
+    ## now - nothing else will ever deliver an event for a fd this run
+    ## just tore down.
+    let interest = loop.simState.simFlushInterest(int(fd))
+    if not isNil(interest.reader.function):
+      loop.callbacks.addLast(interest.reader)
+    if not isNil(interest.writer.function):
+      loop.callbacks.addLast(interest.writer)
+    if not(isNil(aftercb)):
+      loop.callbacks.addLast(capturingCallback(aftercb))
+
   proc closeSocket*(fd: AsyncFD, aftercb: CallbackFunc = nil) =
     ## Closes a socket and ensures that it is unregistered.
     let loop = getThreadDispatcher()
     loop.handles.excl(fd)
+    when chronosSimulation:
+      if loop.isSimDispatcher():
+        simFlushCloseInterest(loop, fd, aftercb)
+        return
     # Because we don't set SO_LINGER, `closeFd` should always succeed.
     # Future API might be added to recover linger errors, but this is currently
     # not supported so we discard the return value.
@@ -1124,6 +1173,10 @@ elif defined(windows):
     ## Closes a (pipe/file) handle and ensures that it is unregistered.
     let loop = getThreadDispatcher()
     loop.handles.excl(fd)
+    when chronosSimulation:
+      if loop.isSimDispatcher():
+        simFlushCloseInterest(loop, fd, aftercb)
+        return
     # Closing the handle should always succeed since async failures are reported
     # via IOCP (pending operations cancelled on closed) and the documentation
     # for CloseHandle does not specify and other specific conditions where it
@@ -1337,6 +1390,30 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
         "simAttachTraceWriter() requires a simulated dispatcher"
       disp.simState.attachTraceWriter(writer)
 
+    proc simMintStreamPair*(disp: PDispatcher): tuple[a, b: AsyncFD] =
+      ## `chronos/transports/stream.nim`'s `simStreamPair` is the sole
+      ## caller (RFC 0003 3.2's sim-native connection setup, S11a).
+      doAssert isSimDispatcher(disp),
+        "simMintStreamPair() requires a simulated dispatcher"
+      let (a, b) = disp.simState.simMintStreamPair()
+      (AsyncFD(cint(a)), AsyncFD(cint(b)))
+
+    proc simStreamIo*(disp: PDispatcher, fd: AsyncFD, op: SimIoOp,
+                       data: pointer, maxBytes: int):
+        tuple[res: int, err: OSErrorCode] =
+      ## `stream.nim`'s `simRawIo` is the sole caller (RFC 0003 3.2 N4,
+      ## S11a).
+      doAssert isSimDispatcher(disp),
+        "simStreamIo() requires a simulated dispatcher"
+      disp.simState.simStreamIo(int(cint(fd)), op, data, maxBytes)
+
+    proc simStreamHalfClose*(disp: PDispatcher, fd: AsyncFD) =
+      ## `stream.nim`'s `close`/`shutdownWait` are the callers (RFC
+      ## 0003 3.2's half-close semantics, S11a).
+      doAssert isSimDispatcher(disp),
+        "simStreamHalfClose() requires a simulated dispatcher"
+      disp.simState.simStreamHalfClose(int(cint(fd)))
+
   var gDisp{.threadvar.}: PDispatcher ## Global dispatcher
 
   proc setThreadDispatcher*(disp: PDispatcher) {.gcsafe, raises: [].}
@@ -1519,6 +1596,17 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     let loop = getThreadDispatcher()
 
     proc continuation(udata: pointer) =
+      when chronosSimulation:
+        if loop.isSimDispatcher():
+          # A sim-minted fd is a small counter value, not a real
+          # descriptor: closing it for real could hit an unrelated fd
+          # the process happens to have open at that value. `unregister2`
+          # is still safe (and harmless if already cleared by the flush
+          # below) - it only ever touches `simState`'s own tables.
+          if loop.contains(fd):
+            discard unregister2(fd)
+          if not(isNil(aftercb)): aftercb(nil)
+          return
       if loop.contains(fd):
         discard unregister2(fd)
       # `closeFd` might fail if an I/O error occurs during an async I/O
@@ -1549,13 +1637,19 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
           adata.writer.reset()
 
     when chronosSimulation:
-      # A simulated dispatcher has no selector to flush. Registration
-      # routing (S4) lets a sim-minted fd carry armed interest, but
-      # flushing it through this teardown path is deferred: nothing
-      # before S10/S11a's transport seam attaches real interest to a
-      # sim fd in a production code path, so there is nothing yet that
-      # exercises it outside a test deliberately provoking the gap.
-      if not loop.isSimDispatcher():
+      # A simulated dispatcher has no selector to flush - the sim
+      # teardown-flush judgment call (S4-deferred, settled at S11a):
+      # `simFlushInterest` is sim's own analogue of the real
+      # `flushPendingReaderWriter` above, firing a fd's still-armed
+      # reader/writer against `simState`'s interest table instead of
+      # the (nil, under sim) selector.
+      if loop.isSimDispatcher():
+        let interest = loop.simState.simFlushInterest(int(fd))
+        if not isNil(interest.reader.function):
+          loop.callbacks.addLast(interest.reader)
+        if not isNil(interest.writer.function):
+          loop.callbacks.addLast(interest.writer)
+      else:
         flushPendingReaderWriter()
     else:
       flushPendingReaderWriter()

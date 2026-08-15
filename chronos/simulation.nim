@@ -18,7 +18,7 @@
 ## decision types, `newSimOracle`, `RandomOracle`, `ReplayOracle`,
 ## `SimBarrierError`, and the trace schema.
 
-import std/[os, strutils]
+import std/[deques, os, strutils, tables]
 import unittest2
 import ../chronos
 import ./internal/simengine
@@ -57,6 +57,113 @@ const
     ## counts against it, so ordinary tests never come close.
   simulateDefaultTimeBudget* = seconds(3_600)
     ## Generous default: an hour of virtual time.
+
+type
+  SimStreamServer* = ref object
+    ## A `listenStream` binding (RFC 0003 3.2/3.8, S11a): connection
+    ## establishment is sim-native, not seamed, so this is plain
+    ## chronos Future coordination, not an oracle choice point -
+    ## `connectStream` mints an already-connected pair and hands the
+    ## server side either to a waiting `accept()` or to `pending` for
+    ## a later one.
+    pending: Deque[StreamTransport]
+    waiters: Deque[Future[StreamTransport]]
+
+  SimNet* = object
+    ## Attaches to the current run's sim network (RFC 0003 3.8): one
+    ## per sim dispatcher - every `simNet()` call against the same
+    ## dispatcher sees the same listener bindings.
+    disp: PDispatcher
+
+var simNetListeners {.threadvar.}: Table[TransportAddress, SimStreamServer]
+  ## Per-run listener bindings (RFC 0003 3.8's "one sim network per
+  ## sim dispatcher"), reset at the start of every `runSimulation` call
+  ## so a fresh run never sees a previous run's `listenStream`
+  ## bindings. Keyed by address rather than carried on `SimEngineState`
+  ## (chronos/internal/simengine.nim): a `StreamTransport`-typed
+  ## listener table belongs above the leaf/private engine layer, which
+  ## stays transport-agnostic (RFC 0003 3.10's module layout).
+
+proc resetSimNet() =
+  simNetListeners = initTable[TransportAddress, SimStreamServer]()
+
+proc simNet*(): SimNet =
+  ## Attaches to the current run's sim network (RFC 0003 3.8):
+  ## `listenStream`/`connectStream` mint already-connected endpoint
+  ## pairs sim-natively (RFC 0003 3.2) - the real accept/connect/
+  ## shutdown state machines are not exercised under simulation, a
+  ## recorded coverage concession. `SimNet`'s type and this accessor
+  ## compile and type-check on every platform; `listenStream`/
+  ## `connectStream` are POSIX-only in this slice below, matching the
+  ## stream I/O seam they build on (RFC section 4's Windows IOCP-
+  ## emulation non-goal, already accepted at S10).
+  let disp = getThreadDispatcher()
+  doAssert disp.isSimDispatcher(), "simNet() requires a simulated dispatcher"
+  SimNet(disp: disp)
+
+when not defined(windows):
+  proc listenStream*(net: SimNet, address: TransportAddress): SimStreamServer =
+    ## Binds a sim listener at `address` (RFC 0003 3.8). Idempotent
+    ## re-binding is not modeled: a second `listenStream` at the same
+    ## address is a test-authoring bug in this harness, not a runtime
+    ## condition a real caller must handle, so it asserts rather than
+    ## returning a catchable error.
+    doAssert address notin simNetListeners,
+      "listenStream(): " & $address & " already has a listener"
+    result = SimStreamServer()
+    simNetListeners[address] = result
+
+  proc accept*(server: SimStreamServer):
+      Future[StreamTransport] {.async: (raises: [CancelledError]).} =
+    ## Returns the next connection `connectStream` mints against this
+    ## listener - already available in `pending`, or awaited via a
+    ## waiter `connectStream` completes directly (RFC 0003 3.8's
+    ## sketch: the `accept()`-style shape `stream.nim`'s own explicit
+    ## `StreamServer.accept()` uses, so a parametrized test body can
+    ## treat a sim and a real server identically).
+    if server.pending.len > 0:
+      return server.pending.popFirst()
+    let fut = Future[StreamTransport].Raising([CancelledError]).init(
+      "simnet.accept")
+    server.waiters.addLast(fut)
+    await fut
+
+  proc connectStream*(net: SimNet, address: TransportAddress):
+      Future[StreamTransport] {.async: (raises: [TransportError, CancelledError]).} =
+    ## Mints an already-connected pair (RFC 0003 3.2's sim-native
+    ## connection setup) and returns the client side, handing the
+    ## server side to `address`'s listener - directly to a waiting
+    ## `accept()` if one is already parked, `pending` otherwise.
+    let server = simNetListeners.getOrDefault(address)
+    doAssert not server.isNil,
+      "connectStream(): no listener at " & $address
+    let (clientTransp, serverTransp) = simStreamPair()
+    if server.waiters.len > 0:
+      let waiter = server.waiters.popFirst()
+      waiter.complete(serverTransp)
+    else:
+      server.pending.addLast(serverTransp)
+    clientTransp
+else:
+  proc listenStream*(net: SimNet, address: TransportAddress): SimStreamServer =
+    ## `SimNet` stream transports are POSIX-only in this slice: the
+    ## S10 read/write seam `simStreamPair` builds on exists only in
+    ## `stream.nim`'s POSIX branch (RFC section 4's Windows IOCP-
+    ## emulation non-goal). This compiles and type-checks on Windows -
+    ## satisfying `nimble check_windows` - and fails loudly rather than
+    ## silently doing nothing if ever reached there.
+    raiseAssert "SimNet stream transports are not implemented on " &
+      "Windows (RFC 0003 section 4's Windows IOCP-emulation non-goal)"
+
+  proc accept*(server: SimStreamServer):
+      Future[StreamTransport] {.async: (raises: [CancelledError]).} =
+    raiseAssert "SimNet stream transports are not implemented on " &
+      "Windows (RFC 0003 section 4's Windows IOCP-emulation non-goal)"
+
+  proc connectStream*(net: SimNet, address: TransportAddress):
+      Future[StreamTransport] {.async: (raises: [TransportError, CancelledError]).} =
+    raiseAssert "SimNet stream transports are not implemented on " &
+      "Windows (RFC 0003 section 4's Windows IOCP-emulation non-goal)"
 
 proc classifySimFailure(msg: string): SimFailureKind =
   if msg.startsWith("deadlock:"):
@@ -113,6 +220,7 @@ proc runSimulation(seed: uint64, decisionBudget: int, timeBudget: Duration,
   # `savedDisp.callbacks.len` is 1, never 0.
   forceSetThreadDispatcher(disp)
   activateSimClock()
+  resetSimNet()
 
   var failure: ref SimulationError = nil
   try:

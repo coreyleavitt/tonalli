@@ -141,7 +141,7 @@ task test_simulation, "Run the deterministic simulation suites":
     let simLeafTests = [
       "tests/testsimclock", "tests/testsimengine", "tests/testsimloop",
       "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
-      "tests/testsimstream",
+      "tests/testsimstream", "tests/testsimnet",
     ]
 
     run simArgs & " --mm:refc", "tests/testall"
@@ -188,7 +188,7 @@ task check_windows, "Windows parity: semantic-check the library surface (fork is
   let simLeafTests = [
     "tests/testsimclock", "tests/testsimengine", "tests/testsimloop",
     "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
-    "tests/testsimstream",
+    "tests/testsimstream", "tests/testsimnet",
   ]
   for t in simLeafTests:
     exec nimc & " check " & winCfg &

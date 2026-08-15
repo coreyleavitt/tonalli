@@ -1350,39 +1350,19 @@ else:
     (err == oserrno.EWOULDBLOCK) or (err == oserrno.EAGAIN)
 
   when chronosSimulation:
-    proc simFaultToError(fault: SimFault): OSErrorCode {.inline.} =
-      ## Maps a scripted `SimFault` onto the real `OSErrorCode` the
-      ## error-classification helpers above already recognize, so a
-      ## sim-mode fault flows through the exact same
-      ## `isConnResetError`/`setReadError`/`handleError` logic a real
-      ## error would (RFC 0003 3.2 N4). Only `Reset` exists in this
-      ## slice (S11b/S12b add the rest); each future member gets its
-      ## own arm here rather than an `else`, so a new `SimFault` forces
-      ## a compile error here instead of silently falling through.
-      case fault
-      of SimFault.Reset: oserrno.ECONNRESET
-
-    proc simRawIo(transp: StreamTransport, op: SimIoOp, maxBytes: int):
-        tuple[res: int, err: OSErrorCode] {.inline.} =
+    proc simRawIo(transp: StreamTransport, op: SimIoOp, data: pointer,
+                   maxBytes: int): tuple[res: int, err: OSErrorCode] {.inline.} =
       ## The sim branch of the injectable I/O primitive (RFC 0003 3.2
-      ## N4): asks `simDecideIo` synchronously and translates its
-      ## answer into the same `(res, err)` shape a real syscall plus
+      ## N4): dispatches to `simStreamIo` (chronos/internal/simengine.nim),
+      ## which - for a `SimNet`-minted endpoint (S11a) - moves real
+      ## content through the endpoint pair's in-memory queue, and falls
+      ## back to S10's original scripted-oracle-only behavior (no
+      ## content copied) for a bare minted fd with no live endpoint,
+      ## e.g. `testsimstream.nim`'s probes. Either way the answer comes
+      ## back in the same `(res, err)` shape a real syscall plus
       ## `osLastError()` would have produced, so every downstream
       ## caller's existing error-classification logic runs unmodified.
-      ## `trigger` is `SimEventId(0)`: `readIntoBuffer`/`writerCb` are
-      ## reached only via a delivered `Readiness` event, and S11a is
-      ## the slice that gives sim endpoints a production path into this
-      ## code and can thread the delivering event's real id through;
-      ## `fastWrite`'s eager call has no delivered event at all (RFC
-      ## 0003 3.2's fastWrite passage) and never will. `faults` is
-      ## always empty: S10 has no live endpoint to carry a fault menu
-      ## (S11a adds endpoints, S11b/S12b add faults).
-      let decision = getThreadDispatcher().simDecideIo(IoOutcomePoint(
-        trigger: SimEventId(0), endpoint: SimEndpointId(uint32(transp.fd)),
-        op: op, maxBytes: maxBytes, faults: {}))
-      case decision.outcome
-      of SimIoOutcome.Ok: (decision.bytes, OSErrorCode(0))
-      of SimIoOutcome.Fault: (-1, simFaultToError(decision.fault))
+      getThreadDispatcher().simStreamIo(transp.fd, op, data, maxBytes)
 
   proc rawIoRead(transp: StreamTransport, data: pointer, size: int):
       tuple[res: int, err: OSErrorCode] {.inline.} =
@@ -1392,7 +1372,7 @@ else:
     ## is touched at all - `simRawIo` answers instead.
     when chronosSimulation:
       if getThreadDispatcher().isSimDispatcher():
-        return simRawIo(transp, SimIoOp.Read, size)
+        return simRawIo(transp, SimIoOp.Read, data, size)
     let fd = SocketHandle(transp.fd)
     let res =
       case transp.kind
@@ -1420,7 +1400,7 @@ else:
     ## `DataFile` write stays real-syscall-only in every build.
     when chronosSimulation:
       if getThreadDispatcher().isSimDispatcher():
-        return simRawIo(transp, SimIoOp.Write, size)
+        return simRawIo(transp, SimIoOp.Write, data, size)
     let fd = SocketHandle(transp.fd)
     let res =
       case transp.kind
@@ -1632,6 +1612,29 @@ else:
       "pipe.stream.transport", {FutureFlag.OwnCancelSchedule})
     GC_ref(transp)
     transp
+
+  when chronosSimulation:
+    proc simStreamPair*(bufferSize = DefaultStreamBufferSize):
+        tuple[a, b: StreamTransport] =
+      ## Sim-native connection setup (RFC 0003 3.2): mints a connected
+      ## pair of sim stream endpoints and wraps each in a real
+      ## `StreamTransport` (`TransportKind.Socket`, matching what a
+      ## real `connect`/`accept` pair produces, so `shutdownWait`'s
+      ## socket-only half-close stays usable) sharing the S10 seam's
+      ## exact read/write machinery. `chronos/simulation.nim`'s
+      ## `SimNet` is the sole caller: connection establishment itself
+      ## is not seamed - `acceptConn`/`osdefs.connect`/the accept
+      ## loop's syscalls are untouched and never run under sim - only
+      ## the already-connected transports this mints are.
+      let disp = getThreadDispatcher()
+      let (fdA, fdB) = disp.simMintStreamPair()
+      discard register2(fdA)
+      discard register2(fdB)
+      let a = newStreamSocketTransport(fdA, bufferSize, nil, {})
+      let b = newStreamSocketTransport(fdB, bufferSize, nil, {})
+      trackCounter(StreamTransportTrackerName)
+      trackCounter(StreamTransportTrackerName)
+      (a, b)
 
   proc connect*(address: TransportAddress,
                 bufferSize = DefaultStreamBufferSize,
@@ -2958,6 +2961,17 @@ proc close*(transp: StreamTransport) =
 
   if TransportState.Closed notin transp.state:
     transp.state.incl(TransportState.Closed)
+    when chronosSimulation:
+      # Half-close (RFC 0003 3.2, S11a's RED-phase design): closing a
+      # sim endpoint delivers EOF to its peer, the sim analogue of the
+      # real OS eventually tearing down the connection on `closeFd` -
+      # something sim has no OS to do implicitly, so it is done here,
+      # explicitly, platform-neutrally (above the platform split below,
+      # like every other sim branch in this proc's neighborhood).
+      # `simStreamHalfClose` no-ops for a fd with no live `SimNet`
+      # endpoint, so this is safe for any sim transport.
+      if getThreadDispatcher().isSimDispatcher():
+        getThreadDispatcher().simStreamHalfClose(transp.fd)
     when defined(windows):
       if transp.kind == TransportKind.Pipe:
         if WinServerPipe in transp.flags:
@@ -3002,6 +3016,20 @@ proc shutdownWait*(transp: StreamTransport): Future[void] {.
   doAssert(transp.kind == TransportKind.Socket)
   let retFuture = newFuture[void]("stream.transport.shutdown")
   transp.checkClosed(retFuture)
+
+  when chronosSimulation:
+    # Half-close (RFC 0003 3.2, S11a's RED-phase design): a sim
+    # endpoint has no `SHUT_WR` to issue, so `simStreamHalfClose`
+    # delivers EOF to the peer directly instead, platform-neutrally
+    # (above the platform split below).
+    if getThreadDispatcher().isSimDispatcher():
+      getThreadDispatcher().simStreamHalfClose(transp.fd)
+      transp.state.incl({WriteEof})
+      proc continuation(udata: pointer) {.gcsafe.} =
+        if not(retFuture.finished()):
+          retFuture.complete()
+      callSoon(continuation, nil)
+      return retFuture
 
   when defined(windows):
     let loop = getThreadDispatcher()

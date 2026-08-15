@@ -27,7 +27,7 @@
 
 {.push raises: [], gcsafe.}
 
-import std/[algorithm, sets, strutils, tables]
+import std/[algorithm, deques, sets, strutils, tables]
 import results
 import ../oserrno
 import ../timer
@@ -150,6 +150,21 @@ type
     event: SimEvent
     callback: InternalAsyncCallback
 
+  SimStreamEndpoint = object
+    ## One side of an in-memory stream endpoint pair (RFC 0003 3.2's
+    ## sim-native connection setup, slice S11a): `id` is this
+    ## endpoint's own identity, minted from its own counter rather
+    ## than cast from the fd (S4's provisional shortcut, settled
+    ## here); `peerFd` routes a write to the other side's `inbound`
+    ## queue; `peerClosed` is set by the peer's half-close
+    ## (`simStreamHalfClose`) and, once `inbound` drains, turns the
+    ## next read into EOF - the same `res == 0` convention a real
+    ## socket read uses.
+    id: SimEndpointId
+    peerFd: int
+    inbound: Deque[byte]
+    peerClosed: bool
+
   SimEngineState* = ref object
     ## The sim-mode run state carried on a simulated `Dispatcher`: the
     ## fd provenance table, populated at mint time and consulted by
@@ -173,6 +188,8 @@ type
     hasTimeBudget: bool
     timeBudgetCutoffNanoseconds: int64
     traceWriter: ptr SimTraceWriter
+    streamEndpoints: Table[int, SimStreamEndpoint]
+    nextEndpointIdValue: uint32
 
 const
   SimBarrierCode* = OSErrorCode(1_397_835_586'i32)
@@ -360,7 +377,8 @@ proc newSimEngineState*(startValue: int = 0,
                   oracle: oracle, interest: initTable[int, SimInterest](),
                   decisionBudget: decisionBudget, seed: seed,
                   hasTimeBudget: hasTimeBudget,
-                  timeBudgetCutoffNanoseconds: timeBudgetCutoffNanoseconds)
+                  timeBudgetCutoffNanoseconds: timeBudgetCutoffNanoseconds,
+                  streamEndpoints: initTable[int, SimStreamEndpoint]())
 
 proc mintSimFd*(state: SimEngineState): int =
   ## Mints the next sim-owned fd-domain id and records it in the
@@ -380,6 +398,15 @@ proc ownsSimFd*(state: SimEngineState, value: int): bool =
   ## share the OS fd domain with kernel-assigned fds and cannot be
   ## soundly separated by value.
   value in state.endpoints
+
+proc mintSimEndpointId(state: SimEngineState): SimEndpointId =
+  ## Real per-endpoint identity (RFC 0003 3.3.1's per-kind monotonic
+  ## counter), independent of the fd-domain counter `mintSimFd` owns:
+  ## an endpoint's identity in a choice point, digest, or trace record
+  ## must not be a cast of whatever integer the fd-provenance table
+  ## happens to have minted for it (S4's provisional shortcut).
+  result = SimEndpointId(state.nextEndpointIdValue)
+  inc state.nextEndpointIdValue
 
 proc attachTraceWriter*(state: SimEngineState, writer: ptr SimTraceWriter) =
   ## Wires a live decision-log writer into `state` (RFC 0003 3.7/3.8):
@@ -480,6 +507,70 @@ proc simDecideIo*(state: SimEngineState, cp: IoOutcomePoint): IoDecision =
     except IOError as exc:
       raiseAssert "simulation trace write failure: " & exc.msg
 
+proc simFaultToError*(fault: SimFault): OSErrorCode {.inline.} =
+  ## Maps a scripted `SimFault` onto the real `OSErrorCode` the
+  ## transport layer's error-classification helpers already recognize,
+  ## so a sim-mode fault flows through the exact same
+  ## `isConnResetError`/`setReadError`/`handleError` logic a real error
+  ## would (RFC 0003 3.2 N4). Only `Reset` exists in this slice
+  ## (S11b/S12b add the rest); each future member gets its own arm
+  ## here rather than an `else`, so a new `SimFault` forces a compile
+  ## error here instead of silently falling through. This module is
+  ## platform-neutral (unlike `stream.nim`'s POSIX-only seam), so the
+  ## code is named per platform the way `transports/common.nim` does
+  ## throughout: Windows has no bare `ECONNRESET`, only `WSAECONNRESET`.
+  case fault
+  of SimFault.Reset:
+    when defined(windows):
+      oserrno.WSAECONNRESET
+    else:
+      oserrno.ECONNRESET
+
+proc simMintStreamPair*(state: SimEngineState): tuple[a, b: int] =
+  ## Mints a connected pair of sim stream endpoints (RFC 0003 3.2's
+  ## sim-native connection setup, S11a): two sim fds, each wired as
+  ## the other's peer, each carrying its own real `SimEndpointId`.
+  ## `chronos/transports/stream.nim`'s `simStreamPair` is the sole
+  ## production caller, wrapping the two fds in `StreamTransport`s;
+  ## connection establishment itself asks nothing of `decideBatch`/
+  ## `decideIo` - only the read/write path the pair now shares does.
+  let
+    fdA = state.mintSimFd()
+    fdB = state.mintSimFd()
+  state.streamEndpoints[fdA] = SimStreamEndpoint(
+    id: state.mintSimEndpointId(), peerFd: fdB, inbound: initDeque[byte]())
+  state.streamEndpoints[fdB] = SimStreamEndpoint(
+    id: state.mintSimEndpointId(), peerFd: fdA, inbound: initDeque[byte]())
+  (fdA, fdB)
+
+proc simStreamTake(state: SimEngineState, fd: int, n: int, data: pointer) =
+  ## Copies exactly `n` bytes (already validated `<= inbound.len` by
+  ## the caller) out of `fd`'s own inbound queue into `data`,
+  ## consuming them.
+  if n > 0:
+    var ep = state.streamEndpoints.getOrDefault(fd)
+    let dst = cast[ptr UncheckedArray[byte]](data)
+    for i in 0 ..< n:
+      dst[i] = ep.inbound.popFirst()
+    state.streamEndpoints[fd] = ep
+
+proc simFlushInterest*(state: SimEngineState, fd: int):
+    tuple[reader, writer: InternalAsyncCallback] =
+  ## Pops and clears `fd`'s armed reader/writer interest (the
+  ## `closeSocket` sim teardown-flush judgment call, S4-deferred and
+  ## settled here at S11a): a sim-minted fd has no selector-backed
+  ## `flushPendingReaderWriter` to run, but a reader or writer left
+  ## armed when its fd closes would otherwise wait forever for an
+  ## event that will never arrive, since nothing else will ever
+  ## deliver one for a fd this run just tore down. The caller
+  ## (`closeSocket`) enqueues whatever comes back onto its own
+  ## callback queue, the same "fire it now, with whatever error state
+  ## the transport is already in" real mode gives a closing fd's
+  ## pending reader/writer.
+  result = (state.interest.getOrDefault(fd).reader,
+            state.interest.getOrDefault(fd).writer)
+  state.interest.del(fd)
+
 proc simSetReaderInterest*(state: SimEngineState, fd: int,
                             cb: InternalAsyncCallback) =
   ## Registration routing (RFC 0003 3.2 point 2): records the callback
@@ -524,6 +615,115 @@ proc simMarkReady*(state: SimEngineState, fd: int,
                      source: SimEndpointId(uint32(fd))),
     callback: cb)
   id
+
+proc simMarkReadyOnce(state: SimEngineState, fd: int,
+                       direction: SimReadyDirection) =
+  ## Enqueues a `Readiness` event only if this fd/direction's currently
+  ## armed callback does not already have one waiting for delivery -
+  ## the sim analogue of level-triggered readiness: a socket already
+  ## "ready" does not get re-notified until it is drained or its
+  ## interest changes. Without this, several writes landing before the
+  ## first delivery is processed would fire the same reader callback
+  ## more times than there is data left to justify, breaking
+  ## `readerCb`'s "we were notified, so there must be progress"
+  ## invariant. A no-op (like `simMarkReady` itself would assert on)
+  ## when nothing is armed in `direction`.
+  let entry = state.interest.getOrDefault(fd)
+  let cb = if direction == SimReadyDirection.Read: entry.reader else: entry.writer
+  if isNil(cb.function):
+    return
+  for r in state.readyQueue:
+    if r.event.kind == SimEventKind.Readiness and
+       uint32(r.event.source) == uint32(fd) and
+       r.callback.function == cb.function and r.callback.udata == cb.udata:
+      return
+  discard state.simMarkReady(fd, direction)
+
+proc simStreamDeliver(state: SimEngineState, fd: int, data: pointer, n: int) =
+  ## Appends `n` bytes from `data` to the connected peer's inbound
+  ## queue and, if the peer has an armed reader waiting, schedules its
+  ## delivery through the unmodified registration-routing machinery
+  ## (S4) - the first production source `simMarkReady` gets, per its
+  ## own docstring.
+  let peerFd = state.streamEndpoints.getOrDefault(fd).peerFd
+  if n > 0:
+    var peer = state.streamEndpoints.getOrDefault(peerFd)
+    let src = cast[ptr UncheckedArray[byte]](data)
+    for i in 0 ..< n:
+      peer.inbound.addLast(src[i])
+    state.streamEndpoints[peerFd] = peer
+  state.simMarkReadyOnce(peerFd, SimReadyDirection.Read)
+
+proc simStreamIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
+                   maxBytes: int): tuple[res: int, err: OSErrorCode] =
+  ## The sim stream seam's full orchestration (RFC 0003 3.2 N4, S11a):
+  ## for a fd with a live `SimNet` endpoint, real content moves through
+  ## the endpoint pair's in-memory queue - a read with nothing queued
+  ## and a peer that has not half-closed answers "would block" without
+  ## consulting the oracle at all (a structural fact, not a choice);
+  ## `decideIo` still adjudicates the byte count (and, for a scripted
+  ## oracle, a fault) once content is or could be available, S10's
+  ## choice-point discipline unchanged. A fd with no live endpoint (a
+  ## bare minted fd, e.g. `testsimstream.nim`'s probes) falls back to
+  ## S10's original scripted-oracle-only behavior: `decideIo` alone
+  ## picks a byte count and no content is copied.
+  if fd notin state.streamEndpoints:
+    let decision = state.simDecideIo(IoOutcomePoint(
+      trigger: SimEventId(0), endpoint: SimEndpointId(uint32(fd)),
+      op: op, maxBytes: maxBytes, faults: {}))
+    return case decision.outcome
+      of SimIoOutcome.Ok: (decision.bytes, OSErrorCode(0))
+      of SimIoOutcome.Fault: (-1, simFaultToError(decision.fault))
+
+  let endpointId = state.streamEndpoints.getOrDefault(fd).id
+  case op
+  of SimIoOp.Write:
+    let decision = state.simDecideIo(IoOutcomePoint(
+      trigger: SimEventId(0), endpoint: endpointId, op: op,
+      maxBytes: maxBytes, faults: {}))
+    case decision.outcome
+    of SimIoOutcome.Ok:
+      state.simStreamDeliver(fd, data, decision.bytes)
+      (decision.bytes, OSErrorCode(0))
+    of SimIoOutcome.Fault:
+      (-1, simFaultToError(decision.fault))
+  of SimIoOp.Read:
+    let endpoint = state.streamEndpoints.getOrDefault(fd)
+    let avail = endpoint.inbound.len
+    if avail == 0 and not endpoint.peerClosed:
+      when defined(windows):
+        return (-1, oserrno.WSAEWOULDBLOCK)
+      else:
+        return (-1, oserrno.EWOULDBLOCK)
+    let decision = state.simDecideIo(IoOutcomePoint(
+      trigger: SimEventId(0), endpoint: endpointId, op: op,
+      maxBytes: min(maxBytes, avail), faults: {}))
+    case decision.outcome
+    of SimIoOutcome.Ok:
+      state.simStreamTake(fd, decision.bytes, data)
+      (decision.bytes, OSErrorCode(0))
+    of SimIoOutcome.Fault:
+      (-1, simFaultToError(decision.fault))
+
+proc simStreamHalfClose*(state: SimEngineState, fd: int) =
+  ## Sim-mode half-close (RFC 0003 3.2: `closeWait`/`shutdownWait`
+  ## deliver EOF to the peer, this slice's RED-phase design): marks
+  ## the peer's endpoint `peerClosed`, so its next read reports EOF
+  ## once its `inbound` queue drains, and - if that queue is already
+  ## empty and a reader is armed - wakes it immediately rather than
+  ## leaving it waiting for an event that will now never come. A no-op
+  ## for a fd with no live endpoint (a bare minted fd never wired
+  ## through `simMintStreamPair`), so `close()`'s unconditional sim
+  ## hook stays safe for non-`SimNet` sim transports too.
+  if fd notin state.streamEndpoints:
+    return
+  let peerFd = state.streamEndpoints.getOrDefault(fd).peerFd
+  var peer = state.streamEndpoints.getOrDefault(peerFd)
+  peer.peerClosed = true
+  let inboundEmpty = peer.inbound.len == 0
+  state.streamEndpoints[peerFd] = peer
+  if inboundEmpty:
+    state.simMarkReadyOnce(peerFd, SimReadyDirection.Read)
 
 proc simScheduleArrival*(state: SimEngineState): SimEventId =
   ## Schedules a stub `Arrival` event (RFC 0003 3.5/3.6): delivery
