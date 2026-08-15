@@ -730,6 +730,22 @@ proc simStreamIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
     of SimIoOutcome.Fault:
       (-1, simFaultToError(decision.fault))
 
+proc simDatagramIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
+                     maxBytes: int): tuple[res: int, err: OSErrorCode] =
+  ## The sim datagram seam's orchestration (RFC 0003 6, slice S12a):
+  ## seam extraction only, mirroring S10 - no `SimNet` datagram endpoint
+  ## table exists yet (S12b's scope per the RFC's slice table), so every
+  ## fd takes `simStreamIo`'s `fd notin state.streamEndpoints` fallback
+  ## unconditionally. `decideIo` alone picks a byte count or fault; `data`
+  ## is never touched, matching that same fallback's "no content copied"
+  ## behavior for a bare minted fd.
+  let decision = state.simDecideIo(IoOutcomePoint(
+    trigger: SimEventId(0), endpoint: SimEndpointId(uint32(fd)), op: op,
+    maxBytes: maxBytes, faults: {}))
+  case decision.outcome
+  of SimIoOutcome.Ok: (decision.bytes, OSErrorCode(0))
+  of SimIoOutcome.Fault: (-1, simFaultToError(decision.fault))
+
 proc simStreamHalfClose*(state: SimEngineState, fd: int) =
   ## Sim-mode half-close (RFC 0003 3.2: `closeWait`/`shutdownWait`
   ## deliver EOF to the peer, this slice's RED-phase design): marks

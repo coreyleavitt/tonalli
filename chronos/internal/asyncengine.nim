@@ -660,6 +660,18 @@ elif defined(windows):
         "simStreamHalfClose() requires a simulated dispatcher"
       disp.simState.simStreamHalfClose(int(fd))
 
+    proc simDatagramIo*(disp: PDispatcher, fd: AsyncFD, op: SimIoOp,
+                         data: pointer, maxBytes: int):
+        tuple[res: int, err: OSErrorCode] =
+      ## `chronos/transports/datagram.nim`'s POSIX-only `simRawIo` is the
+      ## sole caller (RFC 0003 6, S12a). Stays defined here too, like
+      ## `simMintStreamPair` above, purely so `chronos/simulation.nim`'s
+      ## single shared module type-checks on every OS - the datagram
+      ## seam itself is not reached from Windows in this slice.
+      doAssert isSimDispatcher(disp),
+        "simDatagramIo() requires a simulated dispatcher"
+      disp.simState.simDatagramIo(int(fd), op, data, maxBytes)
+
   var gDisp{.threadvar.}: PDispatcher ## Global dispatcher
 
   proc setThreadDispatcher*(disp: PDispatcher) {.gcsafe, raises: [].}
@@ -1413,6 +1425,15 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       doAssert isSimDispatcher(disp),
         "simStreamHalfClose() requires a simulated dispatcher"
       disp.simState.simStreamHalfClose(int(cint(fd)))
+
+    proc simDatagramIo*(disp: PDispatcher, fd: AsyncFD, op: SimIoOp,
+                         data: pointer, maxBytes: int):
+        tuple[res: int, err: OSErrorCode] =
+      ## `chronos/transports/datagram.nim`'s `simRawIo` is the sole
+      ## caller (RFC 0003 6, S12a).
+      doAssert isSimDispatcher(disp),
+        "simDatagramIo() requires a simulated dispatcher"
+      disp.simState.simDatagramIo(int(cint(fd)), op, data, maxBytes)
 
   var gDisp{.threadvar.}: PDispatcher ## Global dispatcher
 

@@ -12,9 +12,24 @@
 import std/deques
 import results
 when not(defined(windows)): import ".."/selectors2
-import ".."/[asyncloop, osdefs, oserrno, osutils, handles]
+import ".."/[asyncloop, config, osdefs, oserrno, osutils, handles]
 import "."/[common, ipnet]
 import stew/ptrops
+
+when chronosSimulation and not(defined(windows)):
+  import ../internal/simengine
+    # RFC 0003 6's datagram I/O seam (slice S12a, mirroring S10) needs
+    # `IoOutcomePoint`/`IoDecision`/`SimIoOp`/`SimFault`/`SimEventId`/
+    # `SimEndpointId` directly - `asyncloop.nim` re-exports `asyncengine`
+    # (for `simDecideIo`/`isSimDispatcher`/`getThreadDispatcher`, already
+    # reachable through the unconditional `asyncloop` import above) but
+    # `asyncengine.nim` itself only imports `simengine`, never exports it.
+    # POSIX-only, unlike `stream.nim`'s unconditional import: the
+    # datagram seam itself is POSIX-only (this slice's Windows non-goal,
+    # same as S10/S11a) and, unlike `stream.nim`, no platform-neutral
+    # datagram code references a simengine symbol - `close`/`closeWait`
+    # never call a sim half-close hook - so an unconditional import here
+    # would be a genuine unused-import warning on Windows.
 
 export results
 
@@ -437,6 +452,71 @@ when defined(windows):
 else:
   # Linux/BSD/MacOS part
 
+  when chronosSimulation:
+    proc simRawIo(transp: DatagramTransport, op: SimIoOp, data: pointer,
+                   maxBytes: int): tuple[res: int, err: OSErrorCode] {.inline.} =
+      ## The sim branch of the datagram injectable I/O primitive (RFC
+      ## 0003 6, slice S12a): dispatches to `simDatagramIo`
+      ## (chronos/internal/simengine.nim), which - seam extraction only,
+      ## no `SimNet` datagram endpoint constructed before S12b - always
+      ## takes S10's original scripted-oracle-only fallback: `decideIo`
+      ## alone picks a byte count (or fault) and no content is copied,
+      ## so `data` is passed through untouched. Either way the answer
+      ## comes back in the same `(res, err)` shape a real syscall plus
+      ## `osLastError()` would have produced, so every downstream
+      ## caller's existing error-classification logic runs unmodified.
+      getThreadDispatcher().simDatagramIo(transp.fd, op, data, maxBytes)
+
+  proc rawIoRecvfrom(transp: DatagramTransport):
+      tuple[res: int, err: OSErrorCode] {.inline.} =
+    ## The injectable I/O primitive's read side (RFC 0003 6, S12a
+    ## mirroring S10's `rawIoRead`): the sole `recvfrom` call site. Real
+    ## mode is exactly the syscall `readDatagramLoop` used to issue
+    ## directly, including the per-retry `ralen` reset the former manual
+    ## EINTR-retry loop performed; under simulation, no fd is touched -
+    ## `transp.raddr`/`transp.ralen` are left as `simRawIo` finds them,
+    ## since S12a's fallback answer never had a real peer address to
+    ## report - and `simRawIo` answers instead.
+    when chronosSimulation:
+      if getThreadDispatcher().isSimDispatcher():
+        return simRawIo(transp, SimIoOp.Read, baseAddr transp.buffer,
+                         len(transp.buffer))
+    let fd = SocketHandle(transp.fd)
+    let res = handleEintr:
+      transp.ralen = SockLen(sizeof(Sockaddr_storage))
+      osdefs.recvfrom(fd, baseAddr transp.buffer, cint(len(transp.buffer)),
+                       cint(0), cast[ptr SockAddr](addr transp.raddr),
+                       addr transp.ralen)
+    if res < 0: (res, osLastError()) else: (res, OSErrorCode(0))
+
+  proc rawIoSendto(transp: DatagramTransport, vector: GramVector):
+      tuple[res: int, err: OSErrorCode] {.inline.} =
+    ## The injectable I/O primitive's write side (RFC 0003 6, S12a
+    ## mirroring S10's `rawIoWrite`): the shared `sendto`/`send` call
+    ## site - `writeDatagramLoop`'s two vector kinds route to the real
+    ## syscall each used to issue directly, the same way `rawIoWrite`
+    ## already discriminates `TransportKind.Socket` vs `.Pipe`
+    ## internally rather than splitting into two seam procs. Real mode
+    ## is exactly the former inline syscalls (including the per-retry
+    ## `setRemoteAddress` call the `WithAddress` branch's manual
+    ## EINTR-retry loop performed); under simulation, neither syscall
+    ## runs - `simRawIo` answers instead.
+    when chronosSimulation:
+      if getThreadDispatcher().isSimDispatcher():
+        return simRawIo(transp, SimIoOp.Write, vector.buf, vector.buflen)
+    let fd = SocketHandle(transp.fd)
+    let res =
+      case vector.kind
+      of VectorKind.WithAddress:
+        handleEintr:
+          # We only need `Sockaddr_storage` data here, so result discarded.
+          discard transp.setRemoteAddress(vector.address)
+          osdefs.sendto(fd, vector.buf, vector.buflen, MSG_NOSIGNAL,
+                        cast[ptr SockAddr](addr transp.waddr), transp.walen)
+      of VectorKind.WithoutAddress:
+        handleEintr(osdefs.send(fd, vector.buf, vector.buflen, MSG_NOSIGNAL))
+    if res < 0: (res, osLastError()) else: (res, OSErrorCode(0))
+
   proc readDatagramLoop(udata: pointer) {.raises: [].}=
     doAssert(not isNil(udata))
     let
@@ -449,28 +529,16 @@ else:
     if TransportState.Closed in transp.state:
       transp.state.incl({ReadPaused})
     else:
-      while true:
-        transp.ralen = SockLen(sizeof(Sockaddr_storage))
-        var res = osdefs.recvfrom(fd, baseAddr transp.buffer,
-                                  cint(len(transp.buffer)), cint(0),
-                                  cast[ptr SockAddr](addr transp.raddr),
-                                  addr transp.ralen)
-        if res >= 0:
-          transp.buflen = res
-          asyncSpawn transp.function(transp, transp.getRemoteAddress())
-        else:
-          let err = osLastError()
-          case err
-          of oserrno.EINTR:
-            continue
-          else:
-            transp.buflen = 0
-            transp.setReadError(err)
-            asyncSpawn transp.function(transp, transp.getRemoteAddress())
-        break
+      let (res, err) = rawIoRecvfrom(transp)
+      if res >= 0:
+        transp.buflen = res
+        asyncSpawn transp.function(transp, transp.getRemoteAddress())
+      else:
+        transp.buflen = 0
+        transp.setReadError(err)
+        asyncSpawn transp.function(transp, transp.getRemoteAddress())
 
   proc writeDatagramLoop(udata: pointer) =
-    var res: int
     doAssert(not isNil(udata))
     let
       transp = cast[DatagramTransport](udata)
@@ -484,27 +552,13 @@ else:
     else:
       if len(transp.queue) > 0:
         let vector = transp.queue.popFirst()
-        while true:
-          if vector.kind == WithAddress:
-            # We only need `Sockaddr_storage` data here, so result discarded.
-            discard transp.setRemoteAddress(vector.address)
-            res = osdefs.sendto(fd, vector.buf, vector.buflen, MSG_NOSIGNAL,
-                                cast[ptr SockAddr](addr transp.waddr),
-                                transp.walen)
-          elif vector.kind == WithoutAddress:
-            res = osdefs.send(fd, vector.buf, vector.buflen, MSG_NOSIGNAL)
-          if res >= 0:
-            if not(vector.writer.finished()):
-              vector.writer.complete()
-          else:
-            let err = osLastError()
-            case err
-            of oserrno.EINTR:
-              continue
-            else:
-              if not(vector.writer.finished()):
-                vector.writer.fail(getTransportOsError(err))
-          break
+        let (res, err) = rawIoSendto(transp, vector)
+        if res >= 0:
+          if not(vector.writer.finished()):
+            vector.writer.complete()
+        else:
+          if not(vector.writer.finished()):
+            vector.writer.fail(getTransportOsError(err))
       else:
         transp.state.incl({WritePaused})
         discard removeWriter2(transp.fd)
