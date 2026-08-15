@@ -19,6 +19,8 @@ when defined(chronosSimulation):
   import std/heapqueue
   import ../chronos
   import ../chronos/config
+  when defined(windows):
+    import ../chronos/osdefs
 
 {.used.}
 
@@ -71,7 +73,17 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeConstruction() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     let disp = newSimDispatcher()
-    if not disp.getIoHandler().isNil:
+    # `getIoHandler()` returns a POSIX `Selector` ref on POSIX
+    # (`.isNil`-checkable) and a Windows `HANDLE` (`distinct uint`, no
+    # `.isNil`) on Windows - both are checked against their own
+    # untouched zero value, the platform-honest form of the same
+    # construction guarantee (RFC 0003 3.5's `selector`/`ioPort` fork).
+    let ioHandlerIsZero =
+      when defined(windows):
+        disp.getIoHandler() == HANDLE(0)
+      else:
+        disp.getIoHandler().isNil
+    if not ioHandlerIsZero:
       outcome = ProbeOutcome(ok: false, msg: "selector was not nil")
     elif not disp.isSimDispatcher():
       outcome = ProbeOutcome(ok: false, msg: "isSimDispatcher() was false")

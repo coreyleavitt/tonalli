@@ -291,6 +291,57 @@ func toException*(v: OSErrorCode): ref OSError = newOSError(v)
   # This helper will allow to use `tryGet()` and raise OSError for
   # Result[T, OSErrorCode] values.
 
+when chronosSimulation:
+  template pollSimSelectBranch(loop: auto, count, hasWakeup: untyped) =
+    ## RFC 0003 3.5's sim iteration, extended at S4 with the sim event
+    ## set: `decideBatch` is asked every iteration, unconditionally,
+    ## mirroring real `poll()`'s OS wait, which always runs regardless
+    ## of what else is already queued. `decideTime` stays gated behind
+    ## already-queued work - S3's deliberate inversion of the RFC's
+    ## literal pseudocode order, which would otherwise let a clock
+    ## advance happen while queued callbacks (freshly expired timers
+    ## among them) are waiting to observe the *old* time. S4 carries
+    ## that same inversion into the new oracle-deferral branch rather
+    ## than reopening it: `decideBatch` returning an empty order with
+    ## queued work present simply falls through to the unchanged
+    ## "drain continues" branch, exactly as an empty `deliverable`
+    ## always has.
+    ##
+    ## `loop` is `auto`, not `PDispatcher`: defined once here, ahead of
+    ## the platform branch below, so both platforms' `poll()` share the
+    ## same sim iteration - each platform's own `pollSelectTouchpoint`
+    ## instantiates it once its own `PDispatcher`/`simState` exist,
+    ## same generic-parameter mechanism as simengine.nim's hooks (RFC
+    ## 0003 3.5). Only the real-mode select/completion wait
+    ## (`pollRealSelectBranch`) differs per platform.
+    hasWakeup = false
+    let deliverable = loop.simState.simDeliverableEvents()
+    let decision = loop.simState.simDecideBatch(deliverable)
+    if decision.order.len > 0:
+      for id in decision.order:
+        let delivery = loop.simState.simTakeDelivery(id)
+        case delivery.kind
+        of SimEventKind.Readiness:
+          loop.callbacks.addLast(delivery.callback)
+        of SimEventKind.Arrival:
+          loop.processThreadCallbacks()
+      count = decision.order.len
+    elif len(loop.callbacks) > 0 or len(loop.idlers) > 0 or len(loop.ticks) > 0:
+      count = 0
+    else:
+      var armed: seq[Moment] = @[]
+      for i in 0 ..< loop.timers.len:
+        if not loop.timers[i].function.function.isNil:
+          armed.add loop.timers[i].finishAt
+      if armed.len > 0:
+        sort(armed)
+        discard loop.simState.simDecideTimeAdvance(armed, curTime)
+        count = 0
+      elif deliverable.len > 0:
+        raiseAssert "oracle deferred all deliverable work with no fallback"
+      else:
+        raiseAssert "deadlock: no runnable work"
+
 when defined(nimdoc):
   type
     PDispatcher* = ref object of PDispatcherBase
@@ -553,6 +604,32 @@ elif defined(windows):
         "simAttachTraceWriter() requires a simulated dispatcher"
       disp.simState.attachTraceWriter(writer)
 
+    proc simMarkReady*(disp: PDispatcher, fd: AsyncFD,
+                        direction: SimReadyDirection): SimEventId =
+      ## Test/script entry point (S4; S10/S11a's transport seam is the
+      ## production source): enqueues a `Readiness` event for `fd`'s
+      ## currently-armed `direction` interest, delivered on a later
+      ## `poll()`'s `decideBatch` per the scripted decision.
+      doAssert isSimDispatcher(disp),
+        "simMarkReady() requires a simulated dispatcher"
+      disp.simState.simMarkReady(int(fd), direction)
+
+    proc simScheduleArrival*(disp: PDispatcher): SimEventId =
+      ## Test/script entry point for the S4 `Arrival` stub - `simProducer`
+      ## (S13) supersedes this with real actor identity and payload.
+      doAssert isSimDispatcher(disp),
+        "simScheduleArrival() requires a simulated dispatcher"
+      disp.simState.simScheduleArrival()
+
+    proc simDecideIo*(disp: PDispatcher, cp: IoOutcomePoint): IoDecision =
+      ## Test/script entry point (S8's decision-budget proof, ahead of
+      ## S10's transport seam, which becomes the production caller):
+      ## resolves one I/O outcome directly against `disp`'s engine state,
+      ## the same call the seam will make once it exists.
+      doAssert isSimDispatcher(disp),
+        "simDecideIo() requires a simulated dispatcher"
+      disp.simState.simDecideIo(cp)
+
   var gDisp{.threadvar.}: PDispatcher ## Global dispatcher
 
   proc setThreadDispatcher*(disp: PDispatcher) {.gcsafe, raises: [].}
@@ -588,6 +665,77 @@ elif defined(windows):
   proc unregister*(fd: AsyncFD) =
     ## Unregisters ``fd``.
     getThreadDispatcher().handles.excl(fd)
+
+  when chronosSimulation:
+    # Registration routing (RFC 0003 3.2 point 2), mirroring the POSIX
+    # branch's `addReader2`/`addWriter2`/`removeReader2`/`removeWriter2`/
+    # `unregister2`. IOCP's completion model has no real-mode readiness-
+    # registration concept - Windows transports arm overlapped I/O
+    # directly and never call these - so unlike `register2` above, there
+    # is no real branch to fall through to. Each proc exists solely to
+    # drive a sim dispatcher's interest table for sim-minted fds; a real
+    # fd barriers through the reserved code exactly as `register2` does,
+    # and a real (non-simulated) dispatcher reaching here is a defect,
+    # not a barrier, because no legitimate caller exists.
+    proc addReader2*(fd: AsyncFD, cb: CallbackFunc,
+                     udata: pointer = nil): Result[void, OSErrorCode] =
+      ## Start watching the sim-minted file descriptor ``fd`` for read
+      ## availability and then call the callback ``cb`` with specified
+      ## argument ``udata``.
+      let loop = getThreadDispatcher()
+      if not simProvenanceGuard(loop, fd):
+        return err(SimBarrierCode)
+      doAssert loop.isSimDispatcher(),
+        "addReader2() is only implemented for a simulated dispatcher on Windows"
+      loop.simState.simSetReaderInterest(int(fd), capturingCallback(cb, udata))
+      ok()
+
+    proc removeReader2*(fd: AsyncFD): Result[void, OSErrorCode] =
+      ## Stop watching the sim-minted file descriptor ``fd`` for read
+      ## availability.
+      let loop = getThreadDispatcher()
+      if not simProvenanceGuard(loop, fd):
+        return err(SimBarrierCode)
+      doAssert loop.isSimDispatcher(),
+        "removeReader2() is only implemented for a simulated dispatcher on Windows"
+      loop.simState.simClearReaderInterest(int(fd))
+      ok()
+
+    proc addWriter2*(fd: AsyncFD, cb: CallbackFunc,
+                     udata: pointer = nil): Result[void, OSErrorCode] =
+      ## Start watching the sim-minted file descriptor ``fd`` for write
+      ## availability and then call the callback ``cb`` with specified
+      ## argument ``udata``.
+      let loop = getThreadDispatcher()
+      if not simProvenanceGuard(loop, fd):
+        return err(SimBarrierCode)
+      doAssert loop.isSimDispatcher(),
+        "addWriter2() is only implemented for a simulated dispatcher on Windows"
+      loop.simState.simSetWriterInterest(int(fd), capturingCallback(cb, udata))
+      ok()
+
+    proc removeWriter2*(fd: AsyncFD): Result[void, OSErrorCode] =
+      ## Stop watching the sim-minted file descriptor ``fd`` for write
+      ## availability.
+      let loop = getThreadDispatcher()
+      if not simProvenanceGuard(loop, fd):
+        return err(SimBarrierCode)
+      doAssert loop.isSimDispatcher(),
+        "removeWriter2() is only implemented for a simulated dispatcher on Windows"
+      loop.simState.simClearWriterInterest(int(fd))
+      ok()
+
+    proc unregister2*(fd: AsyncFD): Result[void, OSErrorCode] =
+      ## Unregister the sim-minted file descriptor ``fd`` from thread's
+      ## dispatcher.
+      let loop = getThreadDispatcher()
+      if not simProvenanceGuard(loop, fd):
+        return err(SimBarrierCode)
+      doAssert loop.isSimDispatcher(),
+        "unregister2() is only implemented for a simulated dispatcher on Windows"
+      loop.simState.simClearReaderInterest(int(fd))
+      loop.simState.simClearWriterInterest(int(fd))
+      ok()
 
   {.push stackTrace: off.}
   proc waitableCallback(param: pointer, timerOrWaitFired: BYTE) {.
@@ -822,27 +970,14 @@ elif defined(windows):
     if res.isErr():
       raise newException(ValueError, osErrorMsg(res.error()))
 
-  proc poll*() {.tags: [NestedPoll, RootEffect].} =
-    let loop = getThreadDispatcher()
-    loop.preparePoll()
-
-    var
-      curTime = Moment.now()
-      curTimeout = DWORD(0)
-      events: array[MaxEventsCount, osdefs.OVERLAPPED_ENTRY]
-
-    when not chronosStrictReentrancy:
-      # On reentrant `poll` calls from `processCallbacks`, e.g., `waitFor`,
-      # complete pending work of the outer `processCallbacks` call.
-      # On non-reentrant `poll` calls, this only removes sentinel element.
-      # Although reentrancy is not allowed in general, we strive not to crash
-      # if it happens, maintaining a semblance of past behavior.
-      loop.processCallbacks()
-
-    # Moving expired timers to `loop.callbacks` and calculate timeout
-    loop.processTimersGetTimeout(curTimeout)
-
-    let networkEventsCount =
+  template pollRealSelectBranch(loop: PDispatcher, curTimeout,
+                                 count, hasWakeup: untyped) =
+    ## The touchpoint's real-mode body, unchanged from before the sim
+    ## branch below was added - split into its own template purely so
+    ## `pollSelectTouchpoint` can select between the two without
+    ## duplicating either.
+    var events: array[MaxEventsCount, osdefs.OVERLAPPED_ENTRY]
+    count =
       if isNil(loop.getQueuedCompletionStatusEx):
         let res = getQueuedCompletionStatus(
           loop.ioPort,
@@ -879,8 +1014,8 @@ elif defined(windows):
         else:
           int(eventsReceived)
 
-    var hasWakeup = false
-    for i in 0 ..< networkEventsCount:
+    hasWakeup = false
+    for i in 0 ..< count:
       if not(isNil(events[i].lpOverlapped)):
         var customOverlapped = PtrCustomOverlapped(events[i].lpOverlapped)
         customOverlapped.data.errCode =
@@ -901,17 +1036,63 @@ elif defined(windows):
       else:
         hasWakeup = true
 
-    if hasWakeup:
-      # Move thread callbacks to the local callback queue - nil in the event
-      # queue means `wake` was called
-      loop.processThreadCallbacks()
+  template pollSelectTouchpoint(loop: PDispatcher, curTimeout,
+                                 count, hasWakeup: untyped) =
+    ## Extension point (RFC 0003 3.5): seeded here so a later simulation
+    ## slice edits this template, never `poll()` itself again. A sim
+    ## dispatcher never reaches `pollRealSelectBranch` and therefore
+    ## never calls `GetQueuedCompletionStatus`/`GetQueuedCompletionStatusEx`
+    ## or touches `loop.ioPort`.
+    when chronosSimulation:
+      if loop.isSimDispatcher():
+        pollSimSelectBranch(loop, count, hasWakeup)
+      else:
+        pollRealSelectBranch(loop, curTimeout, count, hasWakeup)
+    else:
+      pollRealSelectBranch(loop, curTimeout, count, hasWakeup)
+
+  template pollWakeupTouchpoint(loop: PDispatcher, hasWakeup: untyped) =
+    ## Extension point (RFC 0003 3.5), same discipline as
+    ## `pollSelectTouchpoint` above. Unlike the POSIX branch there is no
+    ## wakeup fd to drain first: `wake()`'s real-mode branch posts
+    ## directly to the IOCP port, and the posted completion (a nil
+    ## `lpOverlapped`) is already consumed by `pollRealSelectBranch`'s
+    ## `GetQueuedCompletionStatus{,Ex}` call above.
+    when hasThreadSupport:
+      if hasWakeup:
+        loop.processThreadCallbacks()
+
+  proc poll*() {.tags: [NestedPoll, RootEffect].} =
+    let loop = getThreadDispatcher()
+    loop.preparePoll()
+
+    var curTime = Moment.now()
+    var curTimeout = DWORD(0)
+
+    when not chronosStrictReentrancy:
+      # On reentrant `poll` calls from `processCallbacks`, e.g., `waitFor`,
+      # complete pending work of the outer `processCallbacks` call.
+      # On non-reentrant `poll` calls, this only removes sentinel element.
+      # Although reentrancy is not allowed in general, we strive not to crash
+      # if it happens, maintaining a semblance of past behavior.
+      loop.processCallbacks()
+
+    # Moving expired timers to `loop.callbacks` and calculate timeout
+    loop.processTimersGetTimeout(curTimeout)
+
+    # Processing IO descriptors and all hardware events.
+    var count: int
+    var hasWakeup = false
+    pollSelectTouchpoint(loop, curTimeout, count, hasWakeup)
+
+    pollWakeupTouchpoint(loop, hasWakeup)
 
     # Moving expired timers to `loop.callbacks`.
     loop.processTimers()
 
     # We move idle callbacks to `loop.callbacks` only if there no pending
     # network events.
-    if networkEventsCount == 0:
+    if count == 0:
       loop.processIdlers()
 
     # We move tick callbacks to `loop.callbacks` always.
@@ -1553,49 +1734,6 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       # since we don't have to poll as often under load and we can
       # batch more work in a single event loop iteration.
       loop.keys.setLen(min(loop.keys.len * 2, chronosEventsCount))
-
-  when chronosSimulation:
-    template pollSimSelectBranch(loop: PDispatcher, count, hasWakeup: untyped) =
-      ## RFC 0003 3.5's sim iteration, extended at S4 with the sim event
-      ## set: `decideBatch` is asked every iteration, unconditionally,
-      ## mirroring real `poll()`'s `select()` call, which always runs
-      ## regardless of what else is already queued. `decideTime` stays
-      ## gated behind already-queued work - S3's deliberate inversion of
-      ## the RFC's literal pseudocode order, which would otherwise let a
-      ## clock advance happen while queued callbacks (freshly expired
-      ## timers among them) are waiting to observe the *old* time. S4
-      ## carries that same inversion into the new oracle-deferral branch
-      ## rather than reopening it: `decideBatch` returning an empty
-      ## order with queued work present simply falls through to the
-      ## unchanged "drain continues" branch, exactly as an empty
-      ## `deliverable` always has.
-      hasWakeup = false
-      let deliverable = loop.simState.simDeliverableEvents()
-      let decision = loop.simState.simDecideBatch(deliverable)
-      if decision.order.len > 0:
-        for id in decision.order:
-          let delivery = loop.simState.simTakeDelivery(id)
-          case delivery.kind
-          of SimEventKind.Readiness:
-            loop.callbacks.addLast(delivery.callback)
-          of SimEventKind.Arrival:
-            loop.processThreadCallbacks()
-        count = decision.order.len
-      elif len(loop.callbacks) > 0 or len(loop.idlers) > 0 or len(loop.ticks) > 0:
-        count = 0
-      else:
-        var armed: seq[Moment] = @[]
-        for i in 0 ..< loop.timers.len:
-          if not loop.timers[i].function.function.isNil:
-            armed.add loop.timers[i].finishAt
-        if armed.len > 0:
-          sort(armed)
-          discard loop.simState.simDecideTimeAdvance(armed, curTime)
-          count = 0
-        elif deliverable.len > 0:
-          raiseAssert "oracle deferred all deliverable work with no fallback"
-        else:
-          raiseAssert "deadlock: no runnable work"
 
   template pollSelectTouchpoint(loop: PDispatcher, curTimeout,
                                  count, hasWakeup: untyped) =

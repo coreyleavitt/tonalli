@@ -172,20 +172,28 @@ task check_windows, "Windows parity: semantic-check the library surface (fork is
   exec nimc & " check " & winCfg &
     " -d:chronosSimulation -d:chronosFutureTracking --threads:on chronos/simulation.nim"
 
-  # (c) sim test files, scoped to what checks cleanly on Windows today.
-  # testsimengine/testsimloop/testsimulation (and testall, which
-  # imports them) drive the POSIX-only readiness registration surface
-  # (addReader2/addWriter2 have no Windows analog - IOCP has no
-  # per-direction interest registration to mirror it onto) and a
-  # POSIX-shaped construction probe (`getIoHandler().isNil`, valid for
-  # a `Selector` ref, not a Windows `HANDLE`). Both are the sim poll
-  # loop's territory (fork issue #20 gap 2), not this slice's.
+  # (c) sim test files. The RFC 0003 S3/S4 sim poll loop (fork issue
+  # #20 gap 2) is now ported onto the Windows (IOCP) branch: the
+  # touchpoint-template split shares its sim-mode iteration with
+  # POSIX, and the registration surface / dispatcher-level sim
+  # wrappers (addReader2/addWriter2/removeReader2/removeWriter2/
+  # unregister2/simMarkReady/simScheduleArrival/simDecideIo) exist for
+  # sim-minted fds, so every sim leaf test - and testall, which imports
+  # them - now checks clean.
   let simLeafTests = [
-    "tests/testsimclock", "tests/testsimoracle", "tests/testsimtrace",
+    "tests/testsimclock", "tests/testsimengine", "tests/testsimloop",
+    "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
   ]
   for t in simLeafTests:
     exec nimc & " check " & winCfg &
       " -d:chronosSimulation -d:chronosFutureTracking --threads:on " & t & ".nim"
+
+  # (d) testall, define-on: exercises the sim leaf suites together with
+  # the rest of the library in one binary. Windows transport slices
+  # (S10+) are not built yet, but nothing in testall reaches past the
+  # sim poll loop's territory, so this checks clean as of this slice.
+  exec nimc & " check " & winCfg &
+    " -d:chronosSimulation -d:chronosFutureTracking --threads:on tests/testall.nim"
 
 task test_libbacktrace, "test with libbacktrace":
   if platform != "x86":
