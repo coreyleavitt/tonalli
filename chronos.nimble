@@ -141,6 +141,7 @@ task test_simulation, "Run the deterministic simulation suites":
     let simLeafTests = [
       "tests/testsimclock", "tests/testsimengine", "tests/testsimloop",
       "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
+      "tests/testsimstream",
     ]
 
     run simArgs & " --mm:refc", "tests/testall"
@@ -179,19 +180,25 @@ task check_windows, "Windows parity: semantic-check the library surface (fork is
   # wrappers (addReader2/addWriter2/removeReader2/removeWriter2/
   # unregister2/simMarkReady/simScheduleArrival/simDecideIo) exist for
   # sim-minted fds, so every sim leaf test - and testall, which imports
-  # them - now checks clean.
+  # them - now checks clean. `testsimstream` (S10) guards its own
+  # probes out under `defined(windows)`: `fastWrite`'s eager path is a
+  # POSIX-only no-op by design (section 4's Windows IOCP-emulation
+  # non-goal), so the file still semantic-checks here even though its
+  # test bodies compile away to nothing on this branch.
   let simLeafTests = [
     "tests/testsimclock", "tests/testsimengine", "tests/testsimloop",
     "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
+    "tests/testsimstream",
   ]
   for t in simLeafTests:
     exec nimc & " check " & winCfg &
       " -d:chronosSimulation -d:chronosFutureTracking --threads:on " & t & ".nim"
 
   # (d) testall, define-on: exercises the sim leaf suites together with
-  # the rest of the library in one binary. Windows transport slices
-  # (S10+) are not built yet, but nothing in testall reaches past the
-  # sim poll loop's territory, so this checks clean as of this slice.
+  # the rest of the library in one binary. The S10 stream I/O seam is
+  # POSIX-only (`chronos/transports/stream.nim`'s Windows branch is
+  # untouched - see `testsimstream`'s comment above), so this checks
+  # clean as of this slice.
   exec nimc & " check " & winCfg &
     " -d:chronosSimulation -d:chronosFutureTracking --threads:on tests/testall.nim"
 

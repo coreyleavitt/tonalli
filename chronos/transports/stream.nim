@@ -30,6 +30,15 @@ when defined(windows):
     # deliberately excludes it from its own export surface so it can't
     # widen the public surface through `import chronos`.
 
+when chronosSimulation:
+  import ../internal/simengine
+    # RFC 0003 3.2 N4's injectable I/O primitive needs `IoOutcomePoint`/
+    # `IoDecision`/`SimIoOp`/`SimFault`/`SimEventId`/`SimEndpointId`
+    # directly - `asyncloop.nim` re-exports `asyncengine` (for
+    # `simDecideIo`/`isSimDispatcher`/`getThreadDispatcher`, already
+    # reachable through the unconditional `asyncloop` import above) but
+    # `asyncengine.nim` itself only imports `simengine`, never exports it.
+
 export results
 
 type
@@ -1340,6 +1349,89 @@ else:
     # These sometimes have the same value!
     (err == oserrno.EWOULDBLOCK) or (err == oserrno.EAGAIN)
 
+  when chronosSimulation:
+    proc simFaultToError(fault: SimFault): OSErrorCode {.inline.} =
+      ## Maps a scripted `SimFault` onto the real `OSErrorCode` the
+      ## error-classification helpers above already recognize, so a
+      ## sim-mode fault flows through the exact same
+      ## `isConnResetError`/`setReadError`/`handleError` logic a real
+      ## error would (RFC 0003 3.2 N4). Only `Reset` exists in this
+      ## slice (S11b/S12b add the rest); each future member gets its
+      ## own arm here rather than an `else`, so a new `SimFault` forces
+      ## a compile error here instead of silently falling through.
+      case fault
+      of SimFault.Reset: oserrno.ECONNRESET
+
+    proc simRawIo(transp: StreamTransport, op: SimIoOp, maxBytes: int):
+        tuple[res: int, err: OSErrorCode] {.inline.} =
+      ## The sim branch of the injectable I/O primitive (RFC 0003 3.2
+      ## N4): asks `simDecideIo` synchronously and translates its
+      ## answer into the same `(res, err)` shape a real syscall plus
+      ## `osLastError()` would have produced, so every downstream
+      ## caller's existing error-classification logic runs unmodified.
+      ## `trigger` is `SimEventId(0)`: `readIntoBuffer`/`writerCb` are
+      ## reached only via a delivered `Readiness` event, and S11a is
+      ## the slice that gives sim endpoints a production path into this
+      ## code and can thread the delivering event's real id through;
+      ## `fastWrite`'s eager call has no delivered event at all (RFC
+      ## 0003 3.2's fastWrite passage) and never will. `faults` is
+      ## always empty: S10 has no live endpoint to carry a fault menu
+      ## (S11a adds endpoints, S11b/S12b add faults).
+      let decision = getThreadDispatcher().simDecideIo(IoOutcomePoint(
+        trigger: SimEventId(0), endpoint: SimEndpointId(uint32(transp.fd)),
+        op: op, maxBytes: maxBytes, faults: {}))
+      case decision.outcome
+      of SimIoOutcome.Ok: (decision.bytes, OSErrorCode(0))
+      of SimIoOutcome.Fault: (-1, simFaultToError(decision.fault))
+
+  proc rawIoRead(transp: StreamTransport, data: pointer, size: int):
+      tuple[res: int, err: OSErrorCode] {.inline.} =
+    ## The injectable I/O primitive's read side (RFC 0003 3.2 N4): the
+    ## sole `recv`/`read` call site. Real mode is exactly the syscall
+    ## `readIntoBuffer` used to issue directly; under simulation, no fd
+    ## is touched at all - `simRawIo` answers instead.
+    when chronosSimulation:
+      if getThreadDispatcher().isSimDispatcher():
+        return simRawIo(transp, SimIoOp.Read, size)
+    let fd = SocketHandle(transp.fd)
+    let res =
+      case transp.kind
+      of TransportKind.Socket:
+        handleEintr(osdefs.recv(fd, data, size, cint(0)))
+      of TransportKind.Pipe:
+        handleEintr(osdefs.read(cint(fd), data, size))
+      else:
+        raiseAssert "Unsupported transport " & $transp.kind
+    if res < 0: (res, osLastError()) else: (res, OSErrorCode(0))
+
+  proc rawIoWrite(transp: StreamTransport, data: pointer, size: int):
+      tuple[res: int, err: OSErrorCode] {.inline.} =
+    ## The injectable I/O primitive's write side (RFC 0003 3.2 N4): the
+    ## shared `send`/`write` call site behind both `writerCb`'s queued
+    ## `DataBuffer` path and `fastWrite`'s eager path - the two RFC
+    ## 0003 3.2 names as routing "through the same primitive". Real
+    ## mode is exactly the syscall each used to issue directly; under
+    ## simulation, no fd is touched - `simRawIo` answers instead,
+    ## inline, with no delivered event required (RFC 0003 3.2's
+    ## fastWrite passage). `sendfile`'s `DataFile` vectors are not
+    ## seamed: their file-descriptor-plus-offset shape does not fit
+    ## this primitive's `(data, size)` contract, and no sim endpoint
+    ## can carry a file source in this or any RFC 0003 slice, so a
+    ## `DataFile` write stays real-syscall-only in every build.
+    when chronosSimulation:
+      if getThreadDispatcher().isSimDispatcher():
+        return simRawIo(transp, SimIoOp.Write, size)
+    let fd = SocketHandle(transp.fd)
+    let res =
+      case transp.kind
+      of TransportKind.Socket:
+        handleEintr(osdefs.send(fd, data, size, 0))
+      of TransportKind.Pipe:
+        handleEintr(osdefs.write(cint(fd), data, size))
+      else:
+        raiseAssert "Unsupported transport kind: " & $transp.kind
+    if res < 0: (res, osLastError()) else: (res, OSErrorCode(0))
+
   proc writerCb(udata: pointer) =
     if isNil(udata):
       # TODO this is an if rather than an assert for historical reasons:
@@ -1365,8 +1457,7 @@ else:
     # * EWOULDBLOCK is returned and we need to wait for a new notification
 
     while len(transp.queue) > 0:
-      template handleError() =
-        let err = osLastError()
+      template handleError(err: OSErrorCode) =
         if err == oserrno.EINTR:
           # Signal happened while writing - try again with all data
           transp.queue.addFirst(vector)
@@ -1393,13 +1484,7 @@ else:
       var vector = transp.queue.popFirst()
       case vector.kind
       of VectorKind.DataBuffer:
-        let res =
-          case transp.kind
-          of TransportKind.Socket:
-            handleEintr(osdefs.send(fd, vector.buf, vector.buflen, 0))
-          of TransportKind.Pipe:
-            handleEintr(osdefs.write(cint(fd), vector.buf, vector.buflen))
-          else: raiseAssert "Unsupported transport kind: " & $transp.kind
+        let (res, err) = rawIoWrite(transp, vector.buf, vector.buflen)
 
         if res >= 0:
           if vector.buflen == res:
@@ -1409,9 +1494,10 @@ else:
             vector.shiftVectorBuffer(res)
             transp.queue.addFirst(vector) # Try again with rest of data
         else:
-          handleError()
+          handleError(err)
 
       of VectorKind.DataFile:
+        # Not seamed - see `rawIoWrite`'s docstring.
         var nbytes = cast[int](vector.buf)
         let res = sendfile(int(fd), cast[int](vector.buflen),
                            int(vector.offset), nbytes)
@@ -1429,7 +1515,7 @@ else:
             transp.queue.addFirst(vector)
         else:
           vector.shiftVectorFile(nbytes)
-          handleError()
+          handleError(osLastError())
 
     # Nothing left in the queue - no need for further write notifications
     # All writers are already scheduled, so its impossible to notify about an
@@ -1440,7 +1526,6 @@ else:
   proc readIntoBuffer(transp: StreamTransport): bool =
     # Try to read some data from the stream, returning true if there was progress
     let
-      fd = SocketHandle(transp.fd)
       (data, size) =
         # If there's a direct buffer available, use it for large reads
         if (transp.buffer.len() == 0) and
@@ -1449,14 +1534,7 @@ else:
         else:
           transp.buffer.reserve()
 
-      res =
-        case transp.kind
-        of TransportKind.Socket:
-          handleEintr(osdefs.recv(fd, data, size, cint(0)))
-        of TransportKind.Pipe:
-          handleEintr(osdefs.read(cint(fd), data, size))
-        else:
-          raiseAssert "Unsupported transport " & $transp.kind
+      (res, err) = rawIoRead(transp, data, size)
 
       bytes = max(0, res)
 
@@ -1467,7 +1545,6 @@ else:
       transp.buffer.commit(bytes)
 
     if res < 0:
-      let err = osLastError()
       if isWouldBlockError(err):
         false # no progress!
       elif isConnResetError(err):
@@ -2417,20 +2494,12 @@ template fastWrite(transp: auto, pbytes: var ptr byte, rbytes: var int,
           retFuture.complete(nbytes)
           return retFuture
 
-        let res =
-          case transp.kind
-          of TransportKind.Socket:
-            handleEintr(osdefs.send(SocketHandle(transp.fd), pbytes, rbytes, 0))
-          of TransportKind.Pipe:
-            handleEintr(osdefs.write(cint(transp.fd), pbytes, rbytes))
-          else:
-            raiseAssert "Unsupported transport kind: " & $transp.kind
+        let (res, err) = rawIoWrite(transp, pbytes, rbytes)
 
         if res > 0:
           pbytes = pbytes.offset(res)
           rbytes -= res
         else:
-          let err = osLastError()
           if isWouldBlockError(err):
             break # No bytes written, add to queue
           elif isConnResetError(err):
