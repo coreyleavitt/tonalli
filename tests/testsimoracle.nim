@@ -142,6 +142,103 @@ suite "sim decideIo and IoOutcomePoint":
     except AssertionDefect as exc:
       check "scripted io failure" in exc.msg
 
+# --- S11b: decideIo can now complete partially. The engine validates the
+# byte count an oracle returns the same way it already validates a
+# decideBatch id or a decideTime advance: an out-of-range answer is a
+# structured protocol violation, never a silent overrun or a spurious EOF.
+
+suite "sim decideIo partial-outcome validation":
+  test "an Ok decision exceeding maxBytes is a protocol violation":
+    let oracle = newSimOracle(defaultDecideBatch,
+      proc(cp: IoOutcomePoint): Result[IoDecision, SimOracleError]
+          {.gcsafe, raises: [].} =
+        ok(IoDecision(outcome: SimIoOutcome.Ok, bytes: cp.maxBytes + 1)),
+      defaultDecideTime)
+    let state = newSimEngineState(oracle = oracle)
+    let cp = IoOutcomePoint(trigger: SimEventId(1'u64),
+      endpoint: SimEndpointId(0'u32), op: SimIoOp.Read, maxBytes: 16,
+      faults: {})
+    try:
+      discard state.simDecideIo(cp)
+      check false
+    except AssertionDefect as exc:
+      check "17" in exc.msg and "16" in exc.msg
+
+  test "a zero-byte Ok decision against a non-empty request is a protocol violation":
+    ## Downstream stream code treats a zero-byte read/write as EOF
+    ## (`readIntoBuffer`'s `res == 0` convention); a decideIo answer of 0
+    ## bytes against a positive `maxBytes` would silently fabricate an
+    ## EOF that never happened, so the engine rejects it here instead.
+    let oracle = newSimOracle(defaultDecideBatch,
+      proc(cp: IoOutcomePoint): Result[IoDecision, SimOracleError]
+          {.gcsafe, raises: [].} =
+        ok(IoDecision(outcome: SimIoOutcome.Ok, bytes: 0)),
+      defaultDecideTime)
+    let state = newSimEngineState(oracle = oracle)
+    let cp = IoOutcomePoint(trigger: SimEventId(1'u64),
+      endpoint: SimEndpointId(0'u32), op: SimIoOp.Write, maxBytes: 8,
+      faults: {})
+    try:
+      discard state.simDecideIo(cp)
+      check false
+    except AssertionDefect as exc:
+      check "0" in exc.msg and "8" in exc.msg
+
+  test "a scripted oracle can complete an Ok decision partially":
+    let oracle = newSimOracle(defaultDecideBatch,
+      proc(cp: IoOutcomePoint): Result[IoDecision, SimOracleError]
+          {.gcsafe, raises: [].} =
+        ok(IoDecision(outcome: SimIoOutcome.Ok, bytes: cp.maxBytes div 2)),
+      defaultDecideTime)
+    let state = newSimEngineState(oracle = oracle)
+    let cp = IoOutcomePoint(trigger: SimEventId(1'u64),
+      endpoint: SimEndpointId(0'u32), op: SimIoOp.Read, maxBytes: 10,
+      faults: {})
+    let decision = state.simDecideIo(cp)
+    check decision.outcome == SimIoOutcome.Ok
+    check decision.bytes == 5
+
+suite "sim RandomOracle partial I/O":
+  test "RandomOracle's decideIo answers stay within 1..maxBytes":
+    for seed in 0'u64 .. 50'u64:
+      let state = newSimEngineState(oracle = RandomOracle(seed))
+      let cp = IoOutcomePoint(trigger: SimEventId(1'u64),
+        endpoint: SimEndpointId(0'u32), op: SimIoOp.Read, maxBytes: 32,
+        faults: {})
+      let decision = state.simDecideIo(cp)
+      check decision.outcome == SimIoOutcome.Ok
+      check decision.bytes >= 1
+      check decision.bytes <= 32
+
+  test "RandomOracle's decideIo picks partial completions for some seeds":
+    var sawPartial = false
+    var sawFull = false
+    for seed in 0'u64 .. 50'u64:
+      let state = newSimEngineState(oracle = RandomOracle(seed))
+      let cp = IoOutcomePoint(trigger: SimEventId(1'u64),
+        endpoint: SimEndpointId(0'u32), op: SimIoOp.Write, maxBytes: 32,
+        faults: {})
+      let decision = state.simDecideIo(cp)
+      if decision.bytes < 32: sawPartial = true
+      if decision.bytes == 32: sawFull = true
+    check sawPartial
+    check sawFull
+
+  test "RandomOracle's decideIo is deterministic in the seed":
+    let cp = IoOutcomePoint(trigger: SimEventId(1'u64),
+      endpoint: SimEndpointId(0'u32), op: SimIoOp.Read, maxBytes: 32,
+      faults: {})
+    let stateA = newSimEngineState(oracle = RandomOracle(99'u64))
+    let stateB = newSimEngineState(oracle = RandomOracle(99'u64))
+    check stateA.simDecideIo(cp).bytes == stateB.simDecideIo(cp).bytes
+
+  test "RandomOracle's decideIo always completes fully when maxBytes is 1":
+    let state = newSimEngineState(oracle = RandomOracle(5'u64))
+    let cp = IoOutcomePoint(trigger: SimEventId(1'u64),
+      endpoint: SimEndpointId(0'u32), op: SimIoOp.Read, maxBytes: 1,
+      faults: {})
+    check state.simDecideIo(cp).bytes == 1
+
 # --- S6: the interface freeze gate. A structurally different consumer -
 # a priority-permutation oracle (the PCT primitive, Burckhardt et al.) -
 # built entirely from typed choice-point data, never touching asyncengine

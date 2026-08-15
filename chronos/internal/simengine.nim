@@ -272,10 +272,14 @@ proc RandomOracle*(seed: uint64): SimOracle =
   ## A seeded oracle (RFC 0003 3.3, 3.7): the same seed produces the
   ## same decisions on every run. `decideBatch` shuffles `deliverable`
   ## into a random legal delivery order, the sim analogue of N2's
-  ## OS-chosen cross-fd batch order; `decideTime` uses the same
+  ## OS-chosen cross-fd batch order; `decideIo` draws a uniform size in
+  ## `1..maxBytes` (S11b), the sim analogue of a real read/write that
+  ## may complete short - full completion is one of the possible draws,
+  ## not a separate case; `decideTime` uses the same
   ## earliest-armed-deadline rule as `defaultSimOracle` - randomizing
   ## among armed deadlines is exploration-oracle territory (issue #10),
-  ## out of scope here.
+  ## out of scope here. Faults are never synthesized here: the faults
+  ## menu is empty until S12b (datagram-side).
   var rng = initSplitMix64(seed)
   proc decideBatch(cp: SelectBatchPoint):
       Result[BatchDecision, SimOracleError] {.gcsafe, raises: [].} =
@@ -283,7 +287,13 @@ proc RandomOracle*(seed: uint64): SimOracle =
     for i, ev in cp.deliverable:
       ids[i] = ev.id
     ok(BatchDecision(order: shuffled(rng, ids)))
-  newSimOracle(decideBatch, defaultDecideIo, defaultDecideTime)
+  proc decideIo(cp: IoOutcomePoint):
+      Result[IoDecision, SimOracleError] {.gcsafe, raises: [].} =
+    let bytes =
+      if cp.maxBytes <= 1: cp.maxBytes
+      else: 1 + int(rng.next() mod uint64(cp.maxBytes))
+    ok(IoDecision(outcome: SimIoOutcome.Ok, bytes: bytes))
+  newSimOracle(decideBatch, decideIo, defaultDecideTime)
 
 proc ReplayOracle*(path: string): SimOracle
                    {.raises: [IOError, SimTraceReadError].} =
@@ -491,6 +501,13 @@ proc simDecideIo*(state: SimEngineState, cp: IoOutcomePoint): IoDecision =
   if decision.isErr:
     raiseAssert "simulation oracle error: " & decision.error.msg
   result = decision.get()
+  if result.outcome == SimIoOutcome.Ok:
+    let minBytes = if cp.maxBytes == 0: 0 else: 1
+    if result.bytes < minBytes or result.bytes > cp.maxBytes:
+      raiseAssert "simulation I/O violation: decideIo returned " &
+        $result.bytes & " bytes, outside the legal " & $minBytes & ".." &
+        $cp.maxBytes & " range for this request (a 0-byte answer against " &
+        "a positive request would be read downstream as EOF)"
   if not state.traceWriter.isNil:
     var faultNames = newSeq[string]()
     for f in cp.faults:
@@ -701,6 +718,14 @@ proc simStreamIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
     case decision.outcome
     of SimIoOutcome.Ok:
       state.simStreamTake(fd, decision.bytes, data)
+      if decision.bytes < avail:
+        # A partial read: bytes remain queued in `inbound`. Real sockets
+        # stay level-triggered (readerCb's own comment: "another callback
+        # will happen automatically"), driven by the OS selector
+        # re-noticing unread data on its own; the sim engine has no such
+        # selector, so it has to re-arm the reader itself or the leftover
+        # bytes wait for an event that will now never come.
+        state.simMarkReadyOnce(fd, SimReadyDirection.Read)
       (decision.bytes, OSErrorCode(0))
     of SimIoOutcome.Fault:
       (-1, simFaultToError(decision.fault))

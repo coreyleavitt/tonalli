@@ -29,6 +29,7 @@
 when defined(chronosSimulation) and compileOption("threads") and
     not defined(windows):
   import unittest2
+  import results
   import ../chronos
   import ../chronos/simulation
 
@@ -219,6 +220,104 @@ when defined(chronosSimulation) and compileOption("threads") and
     server.stop()
     await server.closeWait()
 
+  proc chunkedIoOracle(fragment: int): SimOracle =
+    ## S11b's scripted partial-completion oracle: every read and write
+    ## completes at `fragment` bytes at a time (clamped to what was
+    ## actually requested), the sim analogue of a byte stream that never
+    ## delivers a whole message in one call. Faults stay empty - that
+    ## menu is S12b's, datagram-side.
+    proc decideIo(cp: IoOutcomePoint): Result[IoDecision, SimOracleError]
+        {.gcsafe, raises: [].} =
+      ok(IoDecision(outcome: SimIoOutcome.Ok, bytes: min(cp.maxBytes, fragment)))
+    newSimOracle(defaultDecideBatch, decideIo, defaultDecideTime)
+
+  proc runShortReadEcho(client, server: StreamTransport):
+      Future[seq[string]] {.async: (raises: [TransportError, CancelledError]).} =
+    ## Unlike `runPipelinedEcho`'s server loop, which reads with
+    ## `readExactly`, this one loops a single-shot `readOnce` itself
+    ## until it has the whole chunk - proving short reads are handled
+    ## correctly one layer below `readExactly`'s own looping, directly
+    ## against the endpoint's leftover-byte accounting (RFC 0003 6,
+    ## S11b).
+    proc serverLoop() {.async: (raises: [TransportError, CancelledError]).} =
+      for _ in messages:
+        var buf = newSeq[byte](chunkSize)
+        var got = 0
+        while got < chunkSize:
+          got += await server.readOnce(addr buf[got], chunkSize - got)
+        discard await server.write(buf)
+    let serverFut = serverLoop()
+
+    var writeFuts: seq[Future[int].Raising([TransportError, CancelledError])]
+    for m in messages:
+      writeFuts.add client.write(m)
+    for f in writeFuts:
+      discard await f
+
+    result = @[]
+    for _ in messages:
+      var buf = newSeq[byte](chunkSize)
+      await client.readExactly(addr buf[0], chunkSize)
+      result.add toStr(buf)
+    await serverFut
+
+  proc probeShortReadEchoUnderPartialCompletions() {.thread.} =
+    var outcome = ProbeOutcome(ok: true)
+    setThreadDispatcher(newSimDispatcher(oracle = chunkedIoOracle(3)))
+
+    proc body() {.async: (raises: [TransportError, CancelledError]).} =
+      let net = simNet()
+      let address = initTAddress("127.0.0.1:0")
+      let server = net.listenStream(address)
+      let acceptFut = server.accept()
+      let client = await net.connectStream(address)
+      let serverTransp = await acceptFut
+      let echoes = await runShortReadEcho(client, serverTransp)
+      if echoes != @messages:
+        outcome = ProbeOutcome(ok: false,
+          msg: "short-read echo mismatch under partial completions: got " &
+            $echoes & ", expected " & $(@messages))
+      await client.closeWait()
+      await serverTransp.closeWait()
+
+    try:
+      waitFor body()
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false, msg: "unexpected raise: " & exc.msg)
+    probeChan.send(outcome)
+
+  proc probeSweepPipelinedEchoUnderPartialCompletions() {.thread.} =
+    ## Sweep integration (RFC 0003 6, S11b): `runPipelinedEcho` already
+    ## reads with `readExactly`, so it needs no fix - this proves
+    ## partial completions are reachable through the default seeded
+    ## oracle every `simulate()`/`sweepSeeds()` caller gets, not only
+    ## through a hand-scripted one, and that the existing S11a fixture
+    ## already tolerates them.
+    var outcome = ProbeOutcome(ok: true)
+    try:
+      let outcomes = sweepSeeds(0'u64 .. 15'u64):
+        let net = simNet()
+        let address = initTAddress("127.0.0.1:0")
+        let server = net.listenStream(address)
+        let acceptFut = server.accept()
+        let client = await net.connectStream(address)
+        let serverTransp = await acceptFut
+        let echoes = await runPipelinedEcho(client, serverTransp)
+        if echoes != @messages:
+          raise newException(ValueError,
+            "sweep echo mismatch: got " & $echoes & ", expected " &
+              $(@messages))
+        await client.closeWait()
+        await serverTransp.closeWait()
+      for o in outcomes:
+        if not o.passed:
+          outcome = ProbeOutcome(ok: false,
+            msg: "seed " & $o.seed & " failed (" & $o.kind & "): " & o.msg)
+          break
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false, msg: "unexpected raise: " & exc.msg)
+    probeChan.send(outcome)
+
   suite "SimNet stream endpoints":
     test "listenStream/connectStream mint a connected pair; pipelined echo passes under sim":
       let outcome = runProbe(probeSimPipelinedEcho)
@@ -243,3 +342,13 @@ when defined(chronosSimulation) and compileOption("threads") and
     test "the same pipelined echo body observes identical outcomes over a real transport pair":
       let echoes = waitFor realPipelinedEcho()
       check echoes == @messages
+
+    test "short reads are handled correctly under a partial-completion oracle":
+      let outcome = runProbe(probeShortReadEchoUnderPartialCompletions)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "pipelined echo passes under RandomOracle sweeps, partial completions included":
+      let outcome = runProbe(probeSweepPipelinedEchoUnderPartialCompletions)
+      checkpoint outcome.msg
+      check outcome.ok

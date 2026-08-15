@@ -13,6 +13,7 @@
 
 import unittest2
 import ../chronos/oserrno
+import ../chronos/futures
 import ../chronos/internal/simengine
 
 when defined(chronosSimulation):
@@ -191,3 +192,59 @@ when defined(chronosSimulation) and compileOption("threads"):
         let outcome = runProbe(probeSignalBarrier)
         checkpoint outcome.msg
         check outcome.ok
+
+## S11b (RFC 0003 6): `simMintStreamPair`/`simStreamIo`/`simDeliverableEvents`
+## are platform-neutral `SimEngineState` primitives (unlike
+## `chronos/transports/stream.nim`'s POSIX-only `simStreamPair` wiring), so
+## these run against a bare engine state, no dispatcher or thread needed -
+## the same style `tests/testsimoracle.nim` already uses for `decideIo`.
+proc dummyReaderCb(arg: pointer) {.gcsafe, raises: [].} =
+  discard
+
+suite "SimNet endpoint partial reads":
+  test "a partial read leaves the reader armed for the leftover bytes":
+    let state = newSimEngineState()
+    let (fdA, fdB) = state.simMintStreamPair()
+    state.simSetReaderInterest(fdB, bareCallback(dummyReaderCb))
+
+    var payload = @[1'u8, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    let (wres, werr) = state.simStreamIo(fdA, SimIoOp.Write, addr payload[0],
+                                          payload.len)
+    check wres == 10
+    check werr == OSErrorCode(0)
+
+    let delivered = state.simDeliverableEvents()
+    check delivered.len == 1
+    discard state.simTakeDelivery(delivered[0].id)
+
+    var buf = newSeq[byte](10)
+    let (rres, rerr) = state.simStreamIo(fdB, SimIoOp.Read, addr buf[0], 3)
+    check rres == 3
+    check rerr == OSErrorCode(0)
+
+    # 7 bytes remain queued: the reader must be re-armed so a later
+    # decision can deliver them, not left waiting for an event that will
+    # now never come.
+    let after = state.simDeliverableEvents()
+    check after.len == 1
+
+  test "a read draining everything available does not spuriously re-arm the reader":
+    let state = newSimEngineState()
+    let (fdA, fdB) = state.simMintStreamPair()
+    state.simSetReaderInterest(fdB, bareCallback(dummyReaderCb))
+
+    var payload = @[1'u8, 2, 3, 4, 5]
+    let (wres, werr) = state.simStreamIo(fdA, SimIoOp.Write, addr payload[0],
+                                          payload.len)
+    check wres == 5
+    check werr == OSErrorCode(0)
+
+    let delivered = state.simDeliverableEvents()
+    discard state.simTakeDelivery(delivered[0].id)
+
+    var buf = newSeq[byte](5)
+    let (rres, rerr) = state.simStreamIo(fdB, SimIoOp.Read, addr buf[0], 5)
+    check rres == 5
+    check rerr == OSErrorCode(0)
+
+    check state.simDeliverableEvents().len == 0
