@@ -150,11 +150,19 @@ when not defined(windows):
     await fut
 
   proc connectStream*(net: SimNet, address: TransportAddress):
-      Future[StreamTransport] {.async: (raises: [TransportError, CancelledError]).} =
+      Future[StreamTransport] {.async: (raises: [
+        TransportError, CancelledError, SimBarrierError]).} =
     ## Mints an already-connected pair (RFC 0003 3.2's sim-native
     ## connection setup) and returns the client side, handing the
     ## server side to `address`'s listener - directly to a waiting
     ## `accept()` if one is already parked, `pending` otherwise.
+    ## Widened for `SimBarrierError`: this always runs under
+    ## `-d:chronosSimulation` (fork issue #19's typed sim error channel;
+    ## `simStreamPair`, `chronos/transports/stream.nim`, raises it
+    ## directly, though this slice proves it unreachable here - the
+    ## dispatcher is already proven simulated by `simNet()`'s own
+    ## `doAssert`, and this module mints no real fd for it to barrier
+    ## against).
     let server = simNetListeners.getOrDefault(address)
     doAssert not server.isNil,
       "connectStream(): no listener at " & $address
@@ -170,13 +178,16 @@ when not defined(windows):
                       cbprocA, cbprocB: DatagramCallback,
                       udataA: pointer = nil, udataB: pointer = nil
                      ): tuple[a, b: DatagramTransport] {.
-      raises: [TransportOsError].} =
+      raises: [TransportOsError, SimBarrierError].} =
     ## Mints a connected pair of sim datagram endpoints (RFC 0003 6,
     ## S12b) - the datagram-flavored analogue of `listenStream`/
     ## `connectStream`'s stream pairing above, minus the listen/accept
     ## ceremony: UDP has no connection handshake to mint sim-natively,
     ## so both sides are wired atomically in one call rather than a
-    ## listener/dialer pair.
+    ## listener/dialer pair. Widened for `SimBarrierError`, the same
+    ## always-sim-only reasoning `connectStream` documents:
+    ## `simDatagramPair` (`chronos/transports/datagram.nim`) raises it
+    ## directly, though this slice proves it unreachable here too.
     simDatagramPair(addrA, addrB, cbprocA, cbprocB, udataA, udataB)
 else:
   proc listenStream*(net: SimNet, address: TransportAddress): SimStreamServer =

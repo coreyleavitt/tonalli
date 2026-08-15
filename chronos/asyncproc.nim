@@ -19,6 +19,22 @@ from std/os import quoteShell, quoteShellWindows, quoteShellPosix, envPairs
 export strtabs, results
 export quoteShell, quoteShellWindows, quoteShellPosix, envPairs
 
+when chronosSimulation:
+  import ./internal/simengine
+    # Fork issue #19 workstream 2's typed sim error channel:
+    # `addProcess2`/`removeProcess2` (`chronos/internal/asyncengine.nim`)
+    # and `fromPipe2` (`chronos/transports/stream.nim`, converted
+    # already) now raise `SimBarrierError` directly under
+    # `-d:chronosSimulation` instead of threading a reserved error code -
+    # `SimBarrierError` itself needs naming here to widen this module's
+    # own `raises` lists.
+
+  # See `chronos/transports/stream.nim`'s own copy of this alias for the
+  # toolchain quirks it works around.
+  {.pragma: mayBarrier, raises: [SimBarrierError].}
+else:
+  {.pragma: mayBarrier, raises: [].}
+
 const
   AsyncProcessTrackerName* = "async.process"
     ## AsyncProcess leaks tracker name
@@ -144,7 +160,7 @@ proc init*(t: typedesc[AsyncStreamHolder]): AsyncStreamHolder =
 
 proc init*(t: typedesc[AsyncStreamHolder], handle: ProcessStreamHandle,
            kind: StreamKind, baseFlags: set[StreamHolderFlag] = {}
-          ): AsyncProcessResult[AsyncStreamHolder] =
+          ): AsyncProcessResult[AsyncStreamHolder] {.mayBarrier.} =
   case handle.kind
   of ProcessStreamHandleKind.ProcHandle:
     case kind
@@ -225,7 +241,7 @@ proc running*(p: AsyncProcessRef): AsyncProcessResult[bool] {.apforward.}
 proc peekExitCode*(p: AsyncProcessRef): AsyncProcessResult[int] {.apforward.}
 proc preparePipes(options: set[AsyncProcessOption],
                   stdinHandle, stdoutHandle, stderrHandle: ProcessStreamHandle
-                 ): AsyncProcessResult[AsyncProcessPipes] {.apforward.}
+                 ): AsyncProcessResult[AsyncProcessPipes] {.gcsafe, mayBarrier.}
 proc closeProcessHandles(pipes: var AsyncProcessPipes,
                          options: set[AsyncProcessOption],
                          lastError: OSErrorCode): OSErrorCode {.apforward.}
@@ -385,15 +401,7 @@ when defined(windows):
         return err(osLastError())
       p.processHandle = HANDLE(0)
 
-  proc startProcess*(command: string, workingDir: string = "",
-                     arguments: seq[string] = @[],
-                     environment: StringTableRef = nil,
-                     options: set[AsyncProcessOption] = {},
-                     stdinHandle = ProcessStreamHandle(),
-                     stdoutHandle = ProcessStreamHandle(),
-                     stderrHandle = ProcessStreamHandle(),
-                    ): Future[AsyncProcessRef] {.
-       async: (raises: [AsyncProcessError, CancelledError]).} =
+  template startProcessBody(): untyped =
     var
       pipes = preparePipes(options, stdinHandle, stdoutHandle,
                            stderrHandle).valueOr:
@@ -472,7 +480,41 @@ when defined(windows):
     )
 
     trackCounter(AsyncProcessTrackerName)
-    return process
+    process
+      # Not `return process`: a `return <value>` statement inside this
+      # template is invisible to the `{.async.}` macro's untyped-AST
+      # rewrite pass (it only sees the template's call node, not its
+      # body, until a later compilation phase expands it) - for a non-
+      # `raw: true` async proc, that rewrite is what turns a value-
+      # carrying `return` into the CPS transform's own future-completion
+      # code, so a hidden one miscompiles instead of erroring cleanly.
+      # Safe here only because this is already the template's final
+      # statement, where the implicit last-expression value already
+      # gets the same treatment `return` would have.
+
+  when chronosSimulation:
+    proc startProcess*(command: string, workingDir: string = "",
+                       arguments: seq[string] = @[],
+                       environment: StringTableRef = nil,
+                       options: set[AsyncProcessOption] = {},
+                       stdinHandle = ProcessStreamHandle(),
+                       stdoutHandle = ProcessStreamHandle(),
+                       stderrHandle = ProcessStreamHandle(),
+                      ): Future[AsyncProcessRef] {.
+         async: (raises: [AsyncProcessError, CancelledError,
+                          SimBarrierError]).} =
+      startProcessBody()
+  else:
+    proc startProcess*(command: string, workingDir: string = "",
+                       arguments: seq[string] = @[],
+                       environment: StringTableRef = nil,
+                       options: set[AsyncProcessOption] = {},
+                       stdinHandle = ProcessStreamHandle(),
+                       stdoutHandle = ProcessStreamHandle(),
+                       stderrHandle = ProcessStreamHandle(),
+                      ): Future[AsyncProcessRef] {.
+         async: (raises: [AsyncProcessError, CancelledError]).} =
+      startProcessBody()
 
   proc peekProcessExitCode(p: AsyncProcessRef): AsyncProcessResult[int] =
     var wstatus: DWORD = 0
@@ -789,15 +831,7 @@ else:
                                   ): AsyncProcessResult[void] =
     discard
 
-  proc startProcess*(command: string, workingDir: string = "",
-                     arguments: seq[string] = @[],
-                     environment: StringTableRef = nil,
-                     options: set[AsyncProcessOption] = {},
-                     stdinHandle = ProcessStreamHandle(),
-                     stdoutHandle = ProcessStreamHandle(),
-                     stderrHandle = ProcessStreamHandle(),
-                    ): Future[AsyncProcessRef] {.
-       async: (raises: [AsyncProcessError, CancelledError]).} =
+  template startProcessBody(): untyped =
     var
       pid: Pid
       pipes = preparePipes(options, stdinHandle, stdoutHandle,
@@ -899,6 +933,30 @@ else:
     trackCounter(AsyncProcessTrackerName)
     process
 
+  when chronosSimulation:
+    proc startProcess*(command: string, workingDir: string = "",
+                       arguments: seq[string] = @[],
+                       environment: StringTableRef = nil,
+                       options: set[AsyncProcessOption] = {},
+                       stdinHandle = ProcessStreamHandle(),
+                       stdoutHandle = ProcessStreamHandle(),
+                       stderrHandle = ProcessStreamHandle(),
+                      ): Future[AsyncProcessRef] {.
+         async: (raises: [AsyncProcessError, CancelledError,
+                          SimBarrierError]).} =
+      startProcessBody()
+  else:
+    proc startProcess*(command: string, workingDir: string = "",
+                       arguments: seq[string] = @[],
+                       environment: StringTableRef = nil,
+                       options: set[AsyncProcessOption] = {},
+                       stdinHandle = ProcessStreamHandle(),
+                       stdoutHandle = ProcessStreamHandle(),
+                       stderrHandle = ProcessStreamHandle(),
+                      ): Future[AsyncProcessRef] {.
+         async: (raises: [AsyncProcessError, CancelledError]).} =
+      startProcessBody()
+
   proc peekProcessExitCode(p: AsyncProcessRef,
                            reap = false): AsyncProcessResult[int] =
     var wstatus: cint = 0
@@ -957,10 +1015,36 @@ else:
     else:
       ok(false)
 
+  # As `chronos/transports/stream.nim`'s own `simBoundaryGuard`/`safe*`
+  # family: `waitForExit`'s `continuation`/`cancellation` closures below
+  # are `CallbackFunc`s (`raises: []` by that fixed type, unwidenable per
+  # build) that reach the registration guard `removeProcess2` - a
+  # provably-unreachable `SimBarrierError` here (`addProcess2` above
+  # already barriers before a simulated dispatcher would ever reach this
+  # far, so `removeProcess2` on the same `processHandle` cannot be the
+  # first touch site to cross the guard). Caught here, by type, and
+  # escalated to a `Defect` (`raiseAsDefect`) instead of letting it
+  # propagate normally; `chronos/simulation.nim`'s `runSimulation`
+  # unwraps it back into the original typed error.
+  template simBoundaryGuard(body: untyped): untyped =
+    when chronosSimulation:
+      try:
+        body
+      except SimBarrierError as excSimBoundary:
+        raiseAsDefect(excSimBoundary,
+          "simulation barrier reached from a CallbackFunc boundary")
+    else:
+      body
+
+  proc safeRemoveProcess2(procHandle: ProcessHandle): Result[void, OSErrorCode]
+                          {.raises: [].} =
+    simBoundaryGuard(removeProcess2(procHandle))
+
   proc waitForExit*(p: AsyncProcessRef,
                     timeout = InfiniteDuration): Future[int] {.
        async: (raw: true, raises: [
-               AsyncProcessError, AsyncProcessTimeoutError, CancelledError]).} =
+               AsyncProcessError, AsyncProcessTimeoutError, CancelledError]),
+       mayBarrier.} =
     var
       retFuture = newFuture[int]("chronos.waitForExit()")
       processHandle: ProcessHandle
@@ -993,7 +1077,7 @@ else:
       if not(retFuture.finished()):
         if source == 1:
           # Process exited.
-          let res = removeProcess2(processHandle)
+          let res = safeRemoveProcess2(processHandle)
           if res.isErr():
             retFuture.fail(newException(AsyncProcessError,
                                         osErrorMsg(res.error())))
@@ -1021,7 +1105,7 @@ else:
         clearTimer(timer)
         timer = nil
       # Ignore any errors because of cancellation.
-      discard removeProcess2(processHandle)
+      discard safeRemoveProcess2(processHandle)
 
     if timeout != InfiniteDuration:
       timer = setTimer(Moment.fromNow(timeout), continuation, cast[pointer](2))
@@ -1213,49 +1297,108 @@ proc closeProcessStreams(pipes: AsyncProcessPipes,
       res
   noCancel allFutures(pending)
 
-proc opAndWaitForExit(p: AsyncProcessRef, op: WaitOperation,
-                      timeout = InfiniteDuration): Future[int] {.
-     async: (raises: [
-      AsyncProcessError, AsyncProcessTimeoutError, CancelledError]).} =
-  let timerFut =
-    if timeout == InfiniteDuration:
-      newFuture[void]("chronos.killAndwaitForExit")
-    else:
-      sleepAsync(timeout)
+# Not a shared-body template (unlike `startProcessBody`/`execCommandBody`/
+# `execCommandExBody` above/below): this body's two `return <value>`
+# statements sit mid-loop, not in final-statement position, so they
+# cannot be rewritten away the way `startProcessBody`'s trailing `return
+# process` was. A `return <value>` statement inside a template is
+# invisible to the `{.async.}` macro's untyped-AST rewrite pass (it only
+# sees the template's call node, not its body, until a later compilation
+# phase expands it) - for a non-`raw: true` async proc, that rewrite is
+# what turns a value-carrying `return` into the CPS transform's own
+# future-completion code, so a hidden one miscompiles (a `FutureBase`-
+# vs-`int` type mismatch reported deep inside the macro's own
+# `setResult` template) instead of erroring cleanly. Plain duplication
+# instead, per the design's own documented fallback.
+when chronosSimulation:
+  proc opAndWaitForExit(p: AsyncProcessRef, op: WaitOperation,
+                        timeout = InfiniteDuration): Future[int] {.
+       async: (raises: [
+        AsyncProcessError, AsyncProcessTimeoutError, CancelledError,
+        SimBarrierError]).} =
+    let timerFut =
+      if timeout == InfiniteDuration:
+        newFuture[void]("chronos.killAndwaitForExit")
+      else:
+        sleepAsync(timeout)
 
-  while true:
-    if p.running().get(true):
-      # We ignore operation errors because we going to repeat calling
-      # operation until process will not exit.
-      case op
-      of WaitOperation.Kill:
-        discard p.kill()
-      of WaitOperation.Terminate:
-        discard p.terminate()
-    else:
-      let exitCode = p.peekExitCode().valueOr:
-        raiseAsyncProcessError("Unable to peek process exit code", error)
-      if not(timerFut.finished()):
-        await cancelAndWait(timerFut)
-      return exitCode
-
-    let waitFut = p.waitForExit().wait(100.milliseconds)
-    try:
-      discard await race(FutureBase(waitFut), FutureBase(timerFut))
-    except ValueError:
-      raiseAssert "This should not be happened!"
-
-    if waitFut.finished() and not(waitFut.failed()):
-      let res = p.peekExitCode()
-      if res.isOk():
+    while true:
+      if p.running().get(true):
+        # We ignore operation errors because we going to repeat calling
+        # operation until process will not exit.
+        case op
+        of WaitOperation.Kill:
+          discard p.kill()
+        of WaitOperation.Terminate:
+          discard p.terminate()
+      else:
+        let exitCode = p.peekExitCode().valueOr:
+          raiseAsyncProcessError("Unable to peek process exit code", error)
         if not(timerFut.finished()):
           await cancelAndWait(timerFut)
-        return res.get()
+        return exitCode
 
-    if timerFut.finished():
-      if not(waitFut.finished()):
-        await waitFut.cancelAndWait()
-      raiseAsyncProcessTimeoutError()
+      let waitFut = p.waitForExit().wait(100.milliseconds)
+      try:
+        discard await race(FutureBase(waitFut), FutureBase(timerFut))
+      except ValueError:
+        raiseAssert "This should not be happened!"
+
+      if waitFut.finished() and not(waitFut.failed()):
+        let res = p.peekExitCode()
+        if res.isOk():
+          if not(timerFut.finished()):
+            await cancelAndWait(timerFut)
+          return res.get()
+
+      if timerFut.finished():
+        if not(waitFut.finished()):
+          await waitFut.cancelAndWait()
+        raiseAsyncProcessTimeoutError()
+else:
+  proc opAndWaitForExit(p: AsyncProcessRef, op: WaitOperation,
+                        timeout = InfiniteDuration): Future[int] {.
+       async: (raises: [
+        AsyncProcessError, AsyncProcessTimeoutError, CancelledError]).} =
+    let timerFut =
+      if timeout == InfiniteDuration:
+        newFuture[void]("chronos.killAndwaitForExit")
+      else:
+        sleepAsync(timeout)
+
+    while true:
+      if p.running().get(true):
+        # We ignore operation errors because we going to repeat calling
+        # operation until process will not exit.
+        case op
+        of WaitOperation.Kill:
+          discard p.kill()
+        of WaitOperation.Terminate:
+          discard p.terminate()
+      else:
+        let exitCode = p.peekExitCode().valueOr:
+          raiseAsyncProcessError("Unable to peek process exit code", error)
+        if not(timerFut.finished()):
+          await cancelAndWait(timerFut)
+        return exitCode
+
+      let waitFut = p.waitForExit().wait(100.milliseconds)
+      try:
+        discard await race(FutureBase(waitFut), FutureBase(timerFut))
+      except ValueError:
+        raiseAssert "This should not be happened!"
+
+      if waitFut.finished() and not(waitFut.failed()):
+        let res = p.peekExitCode()
+        if res.isOk():
+          if not(timerFut.finished()):
+            await cancelAndWait(timerFut)
+          return res.get()
+
+      if timerFut.finished():
+        if not(waitFut.finished()):
+          await waitFut.cancelAndWait()
+        raiseAsyncProcessTimeoutError()
 
 proc closeWait*(p: AsyncProcessRef) {.async: (raises: []).} =
   # Here we ignore all possible errrors, because we do not want to raise
@@ -1283,12 +1426,7 @@ proc stderrStream*(p: AsyncProcessRef): AsyncStreamReader =
            "StderrStreamReader is not available")
   p.pipes.stderrHolder.reader
 
-proc execCommand*(command: string,
-                  options = {AsyncProcessOption.EvalCommand},
-                  timeout = InfiniteDuration
-                 ): Future[int] {.
-     async: (raises: [
-      AsyncProcessError, AsyncProcessTimeoutError, CancelledError]).} =
+template execCommandBody(): untyped =
   let
     poptions = options + {AsyncProcessOption.EvalCommand}
     process = await startProcess(command, options = poptions)
@@ -1299,12 +1437,25 @@ proc execCommand*(command: string,
         await process.closeWait()
   res
 
-proc execCommandEx*(command: string,
+when chronosSimulation:
+  proc execCommand*(command: string,
                     options = {AsyncProcessOption.EvalCommand},
                     timeout = InfiniteDuration
-                   ): Future[CommandExResponse] {.
-     async: (raises: [
-      AsyncProcessError, AsyncProcessTimeoutError, CancelledError]).} =
+                   ): Future[int] {.
+       async: (raises: [
+        AsyncProcessError, AsyncProcessTimeoutError, CancelledError,
+        SimBarrierError]).} =
+    execCommandBody()
+else:
+  proc execCommand*(command: string,
+                    options = {AsyncProcessOption.EvalCommand},
+                    timeout = InfiniteDuration
+                   ): Future[int] {.
+       async: (raises: [
+        AsyncProcessError, AsyncProcessTimeoutError, CancelledError]).} =
+    execCommandBody()
+
+template execCommandExBody(): untyped =
   let
     process = await startProcess(command, options = options,
                                  stdoutHandle = AsyncProcess.Pipe,
@@ -1334,45 +1485,116 @@ proc execCommandEx*(command: string,
 
   res
 
+when chronosSimulation:
+  proc execCommandEx*(command: string,
+                      options = {AsyncProcessOption.EvalCommand},
+                      timeout = InfiniteDuration
+                     ): Future[CommandExResponse] {.
+       async: (raises: [
+        AsyncProcessError, AsyncProcessTimeoutError, CancelledError,
+        SimBarrierError]).} =
+    execCommandExBody()
+else:
+  proc execCommandEx*(command: string,
+                      options = {AsyncProcessOption.EvalCommand},
+                      timeout = InfiniteDuration
+                     ): Future[CommandExResponse] {.
+       async: (raises: [
+        AsyncProcessError, AsyncProcessTimeoutError, CancelledError]).} =
+    execCommandExBody()
+
 proc pid*(p: AsyncProcessRef): int =
   ## Returns process ``p`` unique process identifier.
   int(p.processId)
 
 template processId*(p: AsyncProcessRef): int = pid(p)
 
-proc killAndWaitForExit*(p: AsyncProcessRef,
-                         timeout = InfiniteDuration): Future[int] {.
-     async: (raw: true, raises: [
-      AsyncProcessError, AsyncProcessTimeoutError, CancelledError]).} =
-  ## Perform continuous attempts to kill the ``p`` process for specified period
-  ## of time ``timeout``.
-  ##
-  ## On Posix systems, killing means sending ``SIGKILL`` to the process ``p``,
-  ## On Windows, it uses ``TerminateProcess`` to kill the process ``p``.
-  ##
-  ## If the process ``p`` fails to be killed within the ``timeout`` time, it
-  ## will raise ``AsyncProcessTimeoutError``.
-  ##
-  ## In case of error this it will raise ``AsyncProcessError``.
-  ##
-  ## Returns process ``p`` exit code.
-  opAndWaitForExit(p, WaitOperation.Kill, timeout)
+# Not `{.async: (raw: true, raises: [...]), mayBarrier.}` (the pattern
+# `waitForExit`/`fire`/`wait` above use successfully): empirically, on
+# this toolchain, a `raw: true` async proc whose entire body is a single
+# tail-call expression (as both of these are) does not merge a trailing
+# custom raises-alias pragma the way one with a hand-built `retFuture`
+# body does - the declared raises silently stay at the base list, later
+# surfacing as a `Future` generic-instantiation type mismatch against
+# `opAndWaitForExit`'s own (correctly widened) return type. A literal
+# conditional split, the same technique the non-`raw: true` facade procs
+# use, sidesteps the merge entirely.
+when chronosSimulation:
+  proc killAndWaitForExit*(p: AsyncProcessRef,
+                           timeout = InfiniteDuration): Future[int] {.
+       async: (raw: true, raises: [
+        AsyncProcessError, AsyncProcessTimeoutError, CancelledError,
+        SimBarrierError]).} =
+    ## Perform continuous attempts to kill the ``p`` process for specified
+    ## period of time ``timeout``.
+    ##
+    ## On Posix systems, killing means sending ``SIGKILL`` to the process
+    ## ``p``, On Windows, it uses ``TerminateProcess`` to kill the process
+    ## ``p``.
+    ##
+    ## If the process ``p`` fails to be killed within the ``timeout`` time, it
+    ## will raise ``AsyncProcessTimeoutError``.
+    ##
+    ## In case of error this it will raise ``AsyncProcessError``.
+    ##
+    ## Returns process ``p`` exit code.
+    opAndWaitForExit(p, WaitOperation.Kill, timeout)
+else:
+  proc killAndWaitForExit*(p: AsyncProcessRef,
+                           timeout = InfiniteDuration): Future[int] {.
+       async: (raw: true, raises: [
+        AsyncProcessError, AsyncProcessTimeoutError, CancelledError]).} =
+    ## Perform continuous attempts to kill the ``p`` process for specified
+    ## period of time ``timeout``.
+    ##
+    ## On Posix systems, killing means sending ``SIGKILL`` to the process
+    ## ``p``, On Windows, it uses ``TerminateProcess`` to kill the process
+    ## ``p``.
+    ##
+    ## If the process ``p`` fails to be killed within the ``timeout`` time, it
+    ## will raise ``AsyncProcessTimeoutError``.
+    ##
+    ## In case of error this it will raise ``AsyncProcessError``.
+    ##
+    ## Returns process ``p`` exit code.
+    opAndWaitForExit(p, WaitOperation.Kill, timeout)
 
-proc terminateAndWaitForExit*(p: AsyncProcessRef,
-                              timeout = InfiniteDuration): Future[int] {.
-     async: (raw: true, raises: [
-       AsyncProcessError, AsyncProcessTimeoutError, CancelledError]).} =
-  ## Perform continuous attempts to terminate the ``p`` process for specified
-  ## period of time ``timeout``.
-  ##
-  ## On Posix systems, terminating means sending ``SIGTERM`` to the process
-  ## ``p``, on Windows, it uses ``TerminateProcess`` to terminate the process
-  ## ``p``.
-  ##
-  ## If the process ``p`` fails to be terminated within the ``timeout`` time, it
-  ## will raise ``AsyncProcessTimeoutError``.
-  ##
-  ## In case of error this it will raise ``AsyncProcessError``.
-  ##
-  ## Returns process ``p`` exit code.
-  opAndWaitForExit(p, WaitOperation.Terminate, timeout)
+when chronosSimulation:
+  proc terminateAndWaitForExit*(p: AsyncProcessRef,
+                                timeout = InfiniteDuration): Future[int] {.
+       async: (raw: true, raises: [
+         AsyncProcessError, AsyncProcessTimeoutError, CancelledError,
+         SimBarrierError]).} =
+    ## Perform continuous attempts to terminate the ``p`` process for
+    ## specified period of time ``timeout``.
+    ##
+    ## On Posix systems, terminating means sending ``SIGTERM`` to the
+    ## process ``p``, on Windows, it uses ``TerminateProcess`` to terminate
+    ## the process ``p``.
+    ##
+    ## If the process ``p`` fails to be terminated within the ``timeout``
+    ## time, it will raise ``AsyncProcessTimeoutError``.
+    ##
+    ## In case of error this it will raise ``AsyncProcessError``.
+    ##
+    ## Returns process ``p`` exit code.
+    opAndWaitForExit(p, WaitOperation.Terminate, timeout)
+else:
+  proc terminateAndWaitForExit*(p: AsyncProcessRef,
+                                timeout = InfiniteDuration): Future[int] {.
+       async: (raw: true, raises: [
+         AsyncProcessError, AsyncProcessTimeoutError, CancelledError]).} =
+    ## Perform continuous attempts to terminate the ``p`` process for
+    ## specified period of time ``timeout``.
+    ##
+    ## On Posix systems, terminating means sending ``SIGTERM`` to the
+    ## process ``p``, on Windows, it uses ``TerminateProcess`` to terminate
+    ## the process ``p``.
+    ##
+    ## If the process ``p`` fails to be terminated within the ``timeout``
+    ## time, it will raise ``AsyncProcessTimeoutError``.
+    ##
+    ## In case of error this it will raise ``AsyncProcessError``.
+    ##
+    ## Returns process ``p`` exit code.
+    opAndWaitForExit(p, WaitOperation.Terminate, timeout)

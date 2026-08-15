@@ -9,7 +9,7 @@
 
 ## This module implements some core async thread synchronization primitives.
 import results
-import "."/[timer, asyncloop]
+import "."/[config, timer, asyncloop]
 
 export results
 
@@ -20,6 +20,26 @@ when not(hasThreadSupport):
   {.fatal: "Compile this program with threads enabled!".}
 
 import "."/[osdefs, osutils, oserrno]
+
+when chronosSimulation:
+  import ./internal/simengine
+    # Fork issue #19 workstream 2's typed sim error channel: this
+    # module's own `register2`/`unregister2`/`addReader2`/`removeReader2`/
+    # `addWriter2`/`removeWriter2` calls (below) now raise `SimBarrierError`
+    # directly under `-d:chronosSimulation` (`chronos/internal/
+    # asyncengine.nim`) instead of threading a reserved error code -
+    # `SimBarrierError` itself needs naming here to widen this module's
+    # own `raises` lists. `ThreadSignalPtr.fire`/`wait` have zero internal
+    # chronos callers (stage 3's own note), so this module's job is only
+    # to compile correctly under the sim define with honest typed raises,
+    # not to build a sim seam of its own the way `chronos/transports/
+    # stream.nim`/`datagram.nim` do.
+
+  # See `chronos/transports/stream.nim`'s own copy of this alias for the
+  # toolchain quirks it works around.
+  {.pragma: mayBarrier, raises: [SimBarrierError].}
+else:
+  {.pragma: mayBarrier, raises: [].}
 
 type
   ThreadSignal* = object
@@ -133,7 +153,8 @@ when not(defined(windows)):
     else:
       err(osLastError())
 
-  proc safeUnregisterAndCloseFd(fd: AsyncFD): Result[void, OSErrorCode] =
+  proc safeUnregisterAndCloseFd(fd: AsyncFD): Result[void, OSErrorCode]
+                                {.mayBarrier.} =
     let loop = getThreadDispatcher()
     if loop.contains(fd):
       ? unregister2(fd)
@@ -142,7 +163,36 @@ when not(defined(windows)):
     else:
       ok()
 
-proc close*(signal: ThreadSignalPtr): Result[void, string] =
+  # As `chronos/transports/stream.nim`'s own `simBoundaryGuard`/`safe*`
+  # family: `fire`/`wait`'s `continuation`/`cancellation` closures below
+  # are `CallbackFunc`s (`raises: []` by that fixed type, unwidenable per
+  # build) that reach the registration guard `removeWriter2`/
+  # `removeReader2` - a provably-unreachable `SimBarrierError` here (this
+  # module never mints or touches a sim-owned fd; a real fd registered
+  # under a simulated dispatcher is exactly the barrier condition these
+  # guards exist to catch). Caught here, by type, and escalated to a
+  # `Defect` (`raiseAsDefect`) instead of letting it propagate normally;
+  # `chronos/simulation.nim`'s `runSimulation` unwraps it back into the
+  # original typed error.
+  template simBoundaryGuard(body: untyped): untyped =
+    when chronosSimulation:
+      try:
+        body
+      except SimBarrierError as excSimBoundary:
+        raiseAsDefect(excSimBoundary,
+          "simulation barrier reached from a CallbackFunc boundary")
+    else:
+      body
+
+  proc safeRemoveWriter2(fd: AsyncFD): Result[void, OSErrorCode]
+                         {.raises: [].} =
+    simBoundaryGuard(removeWriter2(fd))
+
+  proc safeRemoveReader2(fd: AsyncFD): Result[void, OSErrorCode]
+                         {.raises: [].} =
+    simBoundaryGuard(removeReader2(fd))
+
+proc close*(signal: ThreadSignalPtr): Result[void, string] {.mayBarrier.} =
   ## Close ThreadSignal object and free all the resources.
   defer: deallocShared(signal)
   when defined(windows):
@@ -273,7 +323,7 @@ proc waitSync*(signal: ThreadSignalPtr,
         return ok(true)
 
 proc fire*(signal: ThreadSignalPtr): Future[void] {.
-    async: (raises: [AsyncError, CancelledError], raw: true).} =
+    async: (raises: [AsyncError, CancelledError], raw: true), mayBarrier.} =
   ## Set state of ``signal`` to signaled in asynchronous way.
   var retFuture = newFuture[void]("asyncthreadsignal.fire")
   when defined(windows):
@@ -305,13 +355,13 @@ proc fire*(signal: ThreadSignalPtr): Future[void] {.
                              MSG_NOSIGNAL))
         if res < 0:
           let errorCode = osLastError()
-          discard removeWriter2(AsyncFD(eventFd))
+          discard safeRemoveWriter2(AsyncFD(eventFd))
           retFuture.fail(newException(AsyncError, osErrorMsg(errorCode)))
         elif res != sizeof(data):
-          discard removeWriter2(AsyncFD(eventFd))
+          discard safeRemoveWriter2(AsyncFD(eventFd))
           retFuture.fail(newException(AsyncError, osErrorMsg(EINVAL)))
         else:
-          let eres = removeWriter2(AsyncFD(eventFd))
+          let eres = safeRemoveWriter2(AsyncFD(eventFd))
           if eres.isErr():
             retFuture.fail(newException(AsyncError, osErrorMsg(eres.error)))
           else:
@@ -319,7 +369,7 @@ proc fire*(signal: ThreadSignalPtr): Future[void] {.
 
     proc cancellation(udata: pointer) {.gcsafe, raises: [].} =
       if not(retFuture.finished()):
-        discard removeWriter2(AsyncFD(eventFd))
+        discard safeRemoveWriter2(AsyncFD(eventFd))
 
     if checkBusy(checkFd):
       # Signal is already in signalled state
@@ -365,7 +415,7 @@ when defined(windows):
     doAssert(res == WaitableResult.Ok)
 else:
   proc wait*(signal: ThreadSignalPtr): Future[void] {.
-      async: (raises: [AsyncError, CancelledError], raw: true).} =
+      async: (raises: [AsyncError, CancelledError], raw: true), mayBarrier.} =
     let retFuture = Future[void].Raising([AsyncError, CancelledError]).init(
       "asyncthreadsignal.wait")
     var data = 1'u64
@@ -389,13 +439,13 @@ else:
           # pending and so some other consumer reading eventfd or pipe end, in
           # this case we going to ignore error and wait for another event.
           if errorCode != EAGAIN:
-            discard removeReader2(AsyncFD(eventFd))
+            discard safeRemoveReader2(AsyncFD(eventFd))
             retFuture.fail(newException(AsyncError, osErrorMsg(errorCode)))
         elif res != sizeof(data):
-          discard removeReader2(AsyncFD(eventFd))
+          discard safeRemoveReader2(AsyncFD(eventFd))
           retFuture.fail(newException(AsyncError, osErrorMsg(EINVAL)))
         else:
-          let eres = removeReader2(AsyncFD(eventFd))
+          let eres = safeRemoveReader2(AsyncFD(eventFd))
           if eres.isErr():
             retFuture.fail(newException(AsyncError, osErrorMsg(eres.error)))
           else:
@@ -404,7 +454,7 @@ else:
     proc cancellation(udata: pointer) {.gcsafe, raises: [].} =
       if not(retFuture.finished()):
         # Future is already cancelled so we ignore errors.
-        discard removeReader2(AsyncFD(eventFd))
+        discard safeRemoveReader2(AsyncFD(eventFd))
 
     let loop = getThreadDispatcher()
     if not(loop.contains(AsyncFD(eventFd))):
