@@ -15,6 +15,16 @@ import ../[config, asyncloop, asyncsync, bipbuffer]
 import ../transports/[common, stream]
 export asyncloop, asyncsync, stream, common
 
+when chronosSimulation:
+  import ../internal/simengine
+    # `stream.nim`'s `tsource`-forwarding vtable procs below (RFC 0003
+    # fork issue #19 workstream 2) may propagate `SimBarrierError`/
+    # `SimEngineError` out of the `StreamTransport` calls they wrap;
+    # this file absorbs them into `AsyncStreamReadError`/
+    # `AsyncStreamWriteError` the same way it already absorbs
+    # `TransportError`, rather than widening the vtable's declared
+    # `raises: [CancelledError, AsyncStreamError]`.
+
 const
   AsyncStreamDefaultBufferSize* = chronosStreamDefaultBufferSize
     ## Default reading stream internal buffer size.
@@ -246,7 +256,7 @@ template copyOut*(dest: pointer, item: WriteItem, length: int) =
     copyMem(dest, unsafeAddr item.dataStr[item.offset], length)
 
 proc newAsyncStreamReadError(
-       p: ref TransportError
+       p: ref CatchableError
      ): ref AsyncStreamReadError {.noinline.} =
   var w = newException(AsyncStreamReadError, "Read stream failed")
   w.msg = w.msg & ", originated from [" & $p.name & "] " & p.msg
@@ -254,7 +264,7 @@ proc newAsyncStreamReadError(
   w
 
 proc newAsyncStreamWriteError(
-       p: ref TransportError
+       p: ref CatchableError
      ): ref AsyncStreamWriteError {.noinline.} =
   var w = newException(AsyncStreamWriteError, "Write stream failed")
   w.msg = w.msg & ", originated from [" & $p.name & "] " & p.msg
@@ -686,66 +696,144 @@ proc init(T: type AsyncStreamReaderVtbl, tsource: StreamTransport): T =
   proc readExactlyImpl(
       rstream: AsyncStreamReader, pbytes: pointer, nbytes: int
   ) {.async: (raises: [CancelledError, AsyncStreamError]).} =
-    try:
-      await readExactly(tsource, pbytes, nbytes)
-    except TransportIncompleteError:
-      raise newAsyncStreamIncompleteError()
-    except TransportError as exc:
-      raise newAsyncStreamReadError(exc)
+    when chronosSimulation:
+      try:
+        await readExactly(tsource, pbytes, nbytes)
+      except TransportIncompleteError:
+        raise newAsyncStreamIncompleteError()
+      except SimBarrierError as exc:
+        raise newAsyncStreamReadError(exc)
+      except SimEngineError as exc:
+        raise newAsyncStreamReadError(exc)
+      except TransportError as exc:
+        raise newAsyncStreamReadError(exc)
+    else:
+      try:
+        await readExactly(tsource, pbytes, nbytes)
+      except TransportIncompleteError:
+        raise newAsyncStreamIncompleteError()
+      except TransportError as exc:
+        raise newAsyncStreamReadError(exc)
 
   proc readOnceImpl(
       rstream: AsyncStreamReader, pbytes: pointer, nbytes: int
   ): Future[int] {.async: (raises: [CancelledError, AsyncStreamError]).} =
-    try:
-      await readOnce(tsource, pbytes, nbytes)
-    except TransportError as exc:
-      raise newAsyncStreamReadError(exc)
+    when chronosSimulation:
+      try:
+        await readOnce(tsource, pbytes, nbytes)
+      except SimBarrierError as exc:
+        raise newAsyncStreamReadError(exc)
+      except SimEngineError as exc:
+        raise newAsyncStreamReadError(exc)
+      except TransportError as exc:
+        raise newAsyncStreamReadError(exc)
+    else:
+      try:
+        await readOnce(tsource, pbytes, nbytes)
+      except TransportError as exc:
+        raise newAsyncStreamReadError(exc)
 
   proc readUntilImpl(
       rstream: AsyncStreamReader, pbytes: pointer, nbytes: int, sep: seq[byte]
   ): Future[int] {.async: (raises: [CancelledError, AsyncStreamError]).} =
-    try:
-      await readUntil(tsource, pbytes, nbytes, sep)
-    except TransportIncompleteError:
-      raise newAsyncStreamIncompleteError()
-    except TransportLimitError:
-      raise newAsyncStreamLimitError()
-    except TransportError as exc:
-      raise newAsyncStreamReadError(exc)
+    when chronosSimulation:
+      try:
+        await readUntil(tsource, pbytes, nbytes, sep)
+      except TransportIncompleteError:
+        raise newAsyncStreamIncompleteError()
+      except TransportLimitError:
+        raise newAsyncStreamLimitError()
+      except SimBarrierError as exc:
+        raise newAsyncStreamReadError(exc)
+      except SimEngineError as exc:
+        raise newAsyncStreamReadError(exc)
+      except TransportError as exc:
+        raise newAsyncStreamReadError(exc)
+    else:
+      try:
+        await readUntil(tsource, pbytes, nbytes, sep)
+      except TransportIncompleteError:
+        raise newAsyncStreamIncompleteError()
+      except TransportLimitError:
+        raise newAsyncStreamLimitError()
+      except TransportError as exc:
+        raise newAsyncStreamReadError(exc)
 
   proc readLineImpl(
       rstream: AsyncStreamReader, limit = 0, sep = "\r\n"
   ): Future[string] {.async: (raises: [CancelledError, AsyncStreamError]).} =
-    try:
-      return await readLine(tsource, limit, sep)
-    except TransportError as exc:
-      raise newAsyncStreamReadError(exc)
+    when chronosSimulation:
+      try:
+        return await readLine(tsource, limit, sep)
+      except SimBarrierError as exc:
+        raise newAsyncStreamReadError(exc)
+      except SimEngineError as exc:
+        raise newAsyncStreamReadError(exc)
+      except TransportError as exc:
+        raise newAsyncStreamReadError(exc)
+    else:
+      try:
+        return await readLine(tsource, limit, sep)
+      except TransportError as exc:
+        raise newAsyncStreamReadError(exc)
 
   proc readNImpl(
       rstream: AsyncStreamReader, n: int
   ): Future[seq[byte]] {.async: (raises: [CancelledError, AsyncStreamError]).} =
-    try:
-      return await read(tsource, n)
-    except TransportError as exc:
-      raise newAsyncStreamReadError(exc)
+    when chronosSimulation:
+      try:
+        return await read(tsource, n)
+      except SimBarrierError as exc:
+        raise newAsyncStreamReadError(exc)
+      except SimEngineError as exc:
+        raise newAsyncStreamReadError(exc)
+      except TransportError as exc:
+        raise newAsyncStreamReadError(exc)
+    else:
+      try:
+        return await read(tsource, n)
+      except TransportError as exc:
+        raise newAsyncStreamReadError(exc)
 
   proc consumeNImpl(
       rstream: AsyncStreamReader, n: int
   ): Future[int] {.async: (raises: [CancelledError, AsyncStreamError]).} =
-    try:
-      return await consume(tsource, n)
-    except TransportLimitError:
-      raise newAsyncStreamLimitError()
-    except TransportError as exc:
-      raise newAsyncStreamReadError(exc)
+    when chronosSimulation:
+      try:
+        return await consume(tsource, n)
+      except TransportLimitError:
+        raise newAsyncStreamLimitError()
+      except SimBarrierError as exc:
+        raise newAsyncStreamReadError(exc)
+      except SimEngineError as exc:
+        raise newAsyncStreamReadError(exc)
+      except TransportError as exc:
+        raise newAsyncStreamReadError(exc)
+    else:
+      try:
+        return await consume(tsource, n)
+      except TransportLimitError:
+        raise newAsyncStreamLimitError()
+      except TransportError as exc:
+        raise newAsyncStreamReadError(exc)
 
   proc readMessageImpl(
       rstream: AsyncStreamReader, pred: ReadMessagePredicate
   ) {.async: (raises: [CancelledError, AsyncStreamError]).} =
-    try:
-      await readMessage(tsource, pred)
-    except TransportError as exc:
-      raise newAsyncStreamReadError(exc)
+    when chronosSimulation:
+      try:
+        await readMessage(tsource, pred)
+      except SimBarrierError as exc:
+        raise newAsyncStreamReadError(exc)
+      except SimEngineError as exc:
+        raise newAsyncStreamReadError(exc)
+      except TransportError as exc:
+        raise newAsyncStreamReadError(exc)
+    else:
+      try:
+        await readMessage(tsource, pred)
+      except TransportError as exc:
+        raise newAsyncStreamReadError(exc)
 
   proc closeImpl(rstream: AsyncStreamReader) {.async: (raises: []).} =
     # Closing the reader does not close the underlying transport
@@ -989,10 +1077,20 @@ proc init(T: type AsyncStreamWriterVtbl, tsource: StreamTransport): T =
       _: AsyncStreamWriter, pbytes: pointer, nbytes: int
   ) {.async: (raises: [CancelledError, AsyncStreamError]).} =
     let res =
-      try:
-        await write(tsource, pbytes, nbytes)
-      except TransportError as exc:
-        raise newAsyncStreamWriteError(exc)
+      when chronosSimulation:
+        try:
+          await write(tsource, pbytes, nbytes)
+        except SimBarrierError as exc:
+          raise newAsyncStreamWriteError(exc)
+        except SimEngineError as exc:
+          raise newAsyncStreamWriteError(exc)
+        except TransportError as exc:
+          raise newAsyncStreamWriteError(exc)
+      else:
+        try:
+          await write(tsource, pbytes, nbytes)
+        except TransportError as exc:
+          raise newAsyncStreamWriteError(exc)
     if res != nbytes:
       raise newAsyncStreamIncompleteError()
 
