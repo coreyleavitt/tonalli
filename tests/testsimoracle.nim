@@ -139,7 +139,7 @@ suite "sim decideIo and IoOutcomePoint":
     try:
       discard state.simDecideIo(cp)
       check false
-    except AssertionDefect as exc:
+    except SimEngineError as exc:
       check "scripted io failure" in exc.msg
 
 # --- S11b: decideIo can now complete partially. The engine validates the
@@ -161,7 +161,7 @@ suite "sim decideIo partial-outcome validation":
     try:
       discard state.simDecideIo(cp)
       check false
-    except AssertionDefect as exc:
+    except SimEngineError as exc:
       check "17" in exc.msg and "16" in exc.msg
 
   test "a zero-byte Ok decision against a non-empty request is a protocol violation":
@@ -181,7 +181,7 @@ suite "sim decideIo partial-outcome validation":
     try:
       discard state.simDecideIo(cp)
       check false
-    except AssertionDefect as exc:
+    except SimEngineError as exc:
       check "0" in exc.msg and "8" in exc.msg
 
   test "a scripted oracle can complete an Ok decision partially":
@@ -387,7 +387,7 @@ suite "sim ReplayOracle":
     try:
       discard state.simDecideBatch(events)
       check false
-    except AssertionDefect as exc:
+    except SimEngineError as exc:
       check "replay divergence" in exc.msg
       check "index 0" in exc.msg
     removeFile(path)
@@ -408,7 +408,7 @@ suite "sim ReplayOracle":
     try:
       discard state.simDecideIo(cp)
       check false
-    except AssertionDefect as exc:
+    except SimEngineError as exc:
       check "replay divergence" in exc.msg
     removeFile(path)
 
@@ -424,7 +424,7 @@ suite "sim ReplayOracle":
     try:
       discard state.simDecideBatch(events)
       check false
-    except AssertionDefect as exc:
+    except SimEngineError as exc:
       check "exhausted" in exc.msg
     removeFile(path)
 
@@ -439,7 +439,7 @@ suite "sim ReplayOracle":
     try:
       discard state.simDecideBatch(events)
       check false
-    except AssertionDefect as exc:
+    except SimEngineError as exc:
       check "Time" in exc.msg
       check "Batch" in exc.msg
     removeFile(path)

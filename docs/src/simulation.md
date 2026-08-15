@@ -407,27 +407,77 @@ exactly that primitive.
 
 Reached with a real fd, or from an API that inherently touches real OS
 resources, a provenance-guarded call fails loudly and catchably instead
-of touching a nil selector or a zero-initialized wakeup handle. The
-table below is the verified set, by grep of `SimBarrierCode`/
-`SimBarrierError` in `chronos/internal/asyncengine.nim` against this
-page's own snapshot of the code -- not the RFC's design-section sketch,
-which names a slightly larger surface that has not all landed yet (see
-the note below the table).
+of touching a nil selector or a zero-initialized wakeup handle: it
+raises `SimBarrierError` directly, at the point of detection, via
+`raiseSimBarrier`. The table below is the verified set, by grep of
+`raiseSimBarrier`/`SimBarrierError` in `chronos/internal/asyncengine.nim`
+against this page's own snapshot of the code -- not the RFC's
+design-section sketch, which names a slightly larger surface that has
+not all landed yet (see the note below the table).
 
 | surface | mechanism |
 |---|---|
-| `register2`, `unregister2`, `addReader2`, `removeReader2`, `addWriter2`, `removeWriter2` (POSIX and Windows) | reserved `OSErrorCode` (`SimBarrierCode`) through the unchanged `Result` signature; `isSimBarrier`/`raiseIfSimBarrier` convert it to a typed error at a call site that wants one |
-| `addSignal2`, `removeSignal2`, `addProcess2`, `removeProcess2` (POSIX and Windows) | same reserved-code mechanism |
-| `unregisterAndCloseFd` (POSIX) | same reserved-code mechanism |
+| `register2`, `unregister2`, `addReader2`, `removeReader2`, `addWriter2`, `removeWriter2` (POSIX and Windows) | raises `SimBarrierError` directly, at the point of detection, through the otherwise-unchanged `Result` signature |
+| `addSignal2`, `removeSignal2`, `addProcess2`, `removeProcess2` (POSIX and Windows) | same direct-raise mechanism |
+| `unregisterAndCloseFd` (POSIX) | same direct-raise mechanism |
 | `handle()` (minting a `DispatcherHandle`) | raises `SimBarrierError` directly rather than minting a handle for a sim dispatcher |
 | `wake()` | raises `SimBarrierError` directly rather than writing to a zero-valued wakeup fd/port |
 | `callSoon(DispatcherHandle, ...)` | raises `SimBarrierError` directly, the cross-thread entry `simProducer` replaces |
-| `closeSocket`/`closeHandle` | not a barrier return -- routes by dispatcher identity (a sim dispatcher's own `simFlushCloseInterest` path, never a real `closeFd` call), since every fd a sim dispatcher holds is sim-minted by construction |
+| `closeSocket`/`closeHandle` | not a barrier raise -- routes by dispatcher identity (a sim dispatcher's own `simFlushCloseInterest` path, never a real `closeFd` call), since every fd a sim dispatcher holds is sim-minted by construction |
 
 `SimBarrierError` is `object of CatchableError`, deliberately not a
 subtype of `AsyncError`, so an existing `except AsyncError` handler
 cannot silently swallow a hermeticity violation -- the same
-non-swallowing reasoning `SimLedgerError` follows.
+non-swallowing reasoning `SimLedgerError` follows. Its sibling
+`SimEngineError` (`kind: SimFailureKind`) is the type the engine and
+the sim poll loop raise directly for everything else they detect on
+their own: an oracle error, an out-of-range oracle answer, a decision-
+or virtual-time-budget exhaustion, a deadlock, or an oracle deferring
+all deliverable work with no fallback (see
+[`simulate`](#simulate-simulatewithbudget-simulatewithledger) above).
+Classification is always by type -- `kind` for `SimEngineError`,
+`exc.parent of ...` for `SimulationError` -- never by parsing a
+message.
+
+A `SimBarrierError`/`SimEngineError` a call site raises does not always
+reach its caller unchanged. Three things can happen to it:
+
+- **Propagation.** Most call sites let it through unchanged, widening
+  their own `raises` list under `chronosSimulation` (see the sim-widened
+  `async` signatures throughout `chronos/transports/stream.nim`,
+  `chronos/transports/datagram.nim`, `chronos/threadsync.nim`, and
+  `chronos/asyncproc.nim`). `runSimulation` (`chronos/simulation.nim`)
+  is the ultimate boundary: it catches `SimEngineError` by type and
+  converts it into `SimulationError`, and treats any other
+  `CatchableError` -- including a propagated `SimBarrierError` -- as
+  `SimFailureKind.BodyError`, indistinguishable from the body's own
+  failure, which is exactly right: a barrier hit inside `body` is a
+  bug in the body, not a distinct engine-detected condition.
+- **Absorption.** `chronos/streams/asyncstream.nim`'s `tsource`-
+  forwarding vtable procs absorb a `SimBarrierError`/`SimEngineError`
+  the same way they already absorb `TransportError`: wrapped into
+  `AsyncStreamReadError`/`AsyncStreamWriteError` rather than widening
+  the vtable's declared `raises: [CancelledError, AsyncStreamError]`.
+  The original still travels, as `.parent` on the wrapping error, so a
+  caller that cares can still recover it by type; the identity never
+  degrades below type, only the outer shape changes.
+- **The Defect envelope.** A handful of touch sites cross a `raises:
+  []`-typed boundary no per-build pragma can widen: a `CallbackFunc`
+  (the transport seam's I/O-callback wrap and its `register2`/
+  `addReader2`/etc. teardown calls) or `finish()`'s unbounded reach
+  (`chronos/internal/asyncfutures.nim`'s `simLedgerNoteFutureFinish`).
+  Each of these catches its own typed `SimBarrierError`/
+  `SimEngineError`/`SimLedgerError` locally and re-raises it wrapped in
+  a `Defect` via `raiseAsDefect` -- exempt from the raises effect
+  system, the same mechanism `raiseOsDefect` already uses to cross an
+  unwidenable boundary for an unrecoverable real-mode condition --
+  instead of letting it propagate normally. `runSimulation` recovers
+  the original by type (`exc.parent of SimLedgerError`/`SimEngineError`/
+  `SimBarrierError`), never by parsing `exc.msg`. This is the one
+  narrow, type-checked exception to typed-channel retirement, forced by
+  those boundaries' reach rather than chosen for convenience; any other
+  `Defect` reaching this boundary (a genuine unrecoverable condition,
+  e.g. `raiseOsDefect`) is not this concern and re-raises unchanged.
 
 **Named in the RFC's design section, not yet wired in code as of this
 page:** `ThreadSignalPtr.fire`/`.wait` and `threadsync.waitSync` (RFC

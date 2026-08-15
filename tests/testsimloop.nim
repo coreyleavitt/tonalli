@@ -61,7 +61,7 @@ suite "sim decideTime advance":
     let state = newSimEngineState(oracle = oracle)
     let armed = Moment.init(100, Nanosecond)
     let curTime = Moment.init(0, Nanosecond)
-    expect AssertionDefect:
+    expect SimEngineError:
       discard state.simDecideTimeAdvance(@[armed], curTime)
 
   test "an advance earlier than the current virtual clock is a violation":
@@ -71,7 +71,7 @@ suite "sim decideTime advance":
     let state = newSimEngineState(oracle = oracle)
     let armed = Moment.init(100, Nanosecond)
     let curTime = Moment.init(150, Nanosecond)
-    expect AssertionDefect:
+    expect SimEngineError:
       discard state.simDecideTimeAdvance(@[armed], curTime)
 
   test "an oracle error is reported, not silently accepted":
@@ -84,7 +84,7 @@ suite "sim decideTime advance":
     try:
       discard state.simDecideTimeAdvance(@[armed], curTime)
       check false
-    except AssertionDefect as exc:
+    except SimEngineError as exc:
       check "scripted failure" in exc.msg
 
 suite "sim decideBatch and the sim event set":
@@ -112,7 +112,7 @@ suite "sim decideBatch and the sim event set":
     try:
       discard state.simDecideBatch(@[ev])
       check false
-    except AssertionDefect as exc:
+    except SimEngineError as exc:
       check "not in deliverable" in exc.msg
 
   test "the same id named twice is a structured failure":
@@ -130,7 +130,7 @@ suite "sim decideBatch and the sim event set":
     try:
       discard state.simDecideBatch(@[ev])
       check false
-    except AssertionDefect as exc:
+    except SimEngineError as exc:
       check "more than once" in exc.msg
 
   test "deliverable is sorted by id across the readiness and arrival queues":
@@ -229,7 +229,7 @@ when defined(chronosSimulation) and compileOption("threads"):
       waitFor fut
       outcome = ProbeOutcome(ok: false,
         msg: "waitFor returned without the future completing")
-    except AssertionDefect as exc:
+    except SimEngineError as exc:
       let wallElapsedMs = (getMonoTime() - wallStart).inMilliseconds
       if "deadlock: no runnable work" notin exc.msg:
         outcome = ProbeOutcome(ok: false, msg: "wrong message: " & exc.msg)
@@ -304,7 +304,7 @@ when defined(chronosSimulation) and compileOption("threads"):
     try:
       poll()
       outcome = ProbeOutcome(ok: false, msg: "poll() did not fail")
-    except AssertionDefect as exc:
+    except SimEngineError as exc:
       if "oracle deferred all deliverable work with no fallback" notin exc.msg:
         outcome = ProbeOutcome(ok: false, msg: "wrong message: " & exc.msg)
     except CatchableError as exc:

@@ -6,12 +6,15 @@
 #  Apache License, version 2.0, (LICENSE-APACHEv2)
 #              MIT license (LICENSE-MIT)
 
-## Tests for `chronos/internal/simengine.nim` (the fd provenance table,
-## the reserved barrier code and its helpers, `SimBarrierError`) and,
-## under `-d:chronosSimulation`, the `Dispatcher` construction fork and
-## provenance guard installed in `chronos/internal/asyncengine.nim`.
+## Tests for `chronos/internal/simengine.nim` (the fd provenance table
+## and `SimBarrierError`/`raiseSimBarrier`, the typed failure a
+## provenance-guarded touch site raises directly at the point of
+## detection) and, under `-d:chronosSimulation`, the `Dispatcher`
+## construction fork and provenance guard installed in
+## `chronos/internal/asyncengine.nim`.
 
 import unittest2
+import std/strutils
 import ../chronos/oserrno
 import ../chronos/futures
 import ../chronos/internal/simengine
@@ -38,14 +41,11 @@ suite "sim engine state":
     check id != -1
     check state.ownsSimFd(id)
 
-  test "isSimBarrier recognizes only the reserved code":
-    check isSimBarrier(SimBarrierCode)
-    check not isSimBarrier(OSErrorCode(0))
-
-  test "raiseIfSimBarrier raises for the reserved code, is a no-op otherwise":
-    expect SimBarrierError:
-      raiseIfSimBarrier(SimBarrierCode)
-    raiseIfSimBarrier(OSErrorCode(0))
+  test "raiseSimBarrier raises SimBarrierError naming the touch site":
+    try:
+      raiseSimBarrier("test-site")
+    except SimBarrierError as exc:
+      check "test-site" in exc.msg
 
 when defined(chronosSimulation) and compileOption("threads"):
   ## Every dispatcher-construction / provenance-guard probe below runs on
@@ -95,25 +95,21 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeAddReaderBarrier() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     setThreadDispatcher(newSimDispatcher())
-    let res = addReader2(AsyncFD(999_999), dummyCb)
-    if res.isOk():
+    try:
+      discard addReader2(AsyncFD(999_999), dummyCb)
       outcome = ProbeOutcome(ok: false, msg: "addReader2 unexpectedly succeeded")
-    elif res.error() != SimBarrierCode:
-      outcome = ProbeOutcome(ok: false, msg: "wrong error code returned")
-    else:
-      try:
-        raiseIfSimBarrier(res.error())
-        outcome = ProbeOutcome(ok: false, msg: "raiseIfSimBarrier did not raise")
-      except SimBarrierError:
-        discard
+    except SimBarrierError:
+      discard
     probeChan.send(outcome)
 
   proc probeUnregisterBarrier() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     setThreadDispatcher(newSimDispatcher())
-    let res = unregister2(AsyncFD(999_999))
-    if res.isOk() or res.error() != SimBarrierCode:
-      outcome = ProbeOutcome(ok: false, msg: "unregister2 did not barrier")
+    try:
+      discard unregister2(AsyncFD(999_999))
+      outcome = ProbeOutcome(ok: false, msg: "unregister2 unexpectedly succeeded")
+    except SimBarrierError:
+      discard
     probeChan.send(outcome)
 
   proc probeContainsOwnership() {.thread.} =
@@ -151,9 +147,11 @@ when defined(chronosSimulation) and compileOption("threads"):
     proc probeSignalBarrier() {.thread.} =
       var outcome = ProbeOutcome(ok: true)
       setThreadDispatcher(newSimDispatcher())
-      let res = addSignal2(1, dummyCb)
-      if res.isOk() or res.error() != SimBarrierCode:
-        outcome = ProbeOutcome(ok: false, msg: "addSignal2 did not barrier")
+      try:
+        discard addSignal2(1, dummyCb)
+        outcome = ProbeOutcome(ok: false, msg: "addSignal2 unexpectedly succeeded")
+      except SimBarrierError:
+        discard
       probeChan.send(outcome)
 
   suite "sim dispatcher construction and provenance guard":
@@ -162,7 +160,7 @@ when defined(chronosSimulation) and compileOption("threads"):
       checkpoint outcome.msg
       check outcome.ok
 
-    test "addReader2 with a real fd returns the reserved barrier code":
+    test "addReader2 with a real fd raises SimBarrierError":
       let outcome = runProbe(probeAddReaderBarrier)
       checkpoint outcome.msg
       check outcome.ok
