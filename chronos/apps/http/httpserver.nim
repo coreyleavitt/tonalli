@@ -16,6 +16,9 @@ import ../../streams/[asyncstream, boundstream, chunkstream]
 import "."/[httptable, httpcommon, multipart]
 from ../../transports/common import TransportAddress, ServerFlags, `$`, `==`
 
+when chronosSimulation:
+  from ../../internal/simengine import SimBarrierError
+
 export asyncloop, asyncsync, httptable, httpcommon, httputils, multipart,
        asyncstream, boundstream, chunkstream, uri, tables, results
 export TransportAddress, ServerFlags, `$`, `==`
@@ -1142,23 +1145,47 @@ proc acceptClientLoop(server: HttpServerRef) {.async: (raises: []).} =
         # if server.maxConnections > 0:
         #   await server.semaphore.acquire()
         let transp =
-          try:
-            await server.instance.accept()
-          except TransportTooManyError:
-            # Too many FDs used by process
-            break clientLoop
-          except TransportAbortedError:
-            # Remote peer disconnected
-            break clientLoop
-          except TransportUseClosedError:
-            # accept() call invoked when server is stopped
-            break mainLoop
-          except TransportOsError:
-            # Critical OS error
-            break mainLoop
-          except CancelledError:
-            # Server being closed, exiting
-            break mainLoop
+          when chronosSimulation:
+            try:
+              await server.instance.accept()
+            except TransportTooManyError:
+              # Too many FDs used by process
+              break clientLoop
+            except TransportAbortedError:
+              # Remote peer disconnected
+              break clientLoop
+            except TransportUseClosedError:
+              # accept() call invoked when server is stopped
+              break mainLoop
+            except TransportOsError:
+              # Critical OS error
+              break mainLoop
+            except SimBarrierError:
+              # The accept-path registration raced a dispatcher teardown, or
+              # a real fd crossed the simulated dispatcher's provenance
+              # guard - treat either the same as a critical OS error.
+              break mainLoop
+            except CancelledError:
+              # Server being closed, exiting
+              break mainLoop
+          else:
+            try:
+              await server.instance.accept()
+            except TransportTooManyError:
+              # Too many FDs used by process
+              break clientLoop
+            except TransportAbortedError:
+              # Remote peer disconnected
+              break clientLoop
+            except TransportUseClosedError:
+              # accept() call invoked when server is stopped
+              break mainLoop
+            except TransportOsError:
+              # Critical OS error
+              break mainLoop
+            except CancelledError:
+              # Server being closed, exiting
+              break mainLoop
 
         doAssert(not(isNil(transp)), "Stream transport should be present!")
 

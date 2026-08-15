@@ -14,6 +14,9 @@ import stew/[assign2, base10, byteutils, ptrops, shims/sequninit], httputils, re
 import ../../[asyncloop, asyncsync, config]
 import ../../streams/[asyncstream, tlsstream, chunkstream, boundstream]
 import httptable, httpcommon, httpagent, httpbodyrw, multipart
+
+when chronosSimulation:
+  from ../../internal/simengine import SimBarrierError
 export results, asyncloop, asyncsync, asyncstream, tlsstream, chunkstream,
        boundstream, httptable, httpcommon, httpagent, httpbodyrw, multipart,
        httputils, uri, results
@@ -686,16 +689,31 @@ proc connect(session: HttpSessionRef,
   for address in addresses:
     let
       transp =
-        try:
-          await connect(
-            address,
-            bufferSize = session.connectionBufferSize,
-            flags = session.socketFlags,
-            dualstack = session.dualstack,
-          )
-        except TransportError as exc:
-          lastError = exc.msg
-          continue
+        when chronosSimulation:
+          try:
+            await connect(
+              address,
+              bufferSize = session.connectionBufferSize,
+              flags = session.socketFlags,
+              dualstack = session.dualstack,
+            )
+          except SimBarrierError as exc:
+            lastError = exc.msg
+            continue
+          except TransportError as exc:
+            lastError = exc.msg
+            continue
+        else:
+          try:
+            await connect(
+              address,
+              bufferSize = session.connectionBufferSize,
+              flags = session.socketFlags,
+              dualstack = session.dualstack,
+            )
+          except TransportError as exc:
+            lastError = exc.msg
+            continue
       stream = AsyncStream(
         reader: newAsyncStreamReader(transp), writer: newAsyncStreamWriter(transp)
       )
