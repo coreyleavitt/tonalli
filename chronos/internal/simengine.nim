@@ -630,6 +630,11 @@ proc simDecideIo*(state: SimEngineState, cp: IoOutcomePoint): IoDecision
         $result.bytes & " bytes, outside the legal " & $minBytes & ".." &
         $cp.maxBytes & " range for this request (a 0-byte answer against " &
         "a positive request would be read downstream as EOF)")
+  elif result.fault notin cp.faults:
+    raiseSimEngineError(SimFailureKind.ProtocolViolation,
+      "simulation I/O violation: decideIo returned fault " &
+      $result.fault & ", outside the offered " & $cp.faults &
+      " menu for this request")
   if not state.traceWriter.isNil:
     var faultNames = newSeq[string]()
     for f in cp.faults:
@@ -815,7 +820,7 @@ proc simStreamIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
   if fd notin state.streamEndpoints:
     let decision = state.simDecideIo(IoOutcomePoint(
       trigger: SimEventId(0), endpoint: SimEndpointId(uint32(fd)),
-      op: op, maxBytes: maxBytes, faults: {}))
+      op: op, maxBytes: maxBytes, faults: {SimFault.Reset}))
     return case decision.outcome
       of SimIoOutcome.Ok: (decision.bytes, OSErrorCode(0))
       of SimIoOutcome.Fault: (-1, simFaultToError(decision.fault))
@@ -825,7 +830,7 @@ proc simStreamIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
   of SimIoOp.Write:
     let decision = state.simDecideIo(IoOutcomePoint(
       trigger: SimEventId(0), endpoint: endpointId, op: op,
-      maxBytes: maxBytes, faults: {}))
+      maxBytes: maxBytes, faults: {SimFault.Reset}))
     case decision.outcome
     of SimIoOutcome.Ok:
       state.simStreamDeliver(fd, data, decision.bytes)
@@ -842,7 +847,7 @@ proc simStreamIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
         return (-1, oserrno.EWOULDBLOCK)
     let decision = state.simDecideIo(IoOutcomePoint(
       trigger: SimEventId(0), endpoint: endpointId, op: op,
-      maxBytes: min(maxBytes, avail), faults: {}))
+      maxBytes: min(maxBytes, avail), faults: {SimFault.Reset}))
     case decision.outcome
     of SimIoOutcome.Ok:
       state.simStreamTake(fd, decision.bytes, data)
@@ -958,7 +963,7 @@ proc simDatagramIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
   if fd notin state.datagramEndpoints:
     let decision = state.simDecideIo(IoOutcomePoint(
       trigger: SimEventId(0), endpoint: SimEndpointId(uint32(fd)), op: op,
-      maxBytes: maxBytes, faults: {}))
+      maxBytes: maxBytes, faults: {SimFault.Reset}))
     return case decision.outcome
       of SimIoOutcome.Ok: (decision.bytes, OSErrorCode(0), newSeq[byte]())
       of SimIoOutcome.Fault:

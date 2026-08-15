@@ -198,6 +198,43 @@ suite "sim decideIo partial-outcome validation":
     check decision.outcome == SimIoOutcome.Ok
     check decision.bytes == 5
 
+# --- A Fault decision's `fault` must also be a member of the offered
+# `cp.faults` menu, the same membership rule the Ok branch already
+# enforces on `bytes`; an unlisted fault (a stream write's empty menu is
+# the degenerate case) would otherwise reach `simFaultToError` unchecked.
+
+suite "sim decideIo fault-menu validation":
+  test "a Fault decision naming a fault outside the offered menu is a protocol violation":
+    let oracle = newSimOracle(defaultDecideBatch,
+      proc(cp: IoOutcomePoint): Result[IoDecision, SimOracleError]
+          {.gcsafe, raises: [].} =
+        ok(IoDecision(outcome: SimIoOutcome.Fault, fault: SimFault.Drop)),
+      defaultDecideTime)
+    let state = newSimEngineState(oracle = oracle)
+    let cp = IoOutcomePoint(trigger: SimEventId(1'u64),
+      endpoint: SimEndpointId(0'u32), op: SimIoOp.Write, maxBytes: 16,
+      faults: {})
+    try:
+      discard state.simDecideIo(cp)
+      check false
+    except SimEngineError as exc:
+      check exc.kind == SimFailureKind.ProtocolViolation
+      check "drop" in toLowerAscii(exc.msg)
+
+  test "a Fault decision naming a fault inside the offered menu is accepted":
+    let oracle = newSimOracle(defaultDecideBatch,
+      proc(cp: IoOutcomePoint): Result[IoDecision, SimOracleError]
+          {.gcsafe, raises: [].} =
+        ok(IoDecision(outcome: SimIoOutcome.Fault, fault: SimFault.Reset)),
+      defaultDecideTime)
+    let state = newSimEngineState(oracle = oracle)
+    let cp = IoOutcomePoint(trigger: SimEventId(1'u64),
+      endpoint: SimEndpointId(0'u32), op: SimIoOp.Write, maxBytes: 16,
+      faults: {SimFault.Reset})
+    let decision = state.simDecideIo(cp)
+    check decision.outcome == SimIoOutcome.Fault
+    check decision.fault == SimFault.Reset
+
 suite "sim RandomOracle partial I/O":
   test "RandomOracle's decideIo answers stay within 1..maxBytes":
     for seed in 0'u64 .. 50'u64:
