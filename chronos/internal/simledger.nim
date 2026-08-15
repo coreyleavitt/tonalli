@@ -7,8 +7,9 @@
 #    Apache License, version 2.0, (LICENSE-APACHEv2)
 #                MIT license (LICENSE-MIT)
 
-## The D8 ghost-ledger laws (RFC 0003 3.9, slice S14): callback
-## conservation and future lifecycle, checked at step boundaries (one
+## The D8 ghost-ledger laws (RFC 0003 3.9, slices S14/S15): callback
+## conservation, future lifecycle, contextvar accounting, timer
+## accounting, and waiter conservation, checked at step boundaries (one
 ## step is one outermost `fireWithContext` return, asyncengine.nim) plus
 ## a final check at `simulate()` teardown. Deliberately separate from
 ## the decision plumbing in `simengine.nim`: this module owns the laws
@@ -20,6 +21,45 @@
 ## module to carry a `SimLedgerState` on `SimEngineState`, and
 ## `internal/asyncfutures.nim` imports it directly to report future-
 ## lifecycle transitions from `finish()`.
+##
+## Slice S15's primitive-discovery design decision (waiter
+## conservation): three shapes were on the table - registration at
+## construction (a hook inside `newAsyncLock`/`newAsyncEvent`/etc.,
+## i.e. a seam), check-at-use (a hook inside `acquire`/`release`/`wait`/
+## `set`/etc., also a seam), or test-registered (the caller of
+## `simulateWithLedger` opts a primitive in explicitly, after
+## constructing it normally). The amendment's own words - "the law
+## reads state through the ... accessors ... and changes no behavior -
+## asyncsync still needs no seam" - rule out the first two directly, so
+## this module implements the third: `registerWaiterPrimitive` stores a
+## `(desc, countProc)` pair with no dependency on `asyncsync.nim` at
+## all (`countProc` is supplied by the caller, typically
+## `chronos/simulation.nim`'s typed `simLedgerTrackWaiters` overloads).
+## It is also the least invasive of the three under S14's opt-in
+## discipline: zero define-off cost (nothing compiles when
+## `chronosSimulation` is undefined), zero cost for every
+## `simulate()`/`sweepSeeds` caller that never opted into ledger
+## checking, and zero cost for a ledger-checked run that never calls
+## `registerWaiterPrimitive`, matching the `ledger.isNil` early-out
+## already established for the S14 laws.
+##
+## The waiter-conservation law's teardown check
+## (`checkWaiterTeardown`) is where the law has real bug-catching teeth
+## (RFC 0003 6, S15's RED phase): a registered primitive's `countProc`
+## excludes cancelled waiters by construction (the accessors' own
+## documented semantics), so a nonzero reading at `simulate()` teardown
+## means a future is parked and neither woken nor cancelled - a
+## `race()`/`one()`-style abandoned wait, the exact leak the 2026-08-15
+## amendment names. A per-step reading of the same accessor mid-run
+## cannot distinguish a legitimate in-flight wait (the overwhelmingly
+## common case - a lock held with another task waiting on it) from a
+## leak, since both read as "currently parked"; only the teardown
+## reading, taken after the body's future has finished and nothing
+## further will ever wake or cancel anything, gives the accessor a
+## definite right answer. This module still exposes `waiterPrimitives`
+## for a future per-step diagnostic reading if one proves useful, but
+## the enforcement point - the one that raises `SimLedgerError` - is
+## teardown-only, recorded here as the slice's judgment call.
 
 {.push raises: [], gcsafe.}
 
@@ -85,6 +125,69 @@ type
     step*: int
     objectDesc*: string
 
+  SimLedgerContextCounts = object
+    ## Slice S15's contextvar-accounting law: capture and restore balance
+    ## across every scheduling point (RFC 0003 3.9). `captured` is
+    ## incremented wherever a callback carrying a non-nil captured
+    ## context enters `DispatcherBase.callbacks` (asyncengine.nim's
+    ## `Callbacks`-kind `noteEnqueue` touchpoints, extended); `restored`
+    ## is incremented once per real fire whose callback carried a
+    ## context (`fireWithContext`'s `simLedgerFireOne` wrapper). A
+    ## captured-but-not-yet-fired callback is legitimately still resident
+    ## in `Callbacks` between checkpoints - `checkContextConservation`'s
+    ## `residentWithContext` parameter is that term, the context-scoped
+    ## analogue of `checkQueueConservation`'s `residentLen`. Checked only
+    ## at `simulate()` teardown, not per-fire like callback/timer
+    ## conservation: `DispatcherBase.callbacks` (`CallbackQueue`,
+    ## `internal/callbackqueue.nim`) exposes no iteration or random
+    ## access - by design, exactly five entry points - so there is no
+    ## cheap way to read "how many queued callbacks carry a context" at
+    ## an arbitrary mid-run checkpoint. Teardown's own unconditional
+    ## drain (`simLedgerTeardownCheck`) already walks every resident
+    ## entry via the queue's public `popFirst` for the callback-
+    ## conservation check, so inspecting `.context` there is free; a
+    ## true mid-run reading would need a sixth entry point on a queue
+    ## type documented as deliberately narrow, which this slice judged
+    ## not worth adding for a diagnostic cadence, not a detection gap -
+    ## `captured`/`restored` are still counted at their real, independent
+    ## touchpoints regardless of when the formula is evaluated.
+    captured: uint64
+    restored: uint64
+
+  SimLedgerTimerCounts = object
+    ## Slice S15's timer-accounting law: armed equals fired plus
+    ## cancelled plus pending against the heap's contents (RFC 0003 3.9).
+    ## `armed` counts `setTimer` pushes; `fired` counts a heap pop whose
+    ## callback transfers into `Callbacks` (timer expiry); `cancelled`
+    ## counts a heap entry that leaves without firing - either
+    ## `removeTimer`'s immediate `HeapQueue.del`, or a `clearTimer`-ed
+    ## (nil-function) entry discovered and discarded by the lazy sweep
+    ## in `processTimers`/`processTimersGetTimeout`. `pending` (the
+    ## live heap length at the checkpoint) is read directly, never
+    ## tracked as a running counter, so a zombie entry between
+    ## `clearTimer` and its eventual sweep is counted exactly once,
+    ## as `pending`, never simultaneously as `cancelled`.
+    armed: uint64
+    fired: uint64
+    cancelled: uint64
+
+  SimLedgerWaiterPrimitive = object
+    ## One asyncsync primitive opted into slice S15's waiter-conservation
+    ## law (RFC 0003 3.9, the 2026-08-15 amendment) via
+    ## `chronos/simulation.nim`'s `simLedgerTrackWaiters` family:
+    ## `desc` names it in a violation ("AsyncLock.waiters" etc.),
+    ## `countProc` is the primitive's own `waitersCount`/`gettersCount`/
+    ## `puttersCount` read-only accessor (from
+    ## `feat/asyncsync-waiters-introspection`, plus this slice's own
+    ## `AsyncEventQueue` accessor) - `asyncsync.nim` gains no seam for
+    ## this law, unlike the context/timer laws above: registration is
+    ## test-side (the least invasive of the three discovery shapes the
+    ## slice considered - see the module docstring), and the law reads
+    ## state purely through the accessor, never through a hook inside
+    ## `acquire`/`release`/`wait`/`set`/`get`/`put`.
+    desc: string
+    countProc: proc(): int {.gcsafe, raises: [].}
+
   SimLedgerState* = ref object
     ## One per sim run, carried on `SimEngineState` (`simengine.nim`)
     ## only when a caller opts into ledger checking (RFC 0003 3.9 is a
@@ -94,6 +197,9 @@ type
     stepDepth: int
     stepIndex: int
     futureRecords: Table[uint, SimLedgerFutureRecord]
+    context: SimLedgerContextCounts
+    timers: SimLedgerTimerCounts
+    waiterPrimitives: seq[SimLedgerWaiterPrimitive]
     lastViolation*: SimLedgerViolation
 
 const
@@ -199,3 +305,96 @@ proc noteFutureTransition*(ledger: SimLedgerState, id: uint, state: FutureState,
     raiseLedgerViolation(ledger, "future lifecycle",
       desc & ": observed " & $existing.state & ", now " & $state, desc)
   ledger.futureRecords[id] = SimLedgerFutureRecord(state: state, desc: desc)
+
+# --- contextvar accounting (RFC 0003 slice S15) --------------------------
+
+proc noteContextCaptured*(ledger: SimLedgerState) {.inline.} =
+  ## A callback carrying a non-nil captured context entered
+  ## `DispatcherBase.callbacks` (asyncengine.nim's `Callbacks`-kind
+  ## `noteEnqueue` touchpoints, extended for this slice).
+  inc ledger.context.captured
+
+proc noteContextRestored*(ledger: SimLedgerState) {.inline.} =
+  ## A real fire (`fireWithContext`) ran a callback that carried a
+  ## captured context.
+  inc ledger.context.restored
+
+proc checkContextConservation*(ledger: SimLedgerState,
+                                residentWithContext: int) =
+  ## "Capture and restore balance across every scheduling point" (RFC
+  ## 0003 3.9): the same conservation shape as `checkQueueConservation`,
+  ## scoped to context-carrying callbacks - `residentWithContext` is the
+  ## caller's fresh count of currently-queued callbacks whose `context`
+  ## is non-nil (a captured-but-not-yet-fired callback is legitimate
+  ## mid-run, and legitimately still resident at teardown if the body
+  ## ended before it got a turn, the same "explicitly dropped at
+  ## teardown" term callback conservation already grants).
+  let c = ledger.context
+  let accounted = c.restored + uint64(residentWithContext)
+  if accounted != c.captured:
+    raiseLedgerViolation(ledger, "contextvar conservation",
+      "captured=" & $c.captured & " but restored=" & $c.restored &
+      " + resident=" & $residentWithContext & " (=" & $accounted & ")",
+      "context captures")
+
+# --- timer accounting (RFC 0003 slice S15) --------------------------------
+
+proc noteTimerArmed*(ledger: SimLedgerState) {.inline.} =
+  inc ledger.timers.armed
+
+proc noteTimerFired*(ledger: SimLedgerState) {.inline.} =
+  ## A heap entry's deadline arrived and its callback transferred into
+  ## `Callbacks` (`processTimers`/`processTimersGetTimeout`'s expiry
+  ## loop) - distinct from the callback later actually firing out of
+  ## `Callbacks`, which callback conservation already counts.
+  inc ledger.timers.fired
+
+proc noteTimerCancelled*(ledger: SimLedgerState) {.inline.} =
+  ## A heap entry left without firing: either `removeTimer`'s immediate
+  ## `HeapQueue.del`, or a `clearTimer`-ed (nil-function) entry
+  ## discovered and discarded by the lazy sweep. Counted exactly once,
+  ## at the moment the entry actually leaves the heap - never at
+  ## `clearTimer` itself, which only marks a still-resident entry dead;
+  ## counting there too would double-count against `pending` for the
+  ## interval between the mark and the eventual sweep.
+  inc ledger.timers.cancelled
+
+proc checkTimerConservation*(ledger: SimLedgerState, pending: int) =
+  ## "Armed equals fired plus cancelled plus pending against the heap's
+  ## contents" (RFC 0003 3.9): `pending` is the caller's fresh
+  ## `len(loop.timers)` read, never a running counter, so it always
+  ## reflects exactly what is physically in the heap right now.
+  let t = ledger.timers
+  let accounted = t.fired + t.cancelled + uint64(pending)
+  if accounted != t.armed:
+    raiseLedgerViolation(ledger, "timer conservation",
+      "armed=" & $t.armed & " but fired=" & $t.fired & " + cancelled=" &
+      $t.cancelled & " + pending=" & $pending & " (=" & $accounted & ")",
+      "timer heap")
+
+# --- waiter conservation (RFC 0003 slice S15, 2026-08-15 amendment) -------
+
+proc registerWaiterPrimitive*(ledger: SimLedgerState, desc: string,
+    countProc: proc(): int {.gcsafe, raises: [].}) =
+  ## Opts one asyncsync primitive into the waiter-conservation law (see
+  ## this module's docstring for the test-registered discovery design
+  ## decision). `chronos/simulation.nim`'s `simLedgerTrackWaiters`
+  ## overloads are the intended callers, one per primitive kind, each
+  ## supplying its own `waitersCount`/`gettersCount`/`puttersCount`
+  ## accessor as `countProc`.
+  ledger.waiterPrimitives.add SimLedgerWaiterPrimitive(
+    desc: desc, countProc: countProc)
+
+proc checkWaiterTeardown*(ledger: SimLedgerState) =
+  ## "Every waiter list empty at `simulate()` teardown" (RFC 0003 3.9's
+  ## 2026-08-15 amendment): a nonzero reading from a registered
+  ## primitive's accessor here means a future is parked and neither
+  ## woken nor cancelled - a `race()`/`one()`-style abandoned wait. See
+  ## this module's docstring for why the law's enforcement point is
+  ## teardown-only, not every step boundary.
+  for w in ledger.waiterPrimitives:
+    let live = w.countProc()
+    if live > 0:
+      raiseLedgerViolation(ledger, "waiter conservation",
+        w.desc & ": " & $live & " waiter(s) still parked at teardown " &
+        "(never woken or cancelled)", w.desc)

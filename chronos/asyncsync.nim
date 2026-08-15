@@ -518,6 +518,22 @@ proc newAsyncEventQueue*[T](limitSize = 0): AsyncEventQueue[T] {.
 proc len*(ab: AsyncEventQueue): int {.raises: [].} =
   len(ab.queue)
 
+proc waitersCount*(ab: AsyncEventQueue): int =
+  ## Return the number of readers currently parked in `waitEvents()` on
+  ## ``ab``, not counting cancelled waits.
+  ##
+  ## Unlike `AsyncLock`/`AsyncEvent`/`AsyncQueue`/`AsyncSemaphore`'s
+  ## `waitersCount`/`gettersCount`/`puttersCount`, a reader here is a
+  ## `register()`/`unregister()`-scoped subscription record
+  ## (`EventQueueReader`) that is only *sometimes* parked: its `waiter`
+  ## field is non-nil exactly while a `waitEvents()` call is suspended
+  ## waiting for the next event, and nil the rest of the time (between
+  ## calls, or while events are already available to return
+  ## immediately). This counts readers in that parked state, excluding
+  ## ones whose wait was cancelled - the same "parked and not cancelled"
+  ## semantic the other primitives' accessors already report.
+  countIt(ab.readers, not isNil(it.waiter) and not it.waiter.cancelled())
+
 proc register*(ab: AsyncEventQueue): EventQueueKey {.raises: [].} =
   inc(ab.counter)
   let reader = EventQueueReader(key: EventQueueKey(ab.counter),

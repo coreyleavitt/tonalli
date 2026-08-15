@@ -406,6 +406,84 @@ proc simLedgerDebugNilPopCount*(kind: SimLedgerQueueKind): uint64 =
     "simLedgerDebugNilPopCount() requires simulateWithLedger()"
   ledger.nilPopCount(kind)
 
+proc simLedgerDebugPlantContextImbalance*() =
+  ## TEST-ONLY escape hatch (RFC 0003 slice S15's RED phase), the
+  ## contextvar-conservation analogue of
+  ## `simLedgerDebugPlantDroppedEnqueue`: records a `captured` the
+  ## ledger will never observe a matching `restored`/still-resident for,
+  ## planting the "capture and restore balance across every scheduling
+  ## point" law's violation without needing a genuine capture/restore
+  ## bug to reproduce it. Requires a currently-running
+  ## `simulateWithLedger` body; not part of the stable API.
+  let loop = getThreadDispatcher()
+  let ledger = loop.simLedgerOf()
+  doAssert not ledger.isNil,
+    "simLedgerDebugPlantContextImbalance() requires simulateWithLedger()"
+  ledger.noteContextCaptured()
+
+proc simLedgerDebugPlantTimerImbalance*() =
+  ## TEST-ONLY escape hatch (RFC 0003 slice S15's RED phase), the timer-
+  ## accounting analogue of `simLedgerDebugPlantDroppedEnqueue`: records
+  ## an `armed` the ledger will never observe a matching `fired`/
+  ## `cancelled`/still-pending for. Requires a currently-running
+  ## `simulateWithLedger` body; not part of the stable API.
+  let loop = getThreadDispatcher()
+  let ledger = loop.simLedgerOf()
+  doAssert not ledger.isNil,
+    "simLedgerDebugPlantTimerImbalance() requires simulateWithLedger()"
+  ledger.noteTimerArmed()
+
+proc simLedgerRegisterWaiter*(desc: string,
+    countProc: proc(): int {.gcsafe, raises: [].}) =
+  ## Opts one asyncsync primitive into RFC 0003 3.9's waiter-
+  ## conservation law (the 2026-08-15 amendment, slice S15): `desc`
+  ## names it in a violation, `countProc` is typically the primitive's
+  ## own `waitersCount`/`gettersCount`/`puttersCount` accessor. The
+  ## generic, low-level entry point behind the typed
+  ## `simLedgerTrackWaiters` overloads below - use those directly
+  ## unless tracking a primitive they don't cover. Requires a currently-
+  ## running `simulateWithLedger` body.
+  let loop = getThreadDispatcher()
+  let ledger = loop.simLedgerOf()
+  doAssert not ledger.isNil,
+    "simLedgerRegisterWaiter() requires simulateWithLedger()"
+  ledger.registerWaiterPrimitive(desc, countProc)
+
+proc simLedgerTrackWaiters*(lock: AsyncLock) =
+  ## Opts `lock` into waiter conservation (RFC 0003 3.9's 2026-08-15
+  ## amendment). Call once per instance, after construction, from
+  ## inside a `simulateWithLedger` body.
+  simLedgerRegisterWaiter("AsyncLock.waiters",
+    proc(): int {.gcsafe, raises: [].} = lock.waitersCount())
+
+proc simLedgerTrackWaiters*(event: AsyncEvent) =
+  ## As `simLedgerTrackWaiters(AsyncLock)`, for `AsyncEvent`.
+  simLedgerRegisterWaiter("AsyncEvent.waiters",
+    proc(): int {.gcsafe, raises: [].} = event.waitersCount())
+
+proc simLedgerTrackWaiters*[T](aq: AsyncQueue[T]) =
+  ## As `simLedgerTrackWaiters(AsyncLock)`, for `AsyncQueue` - tracks
+  ## `getters` and `putters` as two separately-named waiter lists, per
+  ## RFC 0003 3.9's "per waiter list" phrasing.
+  simLedgerRegisterWaiter("AsyncQueue.getters",
+    proc(): int {.gcsafe, raises: [].} = aq.gettersCount())
+  simLedgerRegisterWaiter("AsyncQueue.putters",
+    proc(): int {.gcsafe, raises: [].} = aq.puttersCount())
+
+proc simLedgerTrackWaiters*[T](ab: AsyncEventQueue[T]) =
+  ## As `simLedgerTrackWaiters(AsyncLock)`, for `AsyncEventQueue` - the
+  ## 2026-08-15 amendment's addition beyond
+  ## `feat/asyncsync-waiters-introspection`'s original four primitives;
+  ## `ab.waitersCount()` is this slice's own accessor (`asyncsync.nim`),
+  ## added in the same uniform style.
+  simLedgerRegisterWaiter("AsyncEventQueue.readers",
+    proc(): int {.gcsafe, raises: [].} = ab.waitersCount())
+
+proc simLedgerTrackWaiters*(s: AsyncSemaphore) =
+  ## As `simLedgerTrackWaiters(AsyncLock)`, for `AsyncSemaphore`.
+  simLedgerRegisterWaiter("AsyncSemaphore.waiters",
+    proc(): int {.gcsafe, raises: [].} = s.waitersCount())
+
 type
   SimSeedOutcome* = object
     ## One seed's verdict from `sweepSeeds`/`collectSweepSeeds` (RFC 0003

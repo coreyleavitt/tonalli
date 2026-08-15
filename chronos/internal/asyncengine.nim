@@ -153,10 +153,34 @@ when chronosSimulation:
     ## not from a `processCallbacksBody` touchpoint).
     (if loop.simState.isNil: nil else: loop.simState.simLedgerState())
 
-  template simLedgerNoteEnqueue(loop: untyped, kind: SimLedgerQueueKind) =
+  template simLedgerNoteEnqueue(loop: untyped, kind: SimLedgerQueueKind,
+                                 hasContext: bool = false) =
+    ## `hasContext` (RFC 0003 slice S15's contextvar-accounting law):
+    ## pass `true` at a `Callbacks`-kind call site whose callable carries
+    ## a non-nil captured context - never at an `Idlers`/`Ticks` call
+    ## site, since those are staging queues, not `Callbacks` itself, and
+    ## the law counts a capture exactly once, at the callable's final
+    ## resting place before `fireWithContext` restores it.
     let simLedgerHookHere = simLedgerOf(loop)
     if not simLedgerHookHere.isNil:
       simLedgerHookHere.noteEnqueue(kind)
+      if hasContext:
+        simLedgerHookHere.noteContextCaptured()
+
+  template simLedgerNoteTimerArmed(loop: untyped) =
+    let simLedgerHookHere = simLedgerOf(loop)
+    if not simLedgerHookHere.isNil:
+      simLedgerHookHere.noteTimerArmed()
+
+  template simLedgerNoteTimerFired(loop: untyped) =
+    let simLedgerHookHere = simLedgerOf(loop)
+    if not simLedgerHookHere.isNil:
+      simLedgerHookHere.noteTimerFired()
+
+  template simLedgerNoteTimerCancelled(loop: untyped) =
+    let simLedgerHookHere = simLedgerOf(loop)
+    if not simLedgerHookHere.isNil:
+      simLedgerHookHere.noteTimerCancelled()
 
   template simLedgerCallbacksResidentLen(loop: untyped): int =
     ## `loop.callbacks`'s real (non-sentinel) length at a checkpoint
@@ -220,6 +244,8 @@ template processTimersGetTimeout(loop, timeout: untyped) =
   while loop.timers.len > 0:
     if loop.timers[0].function.function.isNil:
       discard loop.timers.pop()
+      when chronosSimulation:
+        simLedgerNoteTimerCancelled(loop)
       continue
 
     lastFinish = loop.timers[0].finishAt
@@ -229,7 +255,9 @@ template processTimersGetTimeout(loop, timeout: untyped) =
     let callable = loop.timers.pop().function
     loop.callbacks.addLast(callable)
     when chronosSimulation:
-      simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks)
+      simLedgerNoteTimerFired(loop)
+      simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks,
+                            not isNil(callable.context))
 
   if loop.timers.len > 0:
     timeout = (lastFinish - curTime).getAsyncTimestamp()
@@ -249,6 +277,8 @@ template processTimers(loop: untyped) =
   while loop.timers.len > 0:
     if loop.timers[0].function.function.isNil:
       discard loop.timers.pop()
+      when chronosSimulation:
+        simLedgerNoteTimerCancelled(loop)
       continue
 
     if curTime < loop.timers[0].finishAt:
@@ -256,7 +286,9 @@ template processTimers(loop: untyped) =
     let callable = loop.timers.pop().function
     loop.callbacks.addLast(callable)
     when chronosSimulation:
-      simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks)
+      simLedgerNoteTimerFired(loop)
+      simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks,
+                            not isNil(callable.context))
 
 template processIdlers(loop: untyped) =
   if len(loop.idlers) > 0:
@@ -268,6 +300,8 @@ template processIdlers(loop: untyped) =
         if not simLedgerHookHere.isNil:
           simLedgerHookHere.noteFired(SimLedgerQueueKind.Idlers)
           simLedgerHookHere.noteEnqueue(SimLedgerQueueKind.Callbacks)
+          if not isNil(callable.context):
+            simLedgerHookHere.noteContextCaptured()
 
 template processTicks(loop: untyped) =
   while len(loop.ticks) > 0:
@@ -279,6 +313,8 @@ template processTicks(loop: untyped) =
         if not simLedgerHookHere.isNil:
           simLedgerHookHere.noteFired(SimLedgerQueueKind.Ticks)
           simLedgerHookHere.noteEnqueue(SimLedgerQueueKind.Callbacks)
+          if not isNil(callable.context):
+            simLedgerHookHere.noteContextCaptured()
 
 template fireWithContext(callable: untyped) =
   # Restore the context captured at the callback's scheduling site
@@ -304,6 +340,22 @@ template simLedgerFireOne(loop: untyped, callable: untyped) =
   ## `fireCancelCallback` mechanism (asyncfutures.nim), never through
   ## here, so it accounts to whichever step's fire triggered it with no
   ## extra bookkeeping at all.
+  ##
+  ## Context conservation is *not* checked per-fire here, unlike
+  ## callback/timer conservation: `DispatcherBase.callbacks` is a
+  ## `CallbackQueue` (`internal/callbackqueue.nim`), whose interface is
+  ## deliberately exactly five entry points with no iteration or random
+  ## access, so there is no O(1) or even cheap way to read "how many
+  ## currently-queued callbacks carry a context" without adding a sixth,
+  ## ledger-only entry point to a queue type documented as narrow by
+  ## design. `captured`/`restored` are still counted at their real,
+  ## independent touchpoints (`simLedgerNoteEnqueue`'s `hasContext` and
+  ## the `noteContextRestored` call below), so the check itself loses
+  ## nothing - only its mid-run cadence - by running once, at
+  ## `simulate()` teardown (`simLedgerTeardownCheck`), where the
+  ## callback-conservation check's own unconditional drain already
+  ## walks every resident entry via the queue's public `popFirst` and
+  ## can inspect `.context` on each one for free.
   when chronosSimulation:
     let simLedgerHookHere = simLedgerOf(loop)
     if not simLedgerHookHere.isNil:
@@ -312,9 +364,12 @@ template simLedgerFireOne(loop: untyped, callable: untyped) =
   when chronosSimulation:
     if not simLedgerHookHere.isNil:
       simLedgerHookHere.noteFired(SimLedgerQueueKind.Callbacks)
+      if not isNil(callable.context):
+        simLedgerHookHere.noteContextRestored()
       simLedgerHookHere.endStep()
       simLedgerHookHere.checkQueueConservation(SimLedgerQueueKind.Callbacks,
         simLedgerCallbacksResidentLen(loop))
+      simLedgerHookHere.checkTimerConservation(len(loop.timers))
 
 template simLedgerNilPopOne(loop: untyped) =
   when chronosSimulation:
@@ -410,7 +465,8 @@ when chronosSimulation:
         case delivery.kind
         of SimEventKind.Readiness:
           loop.callbacks.addLast(delivery.callback)
-          simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks)
+          simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks,
+                                not isNil(delivery.callback.context))
         of SimEventKind.Arrival:
           loop.processThreadCallbacks()
       count = decision.order.len
@@ -2130,32 +2186,45 @@ when chronosSimulation:
     gDisp = disp
 
   proc simLedgerTeardownCheck*(disp: PDispatcher) =
-    ## The final callback-conservation reconciliation (RFC 0003 3.9): a
+    ## The final reconciliation for every S14/S15 law (RFC 0003 3.9): a
     ## no-op unless `disp` opted into ledger checking. Called by
     ## `chronos/simulation.nim`'s ledger-aware harness entry point right
     ## before the dying sim dispatcher's queues are discarded (RFC 0003
     ## 3.8's unconditional teardown discard), so whatever is drained
     ## here is exactly the "explicitly dropped at teardown" term the
-    ## law names - draining (rather than reusing `simLedgerFireOne`'s
-    ## per-fire "-1 resident sentinel" constant) is what makes this
-    ## correct even when teardown lands mid-drain: a body's exception,
-    ## a deadlock, or a protocol violation can all unwind from a point
-    ## between `poll()`'s leading drain and its own trailing sentinel
-    ## push, where no sentinel is resident at all - counting what is
-    ## actually there, rather than assuming, is exact regardless. Safe
-    ## to drain unconditionally: the dying dispatcher's queues were
-    ## already headed for abandonment either way.
+    ## callback- and context-conservation laws name - draining (rather
+    ## than reusing `simLedgerFireOne`'s per-fire "-1 resident sentinel"
+    ## constant) is what makes this correct even when teardown lands
+    ## mid-drain: a body's exception, a deadlock, or a protocol
+    ## violation can all unwind from a point between `poll()`'s leading
+    ## drain and its own trailing sentinel push, where no sentinel is
+    ## resident at all - counting what is actually there, rather than
+    ## assuming, is exact regardless. Safe to drain unconditionally: the
+    ## dying dispatcher's queues were already headed for abandonment
+    ## either way. Timer conservation reads `disp.timers` without
+    ## draining it (the heap, unlike the queues above, is not about to
+    ## be discarded by anything else here) - `len` is the same O(1)
+    ## "pending" read `checkTimerConservation` already uses mid-run.
+    ## Waiter conservation (the 2026-08-15 amendment) has no dispatcher
+    ## state of its own to drain - `checkWaiterTeardown` reads each
+    ## registered primitive's own accessor directly.
     let ledger = simLedgerOf(disp)
     if ledger.isNil:
       return
     var residentCallbacks = 0
+    var residentWithContext = 0
     while len(disp.callbacks) > 0:
       let callable = disp.callbacks.popFirst()
       if not isSentinel(callable):
         inc residentCallbacks
+        if not isNil(callable.context):
+          inc residentWithContext
     ledger.checkQueueConservation(SimLedgerQueueKind.Callbacks, residentCallbacks)
     ledger.checkQueueConservation(SimLedgerQueueKind.Idlers, len(disp.idlers))
     ledger.checkQueueConservation(SimLedgerQueueKind.Ticks, len(disp.ticks))
+    ledger.checkContextConservation(residentWithContext)
+    ledger.checkTimerConservation(len(disp.timers))
+    ledger.checkWaiterTeardown()
 
 proc setGlobalDispatcher*(disp: PDispatcher) {.
       gcsafe, deprecated: "Use setThreadDispatcher() instead".} =
@@ -2173,6 +2242,8 @@ proc setTimer*(at: Moment, cb: CallbackFunc,
   result = TimerCallback(finishAt: at,
                          function: capturingCallback(cb, udata))
   loop.timers.push(result)
+  when chronosSimulation:
+    simLedgerNoteTimerArmed(loop)
 
 proc clearTimer*(timer: TimerCallback) {.inline.} =
   # Overwrite releases the captured context ref, same as any other
@@ -2212,6 +2283,8 @@ proc removeTimer*(at: Moment, cb: CallbackFunc, udata: pointer = nil) =
     # heapqueue.del fires =destroy on the removed TimerCallback's
     # function field, releasing its captured context.
     loop.timers.del(index)
+    when chronosSimulation:
+      simLedgerNoteTimerCancelled(loop)
 
 proc removeTimer*(at: int64, cb: CallbackFunc, udata: pointer = nil) {.
      inline, deprecated: "Use removeTimer(Duration, cb, udata)".} =
@@ -2227,7 +2300,8 @@ proc callSoon*(acb: AsyncCallback) =
   let loop = getThreadDispatcher()
   loop.callbacks.addLast(acb)
   when chronosSimulation:
-    simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks)
+    simLedgerNoteEnqueue(loop, SimLedgerQueueKind.Callbacks,
+                          not isNil(acb.context))
 
 proc callSoon*(cbproc: CallbackFunc, udata: pointer = nil) =
   ## Schedule `cbproc` to be called as soon as possible.

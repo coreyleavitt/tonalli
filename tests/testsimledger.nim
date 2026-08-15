@@ -7,9 +7,10 @@
 #              MIT license (LICENSE-MIT)
 
 ## Tests for `chronos/internal/simledger.nim`'s D8 ghost-ledger laws
-## (RFC 0003 3.9, slice S14): callback conservation and future
-## lifecycle, checked at step boundaries (`simulateWithLedger`) plus a
-## final check at teardown.
+## (RFC 0003 3.9, slices S14/S15): callback conservation, future
+## lifecycle, contextvar accounting, timer accounting, and waiter
+## conservation, checked at step boundaries (`simulateWithLedger`) plus
+## a final check at teardown.
 ##
 ## Producer-coverage scoping judgment call: ledger checking is opt-in
 ## (`simulateWithLedger`, never the plain `simulate`/`sweepSeeds` every
@@ -25,6 +26,16 @@
 ## `notin`/`in` substring assertions rather than pinned verbatim, to
 ## avoid over-fitting the pinning discipline S3-S5 use for genuine
 ## ordering guarantees onto a diagnostic message with no such contract.
+##
+## Slice S15 adds three laws: contextvar accounting and timer
+## accounting are checked the same way as S14's laws (real hooks at the
+## real capture/restore and arm/fire/cancel touchpoints in
+## `asyncengine.nim`); waiter conservation (the 2026-08-15 amendment) is
+## different - `asyncsync.nim` gains no seam, so the probes below
+## register each primitive explicitly (`simLedgerTrackWaiters`) and the
+## law's only enforcement point is `simulate()` teardown (see
+## `simledger.nim`'s module docstring for why a per-step reading cannot
+## distinguish a legitimate in-flight wait from a leak).
 
 import unittest2
 import std/strutils
@@ -261,6 +272,245 @@ when defined(chronosSimulation) and compileOption("threads"):
           msg: "unexpected " & $exc.name & ": " & exc.msg)
     probeChan.send(outcome)
 
+  # --- planted contextvar imbalance: contextvar accounting -----------------
+
+  proc probePlantedContextImbalanceCaughtAtTeardown() {.thread.} =
+    var outcome = ProbeOutcome(ok: true)
+    try:
+      simulateWithLedger(seed = 0xC0DE'u64):
+        # A real capture/restore pair (exercises the happy-path
+        # touchpoints too) before planting the imbalance, so the
+        # violation is genuinely attributable to the plant, not to an
+        # unrelated miscount.
+        await sleepAsync(0.milliseconds)
+        simLedgerDebugPlantContextImbalance()
+      outcome = ProbeOutcome(ok: false,
+        msg: "simulateWithLedger did not raise for the planted context " &
+             "imbalance")
+    except SimLedgerError as exc:
+      if exc.seed != 0xC0DE'u64:
+        outcome = ProbeOutcome(ok: false, msg: "wrong seed: " & $exc.seed)
+      elif "context captures" notin exc.objectDesc:
+        outcome = ProbeOutcome(ok: false,
+          msg: "object not named: " & exc.objectDesc)
+      elif "contextvar conservation" notin exc.msg:
+        outcome = ProbeOutcome(ok: false,
+          msg: "law not named in message: " & exc.msg)
+      elif not exc.msg.startsWith("simulation invariant violation:"):
+        outcome = ProbeOutcome(ok: false,
+          msg: "wrong message prefix: " & exc.msg)
+      else:
+        checkpoint "planted context-imbalance RED evidence: seed=0x" &
+          toHex(exc.seed) & " step=" & $exc.step & " " & exc.msg
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "wrong exception type: " & $exc.name & ": " & exc.msg)
+    probeChan.send(outcome)
+
+  # --- planted timer imbalance: timer accounting ----------------------------
+
+  proc probePlantedTimerImbalanceCaughtAtTeardown() {.thread.} =
+    var outcome = ProbeOutcome(ok: true)
+    try:
+      simulateWithLedger(seed = 0x71DE'u64):
+        # A real armed/fired/cancelled mix before planting the
+        # imbalance: one timer fires normally, one is cancelled before
+        # firing (`clearTimer`, via cancelling the `sleepAsync` future).
+        await sleepAsync(0.milliseconds)
+        let cancelled = sleepAsync(1.hours)
+        discard tryCancel(cancelled)
+        simLedgerDebugPlantTimerImbalance()
+        # The next real fire's per-fire check catches the mismatch
+        # (timer conservation, unlike context conservation, is checked
+        # per-fire: `len(loop.timers)` is O(1), so there is no interface
+        # constraint forcing a teardown-only cadence here).
+        await sleepAsync(0.milliseconds)
+      outcome = ProbeOutcome(ok: false,
+        msg: "simulateWithLedger did not raise for the planted timer " &
+             "imbalance")
+    except SimLedgerError as exc:
+      if exc.seed != 0x71DE'u64:
+        outcome = ProbeOutcome(ok: false, msg: "wrong seed: " & $exc.seed)
+      elif "timer heap" notin exc.objectDesc:
+        outcome = ProbeOutcome(ok: false,
+          msg: "object not named: " & exc.objectDesc)
+      elif "timer conservation" notin exc.msg:
+        outcome = ProbeOutcome(ok: false,
+          msg: "law not named in message: " & exc.msg)
+      elif not exc.msg.startsWith("simulation invariant violation:"):
+        outcome = ProbeOutcome(ok: false,
+          msg: "wrong message prefix: " & exc.msg)
+      else:
+        checkpoint "planted timer-imbalance RED evidence: seed=0x" &
+          toHex(exc.seed) & " step=" & $exc.step & " " & exc.msg
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "wrong exception type: " & $exc.name & ": " & exc.msg)
+    probeChan.send(outcome)
+
+  # --- timer accounting: cancellation reaches the lazy-sweep discard -------
+
+  proc probeTimerCancellationSweptWithoutViolation() {.thread.} =
+    ## The planted-imbalance probe above cancels a far-future timer (1
+    ## hour out), which the lazy sweep never revisits within the test -
+    ## correctly counted as still-`pending`, per this slice's design
+    ## (`noteTimerCancelled` fires only when the sweep actually discards
+    ## a zombie entry, never at `clearTimer` itself, to avoid double-
+    ## counting against `pending` for the interval in between). This
+    ## probe cancels a near-future timer instead, so a later real fire's
+    ## sweep reaches and discards the zombie within the run, exercising
+    ## `noteTimerCancelled` itself - and confirms it does not falsely
+    ## violate conservation.
+    var outcome = ProbeOutcome(ok: true)
+    try:
+      simulateWithLedger(seed = 0x7EA9'u64):
+        let toCancel = sleepAsync(1.milliseconds)
+        discard tryCancel(toCancel)
+        # Both under the same near-future window as `toCancel`, so the
+        # sweep that discovers `toCancel`'s zombie has already advanced
+        # virtual time past it.
+        for _ in 0 ..< 3:
+          await sleepAsync(1.milliseconds)
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "unexpected " & $exc.name & ": " & exc.msg)
+    probeChan.send(outcome)
+
+  # --- waiter conservation: happy path across all five primitives ----------
+
+  proc probeWaiterConservationHappyPath() {.thread.} =
+    ## Exercises every primitive the 2026-08-15 amendment names (RFC
+    ## 0003 3.9), each with a genuine park-then-wake so the law's
+    ## per-instance registration and its `waitersCount`/`gettersCount`/
+    ## `puttersCount`-backed accessor plumbing (`simLedgerTrackWaiters`)
+    ## are validated against real blocking, not only against primitives
+    ## that never parked anything.
+    var outcome = ProbeOutcome(ok: true)
+    try:
+      simulateWithLedger(seed = 0xA11'u64):
+        let lock = newAsyncLock()
+        simLedgerTrackWaiters(lock)
+        await lock.acquire()
+        let lockWaiter = lock.acquire()  # parks: lock is held
+        lock.release()
+        await lockWaiter
+        lock.release()
+
+        let event = newAsyncEvent()
+        simLedgerTrackWaiters(event)
+        let eventWaiter = event.wait()   # parks: not yet set
+        event.fire()
+        await eventWaiter
+
+        let queue = newAsyncQueue[int](maxsize = 1)
+        simLedgerTrackWaiters(queue)
+        await queue.put(1)
+        let putterWaiter = queue.put(2)  # parks: queue full
+        let firstItem = await queue.get()  # wakes the putter
+        doAssert firstItem == 1
+        await putterWaiter
+        discard await queue.get()
+
+        let eventQueue = newAsyncEventQueue[int]()
+        simLedgerTrackWaiters(eventQueue)
+        let key = eventQueue.register()
+        let waitFut = eventQueue.waitEvents(key)  # parks: nothing queued
+        eventQueue.emit(42)
+        discard await waitFut
+        eventQueue.unregister(key)
+
+        let sema = newAsyncSemaphore(1)
+        simLedgerTrackWaiters(sema)
+        await sema.acquire()
+        let semaWaiter = sema.acquire()  # parks: no slots available
+        sema.release()
+        await semaWaiter
+        sema.release()
+
+        await sleepAsync(0.milliseconds)
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "unexpected " & $exc.name & ": " & exc.msg)
+    probeChan.send(outcome)
+
+  # --- waiter conservation: leaked AsyncLock waiter caught at teardown -----
+
+  proc probeLeakedAsyncLockWaiterCaughtAtTeardown() {.thread.} =
+    ## The RFC 0003 3.9 amendment's motivating leak: a `race()`/`one()`-
+    ## style abandoned wait. `race`/`one` complete on the first winner
+    ## and only `removeCallback` the losers - they document that losing
+    ## futures are never cancelled - so a losing `AsyncLock.acquire()`
+    ## stays parked in `lock.waiters` forever. This probe reproduces the
+    ## same shape directly (start an `acquire()` against a held lock,
+    ## never await or cancel it) rather than importing `race`/`one`,
+    ## since the effect on `lock.waiters` is identical either way.
+    var outcome = ProbeOutcome(ok: true)
+    try:
+      simulateWithLedger(seed = 0x1EA6'u64):
+        let lock = newAsyncLock()
+        simLedgerTrackWaiters(lock)
+        await lock.acquire()
+        discard lock.acquire()  # parks, then abandoned: never awaited,
+                                 # never cancelled
+        await sleepAsync(0.milliseconds)
+      outcome = ProbeOutcome(ok: false,
+        msg: "simulateWithLedger did not raise for the leaked waiter")
+    except SimLedgerError as exc:
+      if exc.seed != 0x1EA6'u64:
+        outcome = ProbeOutcome(ok: false, msg: "wrong seed: " & $exc.seed)
+      elif "AsyncLock.waiters" notin exc.objectDesc:
+        outcome = ProbeOutcome(ok: false,
+          msg: "primitive not named: " & exc.objectDesc)
+      elif "waiter conservation" notin exc.msg:
+        outcome = ProbeOutcome(ok: false,
+          msg: "law not named in message: " & exc.msg)
+      elif not exc.msg.startsWith("simulation invariant violation:"):
+        outcome = ProbeOutcome(ok: false,
+          msg: "wrong message prefix: " & exc.msg)
+      else:
+        checkpoint "leaked AsyncLock waiter RED evidence: seed=0x" &
+          toHex(exc.seed) & " " & exc.msg
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "wrong exception type: " & $exc.name & ": " & exc.msg)
+    probeChan.send(outcome)
+
+  # --- waiter conservation: leaked AsyncEventQueue reader at teardown ------
+
+  proc probeLeakedAsyncEventQueueWaiterCaughtAtTeardown() {.thread.} =
+    ## As the `AsyncLock` leak above, for `AsyncEventQueue` - this
+    ## slice's own new accessor (`asyncsync.nim`'s `waitersCount`,
+    ## `feat/asyncsync-waiters-introspection` did not cover this
+    ## primitive), exercised end to end through the ledger.
+    var outcome = ProbeOutcome(ok: true)
+    try:
+      simulateWithLedger(seed = 0xE9EA'u64):
+        let eventQueue = newAsyncEventQueue[int]()
+        simLedgerTrackWaiters(eventQueue)
+        let key = eventQueue.register()
+        discard eventQueue.waitEvents(key)  # parks, then abandoned:
+                                             # never awaited, never
+                                             # unregistered/cancelled
+        await sleepAsync(0.milliseconds)
+      outcome = ProbeOutcome(ok: false,
+        msg: "simulateWithLedger did not raise for the leaked waiter")
+    except SimLedgerError as exc:
+      if exc.seed != 0xE9EA'u64:
+        outcome = ProbeOutcome(ok: false, msg: "wrong seed: " & $exc.seed)
+      elif "AsyncEventQueue.readers" notin exc.objectDesc:
+        outcome = ProbeOutcome(ok: false,
+          msg: "primitive not named: " & exc.objectDesc)
+      elif "waiter conservation" notin exc.msg:
+        outcome = ProbeOutcome(ok: false,
+          msg: "law not named in message: " & exc.msg)
+      else:
+        checkpoint "leaked AsyncEventQueue waiter RED evidence: seed=0x" &
+          toHex(exc.seed) & " " & exc.msg
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "wrong exception type: " & $exc.name & ": " & exc.msg)
+    probeChan.send(outcome)
+
   suite "ghost ledgers: callback conservation and future lifecycle":
     test "the happy path raises nothing":
       let outcome = runProbe(probeHappyPathRaisesNothing)
@@ -289,5 +539,35 @@ when defined(chronosSimulation) and compileOption("threads"):
 
     test "nil-function pops are unreachable across a representative run":
       let outcome = runProbe(probeNilFunctionPopUnreachableAcrossRepresentativeRun)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "a planted contextvar imbalance is caught at teardown":
+      let outcome = runProbe(probePlantedContextImbalanceCaughtAtTeardown)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "a planted timer imbalance is caught":
+      let outcome = runProbe(probePlantedTimerImbalanceCaughtAtTeardown)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "a timer cancellation swept during the run raises nothing":
+      let outcome = runProbe(probeTimerCancellationSweptWithoutViolation)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "waiter conservation holds across all five primitives' happy path":
+      let outcome = runProbe(probeWaiterConservationHappyPath)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "a leaked AsyncLock waiter is caught at teardown naming the primitive":
+      let outcome = runProbe(probeLeakedAsyncLockWaiterCaughtAtTeardown)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "a leaked AsyncEventQueue waiter is caught at teardown naming the primitive":
+      let outcome = runProbe(probeLeakedAsyncEventQueueWaiterCaughtAtTeardown)
       checkpoint outcome.msg
       check outcome.ok
