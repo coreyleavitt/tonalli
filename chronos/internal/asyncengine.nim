@@ -23,6 +23,27 @@ import ./[asyncmacro, callbackqueue, errors]
 when chronosSimulation:
   import std/algorithm
   import ./simengine
+
+  # The confinement mechanism behind this retirement round's typed sim
+  # error channel (fork issue #19 workstream 2): every provenance-
+  # guarded touch site's `raises` effect is widened by one of these two
+  # conditional pragma aliases, applied alongside whatever pragma the
+  # proc already carries (Nim unions a proc's `raises` across its full
+  # pragma list - verified against this toolchain, including through
+  # the `{.async: (raises: [...]).}` macro pragma - though NOT across
+  # two ordinary `{.raises: [...].}`-establishing pragmas on a non-async
+  # proc, where only the first is honored; those sites are dual-defined
+  # under `when chronosSimulation`/`else` instead). Off (the `else`
+  # branch below), both contribute nothing: a define-off build never
+  # sees a wider effect, never sees `SimBarrierError`/`SimEngineError`/
+  # `SimLedgerError` named at all, and never sees a compiled call to
+  # `raiseSimBarrier`/`raiseSimEngineError`.
+  {.pragma: mayBarrier, raises: [SimBarrierError].}
+  {.pragma: mayViolate, raises: [SimEngineError, SimLedgerError].}
+else:
+  {.pragma: mayBarrier, raises: [].}
+  {.pragma: mayViolate, raises: [].}
+
 when defined(windows):
   import ./contextnode
     # For `ContextNodeBase`, naming `CompletionData.context` below -
@@ -482,9 +503,10 @@ when chronosSimulation:
         discard loop.simState.simDecideTimeAdvance(armed, curTime)
         count = 0
       elif deliverable.len > 0:
-        raiseAssert "oracle deferred all deliverable work with no fallback"
+        raiseSimEngineError(SimFailureKind.OracleDeferral,
+          "oracle deferred all deliverable work with no fallback")
       else:
-        raiseAssert "deadlock: no runnable work"
+        raiseSimEngineError(SimFailureKind.Deadlock, "deadlock: no runnable work")
 
 when defined(nimdoc):
   type
@@ -798,7 +820,8 @@ elif defined(windows):
         if not disp.waking.testAndSet(moAcquireRelease):
           discard disp.simState.simScheduleArrival()
 
-    proc simDecideIo*(disp: PDispatcher, cp: IoOutcomePoint): IoDecision =
+    proc simDecideIo*(disp: PDispatcher, cp: IoOutcomePoint): IoDecision
+                       {.raises: [SimEngineError].} =
       ## Test/script entry point (S8's decision-budget proof, ahead of
       ## S10's transport seam, which becomes the production caller):
       ## resolves one I/O outcome directly against `disp`'s engine state,
@@ -823,7 +846,7 @@ elif defined(windows):
 
     proc simStreamIo*(disp: PDispatcher, fd: AsyncFD, op: SimIoOp,
                        data: pointer, maxBytes: int):
-        tuple[res: int, err: OSErrorCode] =
+        tuple[res: int, err: OSErrorCode] {.raises: [SimEngineError].} =
       ## `stream.nim`'s POSIX-only `simRawIo` is the sole caller (RFC
       ## 0003 3.2 N4, S11a).
       doAssert isSimDispatcher(disp),
@@ -839,7 +862,8 @@ elif defined(windows):
 
     proc simDatagramIo*(disp: PDispatcher, fd: AsyncFD, op: SimIoOp,
                          data: pointer, maxBytes: int):
-        tuple[res: int, err: OSErrorCode, fromAddr: seq[byte]] =
+        tuple[res: int, err: OSErrorCode, fromAddr: seq[byte]]
+        {.raises: [SimEngineError].} =
       ## `chronos/transports/datagram.nim`'s POSIX-only `simRawIo` is the
       ## sole caller (RFC 0003 6, S12a/S12b). Stays defined here too, like
       ## `simMintStreamPair` above, purely so `chronos/simulation.nim`'s
@@ -869,12 +893,12 @@ elif defined(windows):
     ## (Unix) for the specified dispatcher.
     disp.ioPort
 
-  proc register2*(fd: AsyncFD): Result[void, OSErrorCode] =
+  proc register2*(fd: AsyncFD): Result[void, OSErrorCode] {.mayBarrier.} =
     ## Register file descriptor ``fd`` in thread's dispatcher.
     let loop = getThreadDispatcher()
     when chronosSimulation:
       if not simProvenanceGuard(loop, fd):
-        return err(SimBarrierCode)
+        raiseSimBarrier("register2()")
       if loop.isSimDispatcher():
         # Registration routing (RFC 0003 3.2 point 2): a sim-minted fd
         # has no IOCP association to create - `loop.handles` bookkeeping
@@ -887,9 +911,14 @@ elif defined(windows):
     loop.handles.incl(fd)
     ok()
 
-  proc register*(fd: AsyncFD) {.raises: [OSError].} =
-    ## Register file descriptor ``fd`` in thread's dispatcher.
-    register2(fd).tryGet()
+  when chronosSimulation:
+    proc register*(fd: AsyncFD) {.raises: [OSError, SimBarrierError].} =
+      ## Register file descriptor ``fd`` in thread's dispatcher.
+      register2(fd).tryGet()
+  else:
+    proc register*(fd: AsyncFD) {.raises: [OSError].} =
+      ## Register file descriptor ``fd`` in thread's dispatcher.
+      register2(fd).tryGet()
 
   proc unregister*(fd: AsyncFD) =
     ## Unregisters ``fd``.
@@ -907,59 +936,59 @@ elif defined(windows):
     # and a real (non-simulated) dispatcher reaching here is a defect,
     # not a barrier, because no legitimate caller exists.
     proc addReader2*(fd: AsyncFD, cb: CallbackFunc,
-                     udata: pointer = nil): Result[void, OSErrorCode] =
+                     udata: pointer = nil): Result[void, OSErrorCode] {.mayBarrier.} =
       ## Start watching the sim-minted file descriptor ``fd`` for read
       ## availability and then call the callback ``cb`` with specified
       ## argument ``udata``.
       let loop = getThreadDispatcher()
       if not simProvenanceGuard(loop, fd):
-        return err(SimBarrierCode)
+        raiseSimBarrier("addReader2()")
       doAssert loop.isSimDispatcher(),
         "addReader2() is only implemented for a simulated dispatcher on Windows"
       loop.simState.simSetReaderInterest(int(fd), capturingCallback(cb, udata))
       ok()
 
-    proc removeReader2*(fd: AsyncFD): Result[void, OSErrorCode] =
+    proc removeReader2*(fd: AsyncFD): Result[void, OSErrorCode] {.mayBarrier.} =
       ## Stop watching the sim-minted file descriptor ``fd`` for read
       ## availability.
       let loop = getThreadDispatcher()
       if not simProvenanceGuard(loop, fd):
-        return err(SimBarrierCode)
+        raiseSimBarrier("removeReader2()")
       doAssert loop.isSimDispatcher(),
         "removeReader2() is only implemented for a simulated dispatcher on Windows"
       loop.simState.simClearReaderInterest(int(fd))
       ok()
 
     proc addWriter2*(fd: AsyncFD, cb: CallbackFunc,
-                     udata: pointer = nil): Result[void, OSErrorCode] =
+                     udata: pointer = nil): Result[void, OSErrorCode] {.mayBarrier.} =
       ## Start watching the sim-minted file descriptor ``fd`` for write
       ## availability and then call the callback ``cb`` with specified
       ## argument ``udata``.
       let loop = getThreadDispatcher()
       if not simProvenanceGuard(loop, fd):
-        return err(SimBarrierCode)
+        raiseSimBarrier("addWriter2()")
       doAssert loop.isSimDispatcher(),
         "addWriter2() is only implemented for a simulated dispatcher on Windows"
       loop.simState.simSetWriterInterest(int(fd), capturingCallback(cb, udata))
       ok()
 
-    proc removeWriter2*(fd: AsyncFD): Result[void, OSErrorCode] =
+    proc removeWriter2*(fd: AsyncFD): Result[void, OSErrorCode] {.mayBarrier.} =
       ## Stop watching the sim-minted file descriptor ``fd`` for write
       ## availability.
       let loop = getThreadDispatcher()
       if not simProvenanceGuard(loop, fd):
-        return err(SimBarrierCode)
+        raiseSimBarrier("removeWriter2()")
       doAssert loop.isSimDispatcher(),
         "removeWriter2() is only implemented for a simulated dispatcher on Windows"
       loop.simState.simClearWriterInterest(int(fd))
       ok()
 
-    proc unregister2*(fd: AsyncFD): Result[void, OSErrorCode] =
+    proc unregister2*(fd: AsyncFD): Result[void, OSErrorCode] {.mayBarrier.} =
       ## Unregister the sim-minted file descriptor ``fd`` from thread's
       ## dispatcher.
       let loop = getThreadDispatcher()
       if not simProvenanceGuard(loop, fd):
-        return err(SimBarrierCode)
+        raiseSimBarrier("unregister2()")
       doAssert loop.isSimDispatcher(),
         "unregister2() is only implemented for a simulated dispatcher on Windows"
       loop.simState.simClearReaderInterest(int(fd))
@@ -1057,14 +1086,14 @@ elif defined(windows):
     ok()
 
   proc addProcess2*(pid: int, cb: CallbackFunc,
-                    udata: pointer = nil): Result[ProcessHandle, OSErrorCode] =
+                    udata: pointer = nil): Result[ProcessHandle, OSErrorCode] {.mayBarrier.} =
     ## Registers callback ``cb`` to be called when process with process
     ## identifier ``pid`` exited. Returns process identifier, which can be
     ## used to clear process callback via ``removeProcess``.
     doAssert(pid > 0, "Process identifier must be positive integer")
     when chronosSimulation:
       if getThreadDispatcher().isSimDispatcher():
-        return err(SimBarrierCode)
+        raiseSimBarrier("addProcess2()")
     let
       hProcess = openProcess(SYNCHRONIZE, WINBOOL(0), DWORD(pid))
       flags = WT_EXECUTEINWAITTHREAD or WT_EXECUTEONLYONCE
@@ -1090,28 +1119,42 @@ elif defined(windows):
         res.get()
     ok(ProcessHandle(wh))
 
-  proc removeProcess2*(procHandle: ProcessHandle): Result[void, OSErrorCode] =
+  proc removeProcess2*(procHandle: ProcessHandle): Result[void, OSErrorCode] {.mayBarrier.} =
     ## Remove process' watching using process' descriptor ``procHandle``.
     when chronosSimulation:
       if getThreadDispatcher().isSimDispatcher():
-        return err(SimBarrierCode)
+        raiseSimBarrier("removeProcess2()")
     let waitableHandle = WaitableHandle(procHandle)
     doAssert(not(isNil(waitableHandle)))
     ? closeWaitable(waitableHandle)
     ok()
 
-  proc addProcess*(pid: int, cb: CallbackFunc,
-                   udata: pointer = nil): ProcessHandle {.
-       raises: [OSError].} =
-    ## Registers callback ``cb`` to be called when process with process
-    ## identifier ``pid`` exited. Returns process identifier, which can be
-    ## used to clear process callback via ``removeProcess``.
-    addProcess2(pid, cb, udata).tryGet()
+  when chronosSimulation:
+    proc addProcess*(pid: int, cb: CallbackFunc,
+                     udata: pointer = nil): ProcessHandle {.
+         raises: [OSError, SimBarrierError].} =
+      ## Registers callback ``cb`` to be called when process with process
+      ## identifier ``pid`` exited. Returns process identifier, which can be
+      ## used to clear process callback via ``removeProcess``.
+      addProcess2(pid, cb, udata).tryGet()
 
-  proc removeProcess*(procHandle: ProcessHandle) {.
-       raises: [ OSError].} =
-    ## Remove process' watching using process' descriptor ``procHandle``.
-    removeProcess2(procHandle).tryGet()
+    proc removeProcess*(procHandle: ProcessHandle) {.
+         raises: [OSError, SimBarrierError].} =
+      ## Remove process' watching using process' descriptor ``procHandle``.
+      removeProcess2(procHandle).tryGet()
+  else:
+    proc addProcess*(pid: int, cb: CallbackFunc,
+                     udata: pointer = nil): ProcessHandle {.
+         raises: [OSError].} =
+      ## Registers callback ``cb`` to be called when process with process
+      ## identifier ``pid`` exited. Returns process identifier, which can be
+      ## used to clear process callback via ``removeProcess``.
+      addProcess2(pid, cb, udata).tryGet()
+
+    proc removeProcess*(procHandle: ProcessHandle) {.
+         raises: [OSError].} =
+      ## Remove process' watching using process' descriptor ``procHandle``.
+      removeProcess2(procHandle).tryGet()
 
   {.push stackTrace: off.}
   proc consoleCtrlEventHandler(dwCtrlType: DWORD): uint32 {.stdcallbackFunc.} =
@@ -1135,7 +1178,7 @@ elif defined(windows):
   {.pop.}
 
   proc addSignal2*(signal: int, cb: CallbackFunc,
-                   udata: pointer = nil): Result[SignalHandle, OSErrorCode] =
+                   udata: pointer = nil): Result[SignalHandle, OSErrorCode] {.mayBarrier.} =
     ## Start watching signal ``signal``, and when signal appears, call the
     ## callback ``cb`` with specified argument ``udata``. Returns signal
     ## identifier code, which can be used to remove signal callback
@@ -1148,7 +1191,7 @@ elif defined(windows):
     let loop = getThreadDispatcher()
     when chronosSimulation:
       if loop.isSimDispatcher():
-        return err(SimBarrierCode)
+        raiseSimBarrier("addSignal2()")
     var hWait: WaitableHandle = nil
 
     proc continuation(ucdata: pointer) {.gcsafe.} =
@@ -1175,29 +1218,46 @@ elif defined(windows):
       return err(error)
     ok(SignalHandle(hWait))
 
-  proc removeSignal2*(signalHandle: SignalHandle): Result[void, OSErrorCode] =
+  proc removeSignal2*(signalHandle: SignalHandle): Result[void, OSErrorCode] {.mayBarrier.} =
     ## Remove watching signal ``signal``.
     when chronosSimulation:
       if getThreadDispatcher().isSimDispatcher():
-        return err(SimBarrierCode)
+        raiseSimBarrier("removeSignal2()")
     ? closeWaitable(WaitableHandle(signalHandle))
     ok()
 
-  proc addSignal*(signal: int, cb: CallbackFunc,
-                  udata: pointer = nil): SignalHandle {.
-       raises: [ValueError].} =
-    ## Registers callback ``cb`` to be called when signal ``signal`` will be
-    ## raised. Returns signal identifier, which can be used to clear signal
-    ## callback via ``removeSignal``.
-    addSignal2(signal, cb, udata).valueOr:
-      raise newException(ValueError, osErrorMsg(error))
+  when chronosSimulation:
+    proc addSignal*(signal: int, cb: CallbackFunc,
+                    udata: pointer = nil): SignalHandle {.
+         raises: [ValueError, SimBarrierError].} =
+      ## Registers callback ``cb`` to be called when signal ``signal`` will be
+      ## raised. Returns signal identifier, which can be used to clear signal
+      ## callback via ``removeSignal``.
+      addSignal2(signal, cb, udata).valueOr:
+        raise newException(ValueError, osErrorMsg(error))
 
-  proc removeSignal*(signalHandle: SignalHandle) {.
-       raises: [ValueError].} =
-    ## Remove signal's watching using signal descriptor ``signalfd``.
-    let res = removeSignal2(signalHandle)
-    if res.isErr():
-      raise newException(ValueError, osErrorMsg(res.error()))
+    proc removeSignal*(signalHandle: SignalHandle) {.
+         raises: [ValueError, SimBarrierError].} =
+      ## Remove signal's watching using signal descriptor ``signalfd``.
+      let res = removeSignal2(signalHandle)
+      if res.isErr():
+        raise newException(ValueError, osErrorMsg(res.error()))
+  else:
+    proc addSignal*(signal: int, cb: CallbackFunc,
+                    udata: pointer = nil): SignalHandle {.
+         raises: [ValueError].} =
+      ## Registers callback ``cb`` to be called when signal ``signal`` will be
+      ## raised. Returns signal identifier, which can be used to clear signal
+      ## callback via ``removeSignal``.
+      addSignal2(signal, cb, udata).valueOr:
+        raise newException(ValueError, osErrorMsg(error))
+
+    proc removeSignal*(signalHandle: SignalHandle) {.
+         raises: [ValueError].} =
+      ## Remove signal's watching using signal descriptor ``signalfd``.
+      let res = removeSignal2(signalHandle)
+      if res.isErr():
+        raise newException(ValueError, osErrorMsg(res.error()))
 
   template pollRealSelectBranch(loop: PDispatcher, curTimeout,
                                  count, hasWakeup: untyped) =
@@ -1291,7 +1351,7 @@ elif defined(windows):
       if hasWakeup:
         loop.processThreadCallbacks()
 
-  proc poll*() {.tags: [NestedPoll, RootEffect].} =
+  proc poll*() {.tags: [NestedPoll, RootEffect], mayViolate.} =
     let loop = getThreadDispatcher()
     loop.preparePoll()
 
@@ -1385,7 +1445,7 @@ elif defined(windows):
     if not(isNil(aftercb)):
       loop.callbacks.addLast(capturingCallback(aftercb))
 
-  proc unregisterAndCloseFd*(fd: AsyncFD): Result[void, OSErrorCode] =
+  proc unregisterAndCloseFd*(fd: AsyncFD): Result[void, OSErrorCode] {.mayBarrier.} =
     ## Unregister from system queue and close asynchronous socket.
     ##
     ## NOTE: Use this function to close temporary sockets/pipes only (which
@@ -1395,7 +1455,7 @@ elif defined(windows):
     when chronosSimulation:
       let loop = getThreadDispatcher()
       if not simProvenanceGuard(loop, fd):
-        return err(SimBarrierCode)
+        raiseSimBarrier("unregisterAndCloseFd()")
       if loop.isSimDispatcher():
         loop.handles.excl(fd)
         return ok()
@@ -1605,7 +1665,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
         if not disp.waking.testAndSet(moAcquireRelease):
           discard disp.simState.simScheduleArrival()
 
-    proc simDecideIo*(disp: PDispatcher, cp: IoOutcomePoint): IoDecision =
+    proc simDecideIo*(disp: PDispatcher, cp: IoOutcomePoint): IoDecision
+                       {.raises: [SimEngineError].} =
       ## Test/script entry point (S8's decision-budget proof, ahead of
       ## S10's transport seam, which becomes the production caller):
       ## resolves one I/O outcome directly against `disp`'s engine state,
@@ -1632,7 +1693,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
 
     proc simStreamIo*(disp: PDispatcher, fd: AsyncFD, op: SimIoOp,
                        data: pointer, maxBytes: int):
-        tuple[res: int, err: OSErrorCode] =
+        tuple[res: int, err: OSErrorCode] {.raises: [SimEngineError].} =
       ## `stream.nim`'s `simRawIo` is the sole caller (RFC 0003 3.2 N4,
       ## S11a).
       doAssert isSimDispatcher(disp),
@@ -1648,7 +1709,8 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
 
     proc simDatagramIo*(disp: PDispatcher, fd: AsyncFD, op: SimIoOp,
                          data: pointer, maxBytes: int):
-        tuple[res: int, err: OSErrorCode, fromAddr: seq[byte]] =
+        tuple[res: int, err: OSErrorCode, fromAddr: seq[byte]]
+        {.raises: [SimEngineError].} =
       ## `chronos/transports/datagram.nim`'s `simRawIo` is the sole
       ## caller (RFC 0003 6, S12a/S12b).
       doAssert isSimDispatcher(disp),
@@ -1680,12 +1742,12 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
         return disp.simState.ownsSimFd(int(cint(fd)))
     cint(fd) in disp.selector
 
-  proc register2*(fd: AsyncFD): Result[void, OSErrorCode] =
+  proc register2*(fd: AsyncFD): Result[void, OSErrorCode] {.mayBarrier.} =
     ## Register file descriptor ``fd`` in thread's dispatcher.
     let loop = getThreadDispatcher()
     when chronosSimulation:
       if not simProvenanceGuard(loop, fd):
-        return err(SimBarrierCode)
+        raiseSimBarrier("register2()")
       if loop.isSimDispatcher():
         # Registration routing (RFC 0003 3.2 point 2): a sim-minted fd
         # has no selector entry to create - the interest table is
@@ -1694,12 +1756,12 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     var data: SelectorData
     loop.selector.registerHandle2(cint(fd), {}, data)
 
-  proc unregister2*(fd: AsyncFD): Result[void, OSErrorCode] =
+  proc unregister2*(fd: AsyncFD): Result[void, OSErrorCode] {.mayBarrier.} =
     ## Unregister file descriptor ``fd`` from thread's dispatcher.
     let loop = getThreadDispatcher()
     when chronosSimulation:
       if not simProvenanceGuard(loop, fd):
-        return err(SimBarrierCode)
+        raiseSimBarrier("unregister2()")
       if loop.isSimDispatcher():
         loop.simState.simClearReaderInterest(int(cint(fd)))
         loop.simState.simClearWriterInterest(int(cint(fd)))
@@ -1707,13 +1769,13 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     loop.selector.unregister2(cint(fd))
 
   proc addReader2*(fd: AsyncFD, cb: CallbackFunc,
-                   udata: pointer = nil): Result[void, OSErrorCode] =
+                   udata: pointer = nil): Result[void, OSErrorCode] {.mayBarrier.} =
     ## Start watching the file descriptor ``fd`` for read availability and then
     ## call the callback ``cb`` with specified argument ``udata``.
     let loop = getThreadDispatcher()
     when chronosSimulation:
       if not simProvenanceGuard(loop, fd):
-        return err(SimBarrierCode)
+        raiseSimBarrier("addReader2()")
       if loop.isSimDispatcher():
         # Registration routing: records interest in the sim event table
         # instead of a real selector (RFC 0003 3.2 point 2).
@@ -1734,12 +1796,12 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       return err(osdefs.EBADF)
     loop.selector.updateHandle2(cint(fd), newEvents)
 
-  proc removeReader2*(fd: AsyncFD): Result[void, OSErrorCode] =
+  proc removeReader2*(fd: AsyncFD): Result[void, OSErrorCode] {.mayBarrier.} =
     ## Stop watching the file descriptor ``fd`` for read availability.
     let loop = getThreadDispatcher()
     when chronosSimulation:
       if not simProvenanceGuard(loop, fd):
-        return err(SimBarrierCode)
+        raiseSimBarrier("removeReader2()")
       if loop.isSimDispatcher():
         loop.simState.simClearReaderInterest(int(cint(fd)))
         return ok()
@@ -1754,13 +1816,13 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     loop.selector.updateHandle2(cint(fd), newEvents)
 
   proc addWriter2*(fd: AsyncFD, cb: CallbackFunc,
-                   udata: pointer = nil): Result[void, OSErrorCode] =
+                   udata: pointer = nil): Result[void, OSErrorCode] {.mayBarrier.} =
     ## Start watching the file descriptor ``fd`` for write availability and then
     ## call the callback ``cb`` with specified argument ``udata``.
     let loop = getThreadDispatcher()
     when chronosSimulation:
       if not simProvenanceGuard(loop, fd):
-        return err(SimBarrierCode)
+        raiseSimBarrier("addWriter2()")
       if loop.isSimDispatcher():
         loop.simState.simSetWriterInterest(int(cint(fd)), capturingCallback(cb, udata))
         return ok()
@@ -1776,12 +1838,12 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       return err(osdefs.EBADF)
     loop.selector.updateHandle2(cint(fd), newEvents)
 
-  proc removeWriter2*(fd: AsyncFD): Result[void, OSErrorCode] =
+  proc removeWriter2*(fd: AsyncFD): Result[void, OSErrorCode] {.mayBarrier.} =
     ## Stop watching the file descriptor ``fd`` for write availability.
     let loop = getThreadDispatcher()
     when chronosSimulation:
       if not simProvenanceGuard(loop, fd):
-        return err(SimBarrierCode)
+        raiseSimBarrier("removeWriter2()")
       if loop.isSimDispatcher():
         loop.simState.simClearWriterInterest(int(cint(fd)))
         return ok()
@@ -1796,35 +1858,64 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       return err(osdefs.EBADF)
     loop.selector.updateHandle2(cint(fd), newEvents)
 
-  proc register*(fd: AsyncFD) {.raises: [OSError].} =
-    ## Register file descriptor ``fd`` in thread's dispatcher.
-    register2(fd).tryGet()
+  when chronosSimulation:
+    proc register*(fd: AsyncFD) {.raises: [OSError, SimBarrierError].} =
+      ## Register file descriptor ``fd`` in thread's dispatcher.
+      register2(fd).tryGet()
 
-  proc unregister*(fd: AsyncFD) {.raises: [OSError].} =
-    ## Unregister file descriptor ``fd`` from thread's dispatcher.
-    unregister2(fd).tryGet()
+    proc unregister*(fd: AsyncFD) {.raises: [OSError, SimBarrierError].} =
+      ## Unregister file descriptor ``fd`` from thread's dispatcher.
+      unregister2(fd).tryGet()
 
-  proc addReader*(fd: AsyncFD, cb: CallbackFunc, udata: pointer = nil) {.
-       raises: [OSError].} =
-    ## Start watching the file descriptor ``fd`` for read availability and then
-    ## call the callback ``cb`` with specified argument ``udata``.
-    addReader2(fd, cb, udata).tryGet()
+    proc addReader*(fd: AsyncFD, cb: CallbackFunc, udata: pointer = nil) {.
+         raises: [OSError, SimBarrierError].} =
+      ## Start watching the file descriptor ``fd`` for read availability and then
+      ## call the callback ``cb`` with specified argument ``udata``.
+      addReader2(fd, cb, udata).tryGet()
 
-  proc removeReader*(fd: AsyncFD) {.raises: [OSError].} =
-    ## Stop watching the file descriptor ``fd`` for read availability.
-    removeReader2(fd).tryGet()
+    proc removeReader*(fd: AsyncFD) {.raises: [OSError, SimBarrierError].} =
+      ## Stop watching the file descriptor ``fd`` for read availability.
+      removeReader2(fd).tryGet()
 
-  proc addWriter*(fd: AsyncFD, cb: CallbackFunc, udata: pointer = nil) {.
-       raises: [OSError].} =
-    ## Start watching the file descriptor ``fd`` for write availability and then
-    ## call the callback ``cb`` with specified argument ``udata``.
-    addWriter2(fd, cb, udata).tryGet()
+    proc addWriter*(fd: AsyncFD, cb: CallbackFunc, udata: pointer = nil) {.
+         raises: [OSError, SimBarrierError].} =
+      ## Start watching the file descriptor ``fd`` for write availability and then
+      ## call the callback ``cb`` with specified argument ``udata``.
+      addWriter2(fd, cb, udata).tryGet()
 
-  proc removeWriter*(fd: AsyncFD) {.raises: [OSError].} =
-    ## Stop watching the file descriptor ``fd`` for write availability.
-    removeWriter2(fd).tryGet()
+    proc removeWriter*(fd: AsyncFD) {.raises: [OSError, SimBarrierError].} =
+      ## Stop watching the file descriptor ``fd`` for write availability.
+      removeWriter2(fd).tryGet()
+  else:
+    proc register*(fd: AsyncFD) {.raises: [OSError].} =
+      ## Register file descriptor ``fd`` in thread's dispatcher.
+      register2(fd).tryGet()
 
-  proc unregisterAndCloseFd*(fd: AsyncFD): Result[void, OSErrorCode] =
+    proc unregister*(fd: AsyncFD) {.raises: [OSError].} =
+      ## Unregister file descriptor ``fd`` from thread's dispatcher.
+      unregister2(fd).tryGet()
+
+    proc addReader*(fd: AsyncFD, cb: CallbackFunc, udata: pointer = nil) {.
+         raises: [OSError].} =
+      ## Start watching the file descriptor ``fd`` for read availability and then
+      ## call the callback ``cb`` with specified argument ``udata``.
+      addReader2(fd, cb, udata).tryGet()
+
+    proc removeReader*(fd: AsyncFD) {.raises: [OSError].} =
+      ## Stop watching the file descriptor ``fd`` for read availability.
+      removeReader2(fd).tryGet()
+
+    proc addWriter*(fd: AsyncFD, cb: CallbackFunc, udata: pointer = nil) {.
+         raises: [OSError].} =
+      ## Start watching the file descriptor ``fd`` for write availability and then
+      ## call the callback ``cb`` with specified argument ``udata``.
+      addWriter2(fd, cb, udata).tryGet()
+
+    proc removeWriter*(fd: AsyncFD) {.raises: [OSError].} =
+      ## Stop watching the file descriptor ``fd`` for write availability.
+      removeWriter2(fd).tryGet()
+
+  proc unregisterAndCloseFd*(fd: AsyncFD): Result[void, OSErrorCode] {.mayBarrier.} =
     ## Unregister from system queue and close asynchronous socket.
     ##
     ## NOTE: Use this function to close temporary sockets/pipes only (which
@@ -1854,11 +1945,39 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
           # is still safe (and harmless if already cleared by the flush
           # below) - it only ever touches `simState`'s own tables.
           if loop.contains(fd):
-            discard unregister2(fd)
+            # `unregister2`'s provenance guard cannot fail here: `fd`
+            # just passed `loop.contains(fd)` under a confirmed sim
+            # dispatcher, the exact membership test the guard itself
+            # uses - see `simProvenanceGuard`. `continuation` is a
+            # `CallbackFunc` (`raises: []` by its type, unwidenable
+            # per build), so a `SimBarrierError` this provably
+            # unreachable branch could never actually raise is still
+            # caught here, by type, and escalated to a `Defect`
+            # (`raiseAsDefect`) rather than silently absorbed - the
+            # same discipline `chronos/internal/asyncfutures.nim`'s
+            # `simLedgerNoteFutureFinish` uses for its own unwidenable
+            # boundary.
+            try:
+              discard unregister2(fd)
+            except SimBarrierError as exc:
+              raiseAsDefect(exc, "unreachable: closeSocket() continuation " &
+                "hit the fd provenance guard on an fd loop.contains() " &
+                "already confirmed sim-owned")
           if not(isNil(aftercb)): aftercb(nil)
           return
       if loop.contains(fd):
-        discard unregister2(fd)
+        # As above: `simProvenanceGuard` never fails for a non-simulated
+        # `loop` (its first disjunct, `not isSimDispatcher(disp)`, is
+        # unconditionally true), so this branch - reached only when
+        # `loop` is not a sim dispatcher - can never raise either.
+        when chronosSimulation:
+          try:
+            discard unregister2(fd)
+          except SimBarrierError as exc:
+            raiseAsDefect(exc, "unreachable: closeSocket() continuation " &
+              "hit the fd provenance guard on a non-simulated dispatcher")
+        else:
+          discard unregister2(fd)
       # `closeFd` might fail if an I/O error occurs during an async I/O
       # operation, but on *most* posix systems this still results in the file
       # descriptor being closed regardless of the error.
@@ -1928,7 +2047,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
            signal: int,
            cb: CallbackFunc,
            udata: pointer = nil
-         ): Result[SignalHandle, OSErrorCode] =
+         ): Result[SignalHandle, OSErrorCode] {.mayBarrier.} =
       ## Start watching signal ``signal``, and when signal appears, call the
       ## callback ``cb`` with specified argument ``udata``. Returns signal
       ## identifier code, which can be used to remove signal callback
@@ -1936,7 +2055,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       let loop = getThreadDispatcher()
       when chronosSimulation:
         if loop.isSimDispatcher():
-          return err(SimBarrierCode)
+          raiseSimBarrier("addSignal2()")
       var data: SelectorData
       let sigfd = ? loop.selector.registerSignal(signal, data)
       withData(loop.selector, sigfd, adata) do:
@@ -1952,14 +2071,14 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
            pid: int,
            cb: CallbackFunc,
            udata: pointer = nil
-         ): Result[ProcessHandle, OSErrorCode] =
+         ): Result[ProcessHandle, OSErrorCode] {.mayBarrier.} =
       ## Registers callback ``cb`` to be called when process with process
       ## identifier ``pid`` exited. Returns process' descriptor, which can be
       ## used to clear process callback via ``removeProcess``.
       let loop = getThreadDispatcher()
       when chronosSimulation:
         if loop.isSimDispatcher():
-          return err(SimBarrierCode)
+          raiseSimBarrier("addProcess2()")
       var data: SelectorData
       let procfd = ? loop.selector.registerProcess(pid, data)
       withData(loop.selector, procfd, adata) do:
@@ -1971,17 +2090,17 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
         return err(osdefs.EBADF)
       ok(ProcessHandle(procfd))
 
-    proc removeSignal2*(signalHandle: SignalHandle): Result[void, OSErrorCode] =
+    proc removeSignal2*(signalHandle: SignalHandle): Result[void, OSErrorCode] {.mayBarrier.} =
       ## Remove watching signal ``signal``.
       # SelectorData drop on unregister2 cascades =destroy onto
       # adata.reader's AsyncCallback, releasing its captured context.
       let loop = getThreadDispatcher()
       when chronosSimulation:
         if loop.isSimDispatcher():
-          return err(SimBarrierCode)
+          raiseSimBarrier("removeSignal2()")
       loop.selector.unregister2(cint(signalHandle))
 
-    proc removeProcess2*(procHandle: ProcessHandle): Result[void, OSErrorCode] =
+    proc removeProcess2*(procHandle: ProcessHandle): Result[void, OSErrorCode] {.mayBarrier.} =
       ## Remove process' watching using process' descriptor ``procfd``.
       # Same as removeSignal2 above: SelectorData drop on unregister2
       # cascades =destroy onto adata.reader's AsyncCallback, releasing
@@ -1989,35 +2108,63 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       let loop = getThreadDispatcher()
       when chronosSimulation:
         if loop.isSimDispatcher():
-          return err(SimBarrierCode)
+          raiseSimBarrier("removeProcess2()")
       loop.selector.unregister2(cint(procHandle))
 
-    proc addSignal*(signal: int, cb: CallbackFunc,
-                    udata: pointer = nil): SignalHandle {.
-         raises: [OSError].} =
-      ## Start watching signal ``signal``, and when signal appears, call the
-      ## callback ``cb`` with specified argument ``udata``. Returns signal
-      ## identifier code, which can be used to remove signal callback
-      ## via ``removeSignal``.
-      addSignal2(signal, cb, udata).tryGet()
+    when chronosSimulation:
+      proc addSignal*(signal: int, cb: CallbackFunc,
+                      udata: pointer = nil): SignalHandle {.
+           raises: [OSError, SimBarrierError].} =
+        ## Start watching signal ``signal``, and when signal appears, call the
+        ## callback ``cb`` with specified argument ``udata``. Returns signal
+        ## identifier code, which can be used to remove signal callback
+        ## via ``removeSignal``.
+        addSignal2(signal, cb, udata).tryGet()
 
-    proc removeSignal*(signalHandle: SignalHandle) {.
-         raises: [OSError].} =
-      ## Remove watching signal ``signal``.
-      removeSignal2(signalHandle).tryGet()
+      proc removeSignal*(signalHandle: SignalHandle) {.
+           raises: [OSError, SimBarrierError].} =
+        ## Remove watching signal ``signal``.
+        removeSignal2(signalHandle).tryGet()
 
-    proc addProcess*(pid: int, cb: CallbackFunc,
-                     udata: pointer = nil): ProcessHandle {.
-         raises: [OSError].} =
-      ## Registers callback ``cb`` to be called when process with process
-      ## identifier ``pid`` exited. Returns process identifier, which can be
-      ## used to clear process callback via ``removeProcess``.
-      addProcess2(pid, cb, udata).tryGet()
+      proc addProcess*(pid: int, cb: CallbackFunc,
+                       udata: pointer = nil): ProcessHandle {.
+           raises: [OSError, SimBarrierError].} =
+        ## Registers callback ``cb`` to be called when process with process
+        ## identifier ``pid`` exited. Returns process identifier, which can be
+        ## used to clear process callback via ``removeProcess``.
+        addProcess2(pid, cb, udata).tryGet()
 
-    proc removeProcess*(procHandle: ProcessHandle) {.
-         raises: [OSError].} =
-      ## Remove process' watching using process' descriptor ``procHandle``.
-      removeProcess2(procHandle).tryGet()
+      proc removeProcess*(procHandle: ProcessHandle) {.
+           raises: [OSError, SimBarrierError].} =
+        ## Remove process' watching using process' descriptor ``procHandle``.
+        removeProcess2(procHandle).tryGet()
+    else:
+      proc addSignal*(signal: int, cb: CallbackFunc,
+                      udata: pointer = nil): SignalHandle {.
+           raises: [OSError].} =
+        ## Start watching signal ``signal``, and when signal appears, call the
+        ## callback ``cb`` with specified argument ``udata``. Returns signal
+        ## identifier code, which can be used to remove signal callback
+        ## via ``removeSignal``.
+        addSignal2(signal, cb, udata).tryGet()
+
+      proc removeSignal*(signalHandle: SignalHandle) {.
+           raises: [OSError].} =
+        ## Remove watching signal ``signal``.
+        removeSignal2(signalHandle).tryGet()
+
+      proc addProcess*(pid: int, cb: CallbackFunc,
+                       udata: pointer = nil): ProcessHandle {.
+           raises: [OSError].} =
+        ## Registers callback ``cb`` to be called when process with process
+        ## identifier ``pid`` exited. Returns process identifier, which can be
+        ## used to clear process callback via ``removeProcess``.
+        addProcess2(pid, cb, udata).tryGet()
+
+      proc removeProcess*(procHandle: ProcessHandle) {.
+           raises: [OSError].} =
+        ## Remove process' watching using process' descriptor ``procHandle``.
+        removeProcess2(procHandle).tryGet()
 
   template drainWakeupFd(loop: PDispatcher) =
     # Drain any pending wakeup data from the wakeup fd. Writing to the wakeup
@@ -2102,7 +2249,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
         loop.drainWakeupFd()
         loop.processThreadCallbacks()
 
-  proc poll*() {.tags: [NestedPoll, RootEffect].} =
+  proc poll*() {.tags: [NestedPoll, RootEffect], mayViolate.} =
     ## Perform single asynchronous step.
     let loop = getThreadDispatcher()
     loop.preparePoll()
@@ -2185,7 +2332,7 @@ when chronosSimulation:
     ## flight, so the original failure is never masked by a `doAssert`.
     gDisp = disp
 
-  proc simLedgerTeardownCheck*(disp: PDispatcher) =
+  proc simLedgerTeardownCheck*(disp: PDispatcher) {.raises: [SimLedgerError].} =
     ## The final reconciliation for every S14/S15 law (RFC 0003 3.9): a
     ## no-op unless `disp` opted into ledger checking. Called by
     ## `chronos/simulation.nim`'s ledger-aware harness entry point right
@@ -2469,7 +2616,7 @@ proc internalCallTick*(cbproc: CallbackFunc, data: pointer) =
 proc internalCallTick*(cbproc: CallbackFunc) =
   internalCallTick(bareCallback(cbproc, nil))
 
-proc runForever*() =
+proc runForever*() {.mayViolate.} =
   ## Begins a never ending global dispatcher poll loop.
   ## Raises different exceptions depending on the platform.
   while true:

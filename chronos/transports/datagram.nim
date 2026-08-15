@@ -16,7 +16,7 @@ import ".."/[asyncloop, config, osdefs, oserrno, osutils, handles]
 import "."/[common, ipnet]
 import stew/ptrops
 
-when chronosSimulation and not(defined(windows)):
+when chronosSimulation:
   import ../internal/simengine
     # RFC 0003 6's datagram I/O seam (slice S12a, mirroring S10) needs
     # `IoOutcomePoint`/`IoDecision`/`SimIoOp`/`SimFault`/`SimEventId`/
@@ -24,12 +24,53 @@ when chronosSimulation and not(defined(windows)):
     # (for `simDecideIo`/`isSimDispatcher`/`getThreadDispatcher`, already
     # reachable through the unconditional `asyncloop` import above) but
     # `asyncengine.nim` itself only imports `simengine`, never exports it.
-    # POSIX-only, unlike `stream.nim`'s unconditional import: the
-    # datagram seam itself is POSIX-only (this slice's Windows non-goal,
-    # same as S10/S11a) and, unlike `stream.nim`, no platform-neutral
-    # datagram code references a simengine symbol - `close`/`closeWait`
-    # never call a sim half-close hook - so an unconditional import here
-    # would be a genuine unused-import warning on Windows.
+    # Unconditional (unlike the seam itself, POSIX-only per this slice's
+    # Windows non-goal, same as S10/S11a): fork issue #19 workstream 2's
+    # barrier retirement means `register2`/`addWriter2`/etc. (shared
+    # POSIX-and-Windows procs, asyncengine.nim) now raise `SimBarrierError`
+    # directly on both platforms, so this module's own Windows branch -
+    # which still calls `register2` for its real UDP sockets - needs the
+    # type named too, even though it never reaches `simDecideIo`/`SimIoOp`.
+
+  # Fork issue #19 workstream 2's typed sim error channel - see
+  # `chronos/transports/stream.nim`'s own copy of these aliases for the
+  # toolchain quirks each one works around.
+  {.pragma: mayBarrier, raises: [SimBarrierError].}
+  {.pragma: mayBarrierOsErr, raises: [TransportOsError, SimBarrierError].}
+  when not defined(windows):
+    {.pragma: mayViolate, raises: [SimEngineError].}
+    {.pragma: mayBoth, raises: [SimBarrierError, SimEngineError].}
+
+    # As `chronos/transports/stream.nim`'s own `simBoundaryGuard`/`safe*`
+    # family: `readDatagramLoop`/`writeDatagramLoop` are `CallbackFunc`s
+    # (`raises: []` by their type, unwidenable per build) that reach the
+    # transport seam's `simRawIo` (a `SimEngineError` an oracle answer
+    # genuinely can trigger) and the registration guards (a provably-
+    # unreachable `SimBarrierError` - the fd was already proven sim-owned
+    # or the dispatcher already proven non-simulated earlier in the same
+    # endpoint's lifetime). Both are caught here, by type, and escalated
+    # to a `Defect` (`raiseAsDefect`) instead of letting either propagate
+    # normally; `chronos/simulation.nim`'s `runSimulation` unwraps it
+    # back into the original typed error.
+    template simBoundaryGuard(body: untyped): untyped =
+      try:
+        body
+      except SimBarrierError as excSimBoundary:
+        raiseAsDefect(excSimBoundary,
+          "simulation barrier reached from a CallbackFunc boundary")
+      except SimEngineError as excSimBoundary:
+        raiseAsDefect(excSimBoundary,
+          "simulation engine violation reached from a CallbackFunc boundary")
+
+    proc safeRemoveWriter2(fd: AsyncFD): Result[void, OSErrorCode]
+                           {.raises: [].} =
+      simBoundaryGuard(removeWriter2(fd))
+else:
+  {.pragma: mayBarrier, raises: [].}
+  {.pragma: mayBarrierOsErr, raises: [TransportOsError].}
+  when not defined(windows):
+    {.pragma: mayViolate, raises: [].}
+    {.pragma: mayBoth, raises: [].}
 
 export results
 
@@ -320,7 +361,7 @@ when defined(windows):
                                   ttl: int,
                                   dualstack = DualStackType.Auto
                                  ): DatagramTransport {.
-      raises: [TransportOsError].} =
+      mayBarrierOsErr.} =
     doAssert(not isNil(cbproc))
     var res = if isNil(child): DatagramTransport() else: child
 
@@ -455,7 +496,8 @@ else:
   when chronosSimulation:
     proc simRawIo(transp: DatagramTransport, op: SimIoOp, data: pointer,
                    maxBytes: int):
-        tuple[res: int, err: OSErrorCode, fromAddr: seq[byte]] {.inline.} =
+        tuple[res: int, err: OSErrorCode, fromAddr: seq[byte]]
+        {.inline, raises: [SimEngineError].} =
       ## The sim branch of the datagram injectable I/O primitive (RFC
       ## 0003 6, slices S12a/S12b): dispatches to `simDatagramIo`
       ## (chronos/internal/simengine.nim). A bare minted fd with no live
@@ -470,7 +512,7 @@ else:
       getThreadDispatcher().simDatagramIo(transp.fd, op, data, maxBytes)
 
   proc rawIoRecvfrom(transp: DatagramTransport):
-      tuple[res: int, err: OSErrorCode] {.inline.} =
+      tuple[res: int, err: OSErrorCode] {.inline, mayViolate.} =
     ## The injectable I/O primitive's read side (RFC 0003 6, S12a
     ## mirroring S10's `rawIoRead`): the sole `recvfrom` call site. Real
     ## mode is exactly the syscall `readDatagramLoop` used to issue
@@ -503,7 +545,7 @@ else:
     if res < 0: (res, osLastError()) else: (res, OSErrorCode(0))
 
   proc rawIoSendto(transp: DatagramTransport, vector: GramVector):
-      tuple[res: int, err: OSErrorCode] {.inline.} =
+      tuple[res: int, err: OSErrorCode] {.inline, mayViolate.} =
     ## The injectable I/O primitive's write side (RFC 0003 6, S12a
     ## mirroring S10's `rawIoWrite`): the shared `sendto`/`send` call
     ## site - `writeDatagramLoop`'s two vector kinds route to the real
@@ -554,7 +596,11 @@ else:
     if TransportState.Closed in transp.state:
       transp.state.incl({ReadPaused})
     else:
-      let (res, err) = rawIoRecvfrom(transp)
+      let (res, err) =
+        when chronosSimulation:
+          simBoundaryGuard(rawIoRecvfrom(transp))
+        else:
+          rawIoRecvfrom(transp)
       if res >= 0:
         transp.buflen = res
         asyncSpawn transp.function(transp, transp.getRemoteAddress())
@@ -584,7 +630,11 @@ else:
     else:
       if len(transp.queue) > 0:
         let vector = transp.queue.popFirst()
-        let (res, err) = rawIoSendto(transp, vector)
+        let (res, err) =
+          when chronosSimulation:
+            simBoundaryGuard(rawIoSendto(transp, vector))
+          else:
+            rawIoSendto(transp, vector)
         if res >= 0:
           if not(vector.writer.finished()):
             vector.writer.complete()
@@ -604,9 +654,16 @@ else:
               transp.fd, SimReadyDirection.Write)
       else:
         transp.state.incl({WritePaused})
-        discard removeWriter2(transp.fd)
+        # `removeWriter2`'s provenance guard cannot fail here: `transp.fd`
+        # was already registered at transport construction - see
+        # `simBoundaryGuard`'s docstring.
+        when chronosSimulation:
+          discard safeRemoveWriter2(transp.fd)
+        else:
+          discard removeWriter2(transp.fd)
 
-  proc resumeWrite(transp: DatagramTransport): Result[void, OSErrorCode] =
+  proc resumeWrite(transp: DatagramTransport): Result[void, OSErrorCode]
+                   {.mayBarrier.} =
     if WritePaused in transp.state:
       ? addWriter2(transp.fd, writeDatagramLoop, cast[pointer](transp))
       transp.state.excl(WritePaused)
@@ -621,7 +678,8 @@ else:
             transp.fd, SimReadyDirection.Write)
     ok()
 
-  proc resumeRead(transp: DatagramTransport): Result[void, OSErrorCode] =
+  proc resumeRead(transp: DatagramTransport): Result[void, OSErrorCode]
+                  {.mayBarrier.} =
     if ReadPaused in transp.state:
       ? addReader2(transp.fd, readDatagramLoop, cast[pointer](transp))
       transp.state.excl(ReadPaused)
@@ -638,7 +696,7 @@ else:
                                   ttl: int,
                                   dualstack = DualStackType.Auto
                                  ): DatagramTransport {.
-      raises: [TransportOsError].} =
+      mayBarrierOsErr.} =
     doAssert(not isNil(cbproc))
     var res = if isNil(child): DatagramTransport() else: child
 
@@ -771,7 +829,7 @@ else:
                                   local, remote: TransportAddress,
                                   udata: pointer,
                                   bufferSize: int): DatagramTransport {.
-        raises: [TransportOsError].} =
+        mayBarrierOsErr.} =
       ## `newDatagramTransportCommon`'s object-construction tail (lines
       ## above, from `res.fd = localSock` on), reused for a sim-minted
       ## fd that never runs `socket()`/`bind()`/`connect()` -
@@ -807,7 +865,7 @@ else:
                            udataA: pointer = nil, udataB: pointer = nil,
                            bufferSize = DefaultDatagramBufferSize
                           ): tuple[a, b: DatagramTransport] {.
-        raises: [TransportOsError].} =
+        mayBarrierOsErr.} =
       ## Sim-native datagram pairing (RFC 0003 6, slice S12b): mints a
       ## connected pair of sim datagram endpoints and wraps each in a
       ## real `DatagramTransport`, sharing the S12a seam's exact
@@ -887,7 +945,7 @@ proc newDatagramTransportCommon(cbproc: UnsafeDatagramCallback,
                                 ttl: int,
                                 dualstack = DualStackType.Auto
                           ): DatagramTransport {.
-    raises: [TransportOsError].} =
+    mayBarrierOsErr.} =
   ## Create new UDP datagram transport (IPv4).
   ##
   ## ``cbproc`` - callback which will be called, when new datagram received.
@@ -922,7 +980,7 @@ proc newDatagramTransport*(cbproc: DatagramCallback,
                            ttl: int = 0,
                            dualstack = DualStackType.Auto
                           ): DatagramTransport {.
-    raises: [TransportOsError].} =
+    mayBarrierOsErr.} =
   ## Create new UDP datagram transport (IPv4).
   ##
   ## ``cbproc`` - callback which will be called, when new datagram received.
@@ -949,7 +1007,7 @@ proc newDatagramTransport*[T](cbproc: DatagramCallback,
                               ttl: int = 0,
                               dualstack = DualStackType.Auto
                              ): DatagramTransport {.
-    raises: [TransportOsError].} =
+    mayBarrierOsErr.} =
   var fflags = flags + {GCUserData}
   GC_ref(udata)
   newDatagramTransportCommon(cbproc, remote, local, sock, fflags,
@@ -967,7 +1025,7 @@ proc newDatagramTransport6*(cbproc: DatagramCallback,
                             ttl: int = 0,
                             dualstack = DualStackType.Auto
                            ): DatagramTransport {.
-    raises: [TransportOsError].} =
+    mayBarrierOsErr.} =
   ## Create new UDP datagram transport (IPv6).
   ##
   ## ``cbproc`` - callback which will be called, when new datagram received.
@@ -994,7 +1052,7 @@ proc newDatagramTransport6*[T](cbproc: DatagramCallback,
                                ttl: int = 0,
                                dualstack = DualStackType.Auto
                               ): DatagramTransport {.
-    raises: [TransportOsError].} =
+    mayBarrierOsErr.} =
   var fflags = flags + {GCUserData}
   GC_ref(udata)
   newDatagramTransportCommon(cbproc, remote, local, sock, fflags,
@@ -1012,7 +1070,7 @@ proc newDatagramTransport*(cbproc: UnsafeDatagramCallback,
                            ttl: int = 0,
                            dualstack = DualStackType.Auto
                           ): DatagramTransport {.
-    raises: [TransportOsError],
+    mayBarrierOsErr,
     deprecated: "Callback must not raise exceptions, annotate with {.async: (raises: []).}".} =
   ## Create new UDP datagram transport (IPv4).
   ##
@@ -1040,7 +1098,7 @@ proc newDatagramTransport*[T](cbproc: UnsafeDatagramCallback,
                               ttl: int = 0,
                               dualstack = DualStackType.Auto
                              ): DatagramTransport {.
-    raises: [TransportOsError],
+    mayBarrierOsErr,
     deprecated: "Callback must not raise exceptions, annotate with {.async: (raises: []).}".} =
   var fflags = flags + {GCUserData}
   GC_ref(udata)
@@ -1059,7 +1117,7 @@ proc newDatagramTransport6*(cbproc: UnsafeDatagramCallback,
                             ttl: int = 0,
                             dualstack = DualStackType.Auto
                            ): DatagramTransport {.
-    raises: [TransportOsError],
+    mayBarrierOsErr,
     deprecated: "Callback must not raise exceptions, annotate with {.async: (raises: []).}".} =
   ## Create new UDP datagram transport (IPv6).
   ##
@@ -1087,7 +1145,7 @@ proc newDatagramTransport6*[T](cbproc: UnsafeDatagramCallback,
                                ttl: int = 0,
                                dualstack = DualStackType.Auto
                               ): DatagramTransport {.
-    raises: [TransportOsError],
+    mayBarrierOsErr,
     deprecated: "Callback must not raise exceptions, annotate with {.async: (raises: []).}".} =
   var fflags = flags + {GCUserData}
   GC_ref(udata)
@@ -1107,7 +1165,7 @@ proc newDatagramTransport*(cbproc: DatagramCallback,
                            ttl: int = 0,
                            dualstack = DualStackType.Auto
                           ): DatagramTransport {.
-     raises: [TransportOsError].} =
+     mayBarrierOsErr.} =
   ## Create new UDP datagram transport (IPv6) and bind it to ANY_ADDRESS.
   ## Depending on OS settings procedure perform an attempt to create transport
   ## using IPv6 ANY_ADDRESS, if its not available it will try to bind transport
@@ -1141,7 +1199,7 @@ proc newDatagramTransport*(cbproc: DatagramCallback,
                            ttl: int = 0,
                            dualstack = DualStackType.Auto
                           ): DatagramTransport {.
-     raises: [TransportOsError].} =
+     mayBarrierOsErr.} =
   newDatagramTransport(cbproc, localPort, Port(0), local, Opt.none(IpAddress),
                        flags, udata, child, bufSize, ttl, dualstack)
 
@@ -1157,7 +1215,7 @@ proc newDatagramTransport*[T](cbproc: DatagramCallback,
                               ttl: int = 0,
                               dualstack = DualStackType.Auto
                              ): DatagramTransport {.
-     raises: [TransportOsError].} =
+     mayBarrierOsErr.} =
   let
     (localHost, remoteHost) =
       getTransportAddresses(local, remote, localPort, remotePort)
@@ -1177,7 +1235,7 @@ proc newDatagramTransport*[T](cbproc: DatagramCallback,
                               ttl: int = 0,
                               dualstack = DualStackType.Auto
                              ): DatagramTransport {.
-     raises: [TransportOsError].} =
+     mayBarrierOsErr.} =
   newDatagramTransport(cbproc, localPort, Port(0), local, Opt.none(IpAddress),
                        flags, udata, child, bufSize, ttl, dualstack)
 
@@ -1199,7 +1257,7 @@ proc closeWait*(transp: DatagramTransport): Future[void] {.
 
 proc send*(transp: DatagramTransport, pbytes: pointer,
            nbytes: int): Future[void] {.
-           async: (raw: true, raises: [TransportError, CancelledError]).} =
+           async: (raw: true, raises: [TransportError, CancelledError]), mayBarrier.} =
   ## Send buffer with pointer ``pbytes`` and size ``nbytes`` using transport
   ## ``transp`` to remote destination address which was bounded on transport.
   let retFuture = newFuture[void]("datagram.transport.send(pointer)")
@@ -1218,7 +1276,7 @@ proc send*(transp: DatagramTransport, pbytes: pointer,
 
 proc send*(transp: DatagramTransport, msg: string,
            msglen = -1): Future[void] {.
-           async: (raw: true, raises: [TransportError, CancelledError]).} =
+           async: (raw: true, raises: [TransportError, CancelledError]), mayBarrier.} =
   ## Send string ``msg`` using transport ``transp`` to remote destination
   ## address which was bounded on transport.
   let retFuture = newFuture[void]("datagram.transport.send(string)")
@@ -1241,7 +1299,7 @@ proc send*(transp: DatagramTransport, msg: string,
 
 proc send*[T](transp: DatagramTransport, msg: seq[T],
               msglen = -1): Future[void] {.
-     async: (raw: true, raises: [TransportError, CancelledError]).} =
+     async: (raw: true, raises: [TransportError, CancelledError]), mayBarrier.} =
   ## Send string ``msg`` using transport ``transp`` to remote destination
   ## address which was bounded on transport.
   let retFuture = newFuture[void]("datagram.transport.send(seq)")
@@ -1263,7 +1321,7 @@ proc send*[T](transp: DatagramTransport, msg: seq[T],
 
 proc sendTo*(transp: DatagramTransport, remote: TransportAddress,
              pbytes: pointer, nbytes: int): Future[void] {.
-             async: (raw: true, raises: [TransportError, CancelledError]).} =
+             async: (raw: true, raises: [TransportError, CancelledError]), mayBarrier.} =
   ## Send buffer with pointer ``pbytes`` and size ``nbytes`` using transport
   ## ``transp`` to remote destination address ``remote``.
   let retFuture = newFuture[void]("datagram.transport.sendTo(pointer)")
@@ -1279,7 +1337,7 @@ proc sendTo*(transp: DatagramTransport, remote: TransportAddress,
 
 proc sendTo*(transp: DatagramTransport, remote: TransportAddress,
              msg: string, msglen = -1): Future[void] {.
-             async: (raw: true, raises: [TransportError, CancelledError]).} =
+             async: (raw: true, raises: [TransportError, CancelledError]), mayBarrier.} =
   ## Send string ``msg`` using transport ``transp`` to remote destination
   ## address ``remote``.
   let retFuture = newFuture[void]("datagram.transport.sendTo(string)")
@@ -1302,7 +1360,7 @@ proc sendTo*(transp: DatagramTransport, remote: TransportAddress,
 
 proc sendTo*[T](transp: DatagramTransport, remote: TransportAddress,
                 msg: seq[T], msglen = -1): Future[void] {.
-                async: (raw: true, raises: [TransportError, CancelledError]).} =
+                async: (raw: true, raises: [TransportError, CancelledError]), mayBarrier.} =
   ## Send sequence ``msg`` using transport ``transp`` to remote destination
   ## address ``remote``.
   let retFuture = newFuture[void]("datagram.transport.sendTo(seq)")

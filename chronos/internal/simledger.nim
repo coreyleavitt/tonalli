@@ -108,23 +108,6 @@ type
     state: FutureState
     desc: string
 
-  SimLedgerViolation* = object
-    ## Populated immediately before the internal Defect carrying a
-    ## ledger violation is raised. `asyncengine.nim` compiles under a
-    ## file-wide `{.push raises: [].}` (RFC 0003 3.2's error-channel
-    ## discussion applies here too): a law check running deep inside
-    ## `poll()`'s call tree cannot `raise SimLedgerError` (a
-    ## `CatchableError`) directly without widening that pragma, so the
-    ## check raises a plain `Defect` (`raiseAssert`, exempt from the
-    ## raises effect system, the same mechanism `simDecideBatch`/
-    ## `simDecideTimeAdvance` already use for protocol violations) and
-    ## stashes the structured fields here for `chronos/simulation.nim`'s
-    ## harness - outside that raises-pushed tree - to read back and
-    ## construct the real `SimLedgerError`.
-    active*: bool
-    step*: int
-    objectDesc*: string
-
   SimLedgerContextCounts = object
     ## Slice S15's contextvar-accounting law: capture and restore balance
     ## across every scheduling point (RFC 0003 3.9). `captured` is
@@ -200,24 +183,44 @@ type
     context: SimLedgerContextCounts
     timers: SimLedgerTimerCounts
     waiterPrimitives: seq[SimLedgerWaiterPrimitive]
-    lastViolation*: SimLedgerViolation
 
 const
   ledgerViolationPrefix* = "simulation invariant violation: "
     ## RFC 0003 3.9: "The message says 'simulation invariant violation:
-    ## <law> ...', not 'ghost ledger'". `chronos/simulation.nim`
-    ## recognizes this prefix to distinguish a ledger `Defect` from
-    ## every other internal sim-loop/oracle `Defect` message.
+    ## <law> ...', not 'ghost ledger'" - still true of `SimLedgerError.msg`,
+    ## though nothing parses it anymore: `raiseLedgerViolation` below
+    ## raises the typed `SimLedgerError` directly, classified by every
+    ## catcher through Nim's own exception type, never through this
+    ## prefix.
 
 proc newSimLedgerState*(): SimLedgerState =
   SimLedgerState()
 
 proc raiseLedgerViolation(ledger: SimLedgerState, law, detail,
-                           objectDesc: string) {.noreturn.} =
-  ledger.lastViolation = SimLedgerViolation(
-    active: true, step: ledger.stepIndex, objectDesc: objectDesc)
-  raiseAssert ledgerViolationPrefix & law & ": " & detail &
-    " (step=" & $ledger.stepIndex & ", object=" & objectDesc & ")"
+                           objectDesc: string) {.noreturn,
+                           raises: [SimLedgerError].} =
+  ## Raised directly, at the point of detection, for a violation of any
+  ## of RFC 0003 3.9's conservation laws - the same typed-at-the-source
+  ## discipline `chronos/internal/simengine.nim`'s `raiseSimEngineError`
+  ## follows. `chronos/internal/asyncfutures.nim`'s
+  ## `simLedgerNoteFutureFinish` is the one caller (through
+  ## `noteFutureTransition`) that cannot let this propagate as a normal
+  ## exception - `finish()`'s reach is too broad (every future
+  ## completion, including from inside a `CallbackFunc`, whose `raises:
+  ## []` a Nim proc type cannot be conditionally widened) to carry a
+  ## widened `raises` effect - so it catches this by type and re-raises
+  ## it wrapped in a `Defect` (`raiseAsDefect`, exempt from the raises
+  ## effect system) instead; `chronos/simulation.nim`'s `runSimulation`
+  ## unwraps that one narrow, type-checked case back into this same
+  ## `SimLedgerError`. Every other caller here - reached only from
+  ## `asyncengine.nim`'s own poll loop or from `simLedgerTeardownCheck`,
+  ## never from inside a `CallbackFunc` - lets it propagate directly.
+  let exc = newException(SimLedgerError, ledgerViolationPrefix & law &
+    ": " & detail & " (step=" & $ledger.stepIndex & ", object=" &
+    objectDesc & ")")
+  exc.step = ledger.stepIndex
+  exc.objectDesc = objectDesc
+  raise exc
 
 # --- step boundaries (RFC 0003 3.9: one step is one outermost
 # `fireWithContext` return) -------------------------------------------
@@ -265,7 +268,7 @@ proc noteNilPop*(ledger: SimLedgerState, kind: SimLedgerQueueKind) {.inline.} =
   inc ledger.queues[kind].nilPops
 
 proc checkQueueConservation*(ledger: SimLedgerState, kind: SimLedgerQueueKind,
-                              residentLen: int) =
+                              residentLen: int) {.raises: [SimLedgerError].} =
   ## "Enqueued equals fired plus explicitly dropped at teardown plus
   ## nil-function pops, per queue" (RFC 0003 3.9): `residentLen` is
   ## whatever has not yet left the queue at the moment of this check -
@@ -286,7 +289,7 @@ proc checkQueueConservation*(ledger: SimLedgerState, kind: SimLedgerQueueKind,
 # --- future lifecycle ---------------------------------------------------
 
 proc noteFutureTransition*(ledger: SimLedgerState, id: uint, state: FutureState,
-                            desc: string) =
+                            desc: string) {.raises: [SimLedgerError].} =
   ## Records `id`'s transition to a terminal `state` (RFC 0003 3.9's
   ## future-lifecycle law), raising if `id` was already observed
   ## terminal once before - the identity-based "no double completion"
@@ -297,7 +300,10 @@ proc noteFutureTransition*(ledger: SimLedgerState, id: uint, state: FutureState,
   ## to exercise this path for RED-phase coverage (RFC 0003 slice
   ## S14): a genuine second call to `finish()` on the same future can
   ## never reach here, since `checkFinished` raises an uncatchable-by-
-  ## `simulate()` `FutureDefect` first.
+  ## `simulate()` `FutureDefect` first. See `raiseLedgerViolation`'s
+  ## docstring for how this proc's typed raise gets from here, inside
+  ## `finish()`'s effect-unconstrained reach, back out as a typed
+  ## `SimLedgerError` at `simulate()`.
   if state == FutureState.Pending:
     return
   let existing = ledger.futureRecords.getOrDefault(id)
@@ -320,7 +326,8 @@ proc noteContextRestored*(ledger: SimLedgerState) {.inline.} =
   inc ledger.context.restored
 
 proc checkContextConservation*(ledger: SimLedgerState,
-                                residentWithContext: int) =
+                                residentWithContext: int)
+                               {.raises: [SimLedgerError].} =
   ## "Capture and restore balance across every scheduling point" (RFC
   ## 0003 3.9): the same conservation shape as `checkQueueConservation`,
   ## scoped to context-carrying callbacks - `residentWithContext` is the
@@ -359,7 +366,8 @@ proc noteTimerCancelled*(ledger: SimLedgerState) {.inline.} =
   ## interval between the mark and the eventual sweep.
   inc ledger.timers.cancelled
 
-proc checkTimerConservation*(ledger: SimLedgerState, pending: int) =
+proc checkTimerConservation*(ledger: SimLedgerState, pending: int)
+                             {.raises: [SimLedgerError].} =
   ## "Armed equals fired plus cancelled plus pending against the heap's
   ## contents" (RFC 0003 3.9): `pending` is the caller's fresh
   ## `len(loop.timers)` read, never a running counter, so it always
@@ -385,7 +393,7 @@ proc registerWaiterPrimitive*(ledger: SimLedgerState, desc: string,
   ledger.waiterPrimitives.add SimLedgerWaiterPrimitive(
     desc: desc, countProc: countProc)
 
-proc checkWaiterTeardown*(ledger: SimLedgerState) =
+proc checkWaiterTeardown*(ledger: SimLedgerState) {.raises: [SimLedgerError].} =
   ## "Every waiter list empty at `simulate()` teardown" (RFC 0003 3.9's
   ## 2026-08-15 amendment): a nonzero reading from a registered
   ## primitive's accessor here means a future is parked and neither

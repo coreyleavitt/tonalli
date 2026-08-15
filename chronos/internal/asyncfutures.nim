@@ -19,7 +19,17 @@ import stew/base10
 import ./[asyncengine, raisesfutures]
 import ../[config, futures]
 when chronosSimulation:
-  import ./simledger
+  import ./[simengine, simledger]
+
+  # `poll()`'s conditional widening (`asyncengine.nim`) is per-module;
+  # `pollFor` below is this module's own boundary onto it.
+  {.pragma: mayViolate, raises: [SimEngineError, SimLedgerError].}
+  # `waitSignal*`'s own boundary onto the barrier-retirement round's
+  # `mayBarrier` pragma alias (`asyncengine.nim`).
+  {.pragma: mayBarrier, raises: [SimBarrierError].}
+else:
+  {.pragma: mayViolate, raises: [].}
+  {.pragma: mayBarrier, raises: [].}
 
 export
   raisesfutures.Raising, raisesfutures.InternalRaisesFuture,
@@ -194,12 +204,30 @@ when chronosSimulation:
     ## `finish()` call could ever reach here; see
     ## `simLedgerDebugForceFutureState` for how the RED-phase plant
     ## reaches it anyway - is caught with the future named.
+    ##
+    ## `noteFutureTransition` raises a typed `SimLedgerError` directly
+    ## at the point of detection (`simledger.nim`), like every other
+    ## sim-substrate failure in this retirement round - except here:
+    ## `finish()` completes a future from anywhere, including from
+    ## inside a `CallbackFunc` (`raises: []` by its very type, which a
+    ## single Nim proc cannot conditionally widen per build), so this
+    ## one call site cannot let a `CatchableError` propagate normally.
+    ## Caught here, by type, and re-raised wrapped in a `Defect`
+    ## (`raiseAsDefect`, exempt from the raises effect system - the
+    ## same mechanism `raiseOsDefect` already uses to cross an
+    ## unwidenable boundary): `chronos/simulation.nim`'s
+    ## `runSimulation` unwraps it back into the same `SimLedgerError`,
+    ## by type (`d.parent of SimLedgerError`), never by parsing `msg`.
     let loop = getThreadDispatcherOrNil()
     if loop.isNil or not loop.isSimDispatcher():
       return
     let ledger = loop.simLedgerOf()
     if not ledger.isNil:
-      ledger.noteFutureTransition(fut.id, state, simLedgerDescribeFuture(fut))
+      try:
+        ledger.noteFutureTransition(fut.id, state, simLedgerDescribeFuture(fut))
+      except SimLedgerError as exc:
+        raiseAsDefect(exc, "simulation invariant violation reached from " &
+          "finish(), a raises:[]-unwidenable boundary")
 
   proc simLedgerDebugForceFutureState*(fut: FutureBase, state: FutureState) =
     ## TEST-ONLY escape hatch (RFC 0003 slice S14's RED phase):
@@ -694,7 +722,7 @@ template taskErrorMessage(future: FutureBase): string =
 template taskCancelMessage(future: FutureBase): string =
   "Asynchronous task " & taskFutureLocation(future) & " was cancelled!"
 
-proc pollFor[F: Future | InternalRaisesFuture](fut: F): F {.raises: [].} =
+proc pollFor[F: Future | InternalRaisesFuture](fut: F): F {.mayViolate.} =
   # Blocks the current thread of execution until `fut` has finished, returning
   # the given future.
   #
@@ -1319,7 +1347,7 @@ when (chronosEventEngine in ["epoll", "kqueue"]) or defined(windows):
   import std/os
 
   proc waitSignal*(signal: int): Future[void] {.
-      async: (raw: true, raises: [AsyncError, CancelledError]).} =
+      async: (raw: true, raises: [AsyncError, CancelledError]), mayBarrier.} =
     var retFuture = newFuture[void]("chronos.waitSignal()")
     var signalHandle: Opt[SignalHandle]
 
@@ -1327,10 +1355,33 @@ when (chronosEventEngine in ["epoll", "kqueue"]) or defined(windows):
       newException(AsyncError, "Could not manipulate signal handler, " &
                    "reason [" & $int(e) & "]: " & osErrorMsg(e))
 
+    template removeSignalBestEffort(): Result[void, OSErrorCode] =
+      ## `removeSignal2`'s provenance guard cannot fail here:
+      ## `addSignal2` below already succeeded on this same dispatcher,
+      ## and `addSignal2`/`removeSignal2` barrier unconditionally
+      ## whenever the dispatcher is simulated at all (no fd-ownership
+      ## nuance to reconsider mid-flight) - so if construction got this
+      ## far, this dispatcher was never simulated to begin with.
+      ## `continuation`/`cancellation` are `CallbackFunc`s (`raises: []`
+      ## by their type, unwidenable per build), so the provably-
+      ## unreachable `SimBarrierError` is still caught here, by type,
+      ## and escalated to a `Defect` (`raiseAsDefect`) rather than
+      ## silently absorbed - see `chronos/internal/asyncengine.nim`'s
+      ## `closeSocket` continuation for the same discipline.
+      when chronosSimulation:
+        try:
+          removeSignal2(signalHandle.get())
+        except SimBarrierError as exc:
+          raiseAsDefect(exc, "unreachable: waitSignal() continuation hit " &
+            "the sim-dispatcher barrier after addSignal2() already " &
+            "succeeded on the same dispatcher")
+      else:
+        removeSignal2(signalHandle.get())
+
     proc continuation(udata: pointer) {.gcsafe.} =
       if not(retFuture.finished()):
         if signalHandle.isSome():
-          let res = removeSignal2(signalHandle.get())
+          let res = removeSignalBestEffort()
           if res.isErr():
             retFuture.fail(getSignalException(res.error()))
           else:
@@ -1339,7 +1390,7 @@ when (chronosEventEngine in ["epoll", "kqueue"]) or defined(windows):
     proc cancellation(udata: pointer) {.gcsafe.} =
       if not(retFuture.finished()):
         if signalHandle.isSome():
-          let res = removeSignal2(signalHandle.get())
+          let res = removeSignalBestEffort()
           if res.isErr():
             retFuture.fail(getSignalException(res.error()))
 

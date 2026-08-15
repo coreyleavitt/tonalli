@@ -13,10 +13,11 @@
 ## thread's real dispatcher afterward, whatever the body's outcome.
 ##
 ## Re-exports `chronos/internal/simengine` (which itself re-exports
-## `chronos/internal/simtrace`), so this is the one import a sim test
-## needs beyond `chronos` itself: `SimOracle` and its choice-point/
-## decision types, `newSimOracle`, `RandomOracle`, `ReplayOracle`,
-## `SimBarrierError`, and the trace schema.
+## `chronos/internal/simtrace` and `chronos/internal/simledger`), so
+## this is the one import a sim test needs beyond `chronos` itself:
+## `SimOracle` and its choice-point/decision types, `newSimOracle`,
+## `RandomOracle`, `ReplayOracle`, `SimBarrierError`, `SimEngineError`,
+## `SimFailureKind`, `SimLedgerError`, and the trace schema.
 
 import std/[deques, os, strutils, tables]
 import unittest2
@@ -27,26 +28,17 @@ import ./internal/simclock
 export simengine
 
 type
-  SimFailureKind* {.pure.} = enum
-    ## What made a `simulate()` run fail (RFC 0003 3.8). `BodyError` is
-    ## the async body's own exception; the rest classify the internal
-    ## Defects `simDecideBatch`/`simDecideIo`/`simDecideTimeAdvance` and
-    ## the sim poll loop already raise for a protocol violation,
-    ## quiescence, or an oracle deferring all deliverable work with no
-    ## fallback (RFC 0003 3.5) - `simulate()` is the boundary that
-    ## converts each from a Defect into this catchable, structured kind.
-    BodyError
-    Deadlock
-    OracleDeferral
-    ProtocolViolation
-    DecisionBudgetExhausted
-    TimeBudgetExhausted
-
   SimulationError* = object of CatchableError
     ## Raised by `simulate()` for any run failure, seed- and trace-
     ## attributed so a failing seed is a complete bug report (RFC 0003
     ## 3.8). `parent` (inherited from `Exception`) holds the original
-    ## exception: the body's own error, or the converted internal Defect.
+    ## exception: the body's own error, or the internal `SimEngineError`
+    ## `runSimulation` caught and converted. `kind` (`SimFailureKind`,
+    ## `chronos/internal/simengine.nim`) classifies which by a type-safe
+    ## field on that internal exception - never by parsing `msg` - with
+    ## one exception of its own: `BodyError` is set here, not carried on
+    ## any raised exception, since it names "the failure was not one of
+    ## the engine's own" rather than a specific engine-detected kind.
     kind*: SimFailureKind
     seed*: uint64
     tracePath*: string
@@ -221,18 +213,6 @@ else:
     raiseAssert "SimNet datagram transports are not implemented on " &
       "Windows (RFC 0003 section 4's Windows IOCP-emulation non-goal)"
 
-proc classifySimFailure(msg: string): SimFailureKind =
-  if msg.startsWith("deadlock:"):
-    SimFailureKind.Deadlock
-  elif msg.startsWith("oracle deferred"):
-    SimFailureKind.OracleDeferral
-  elif msg.startsWith("livelock: decision budget"):
-    SimFailureKind.DecisionBudgetExhausted
-  elif msg.startsWith("livelock: virtual-time budget"):
-    SimFailureKind.TimeBudgetExhausted
-  else:
-    SimFailureKind.ProtocolViolation
-
 proc newSimulationError(kind: SimFailureKind, seed: uint64, tracePath, msg: string,
                          parent: ref Exception): ref SimulationError =
   result = newException(SimulationError,
@@ -244,20 +224,6 @@ proc newSimulationError(kind: SimFailureKind, seed: uint64, tracePath, msg: stri
 
 proc simTracePath(seed: uint64): string =
   getTempDir() / "chronos-sim" / ("seed-" & $seed & ".ndjson")
-
-proc newSimLedgerErrorFrom(disp: PDispatcher, seed: uint64,
-                            msg: string): ref SimLedgerError =
-  ## Reads the structured fields `simledger.nim`'s `raiseLedgerViolation`
-  ## stashed on `disp`'s ledger just before raising the internal
-  ## `Defect` this converts (RFC 0003 3.9): `asyncengine.nim`'s file-
-  ## wide `{.push raises: [].}` is why the violation could not raise
-  ## `SimLedgerError` (a `CatchableError`) directly from inside
-  ## `poll()`'s call tree - see `SimLedgerViolation`'s docstring.
-  let violation = disp.simLedgerOf().lastViolation
-  result = newException(SimLedgerError, msg)
-  result.seed = seed
-  result.step = violation.step
-  result.objectDesc = violation.objectDesc
 
 proc runSimulation(seed: uint64, decisionBudget: int, timeBudget: Duration,
                     enableLedger: bool,
@@ -307,15 +273,59 @@ proc runSimulation(seed: uint64, decisionBudget: int, timeBudget: Duration,
       # priority `Restore is exception-safe` (3.8) already gives the
       # original failure over a masking restore-time assert).
       simLedgerTeardownCheck(disp)
-  except AssertionDefect as exc:
-    if exc.msg.startsWith(ledgerViolationPrefix):
-      ledgerFailure = newSimLedgerErrorFrom(disp, seed, exc.msg)
-    else:
-      failure = newSimulationError(classifySimFailure(exc.msg), seed,
-                                    tracePath, exc.msg, exc)
+  except SimLedgerError as exc:
+    exc.seed = seed
+    ledgerFailure = exc
+  except SimEngineError as exc:
+    failure = newSimulationError(exc.kind, seed, tracePath, exc.msg, exc)
   except CatchableError as exc:
+    # Every other failure, including `SimBarrierError` (raised directly
+    # by a provenance-guarded touch site the body reached, `object of
+    # CatchableError`, deliberately not a subtype of `AsyncError` - see
+    # its own docstring): from `runSimulation`'s perspective this is
+    # indistinguishable from any other exception the body's own code
+    # raised, which is exactly right - `BodyError` names "not one of
+    # the engine's own typed failures", not "the body's logic is at
+    # fault".
     failure = newSimulationError(SimFailureKind.BodyError, seed, tracePath,
                                   exc.msg, exc)
+  except Defect as exc:
+    # A handful of touch sites cross a `raises: []`-typed boundary no
+    # per-build pragma can widen - a `CallbackFunc` (the transport
+    # seam's I/O-callback `simRawIo` wrap and its `register2`/
+    # `addReader2`/etc. teardown calls, `chronos/transports/
+    # stream.nim`'s `simBoundaryGuard`/`safeRegister2`-family helpers
+    # and `chronos/transports/datagram.nim`'s equivalents) or
+    # `finish()`'s unbounded reach (`chronos/internal/asyncfutures.nim`'s
+    # `simLedgerNoteFutureFinish`) - documented at each site. Each
+    # catches its own typed `SimBarrierError`/`SimEngineError`/
+    # `SimLedgerError` locally and re-raises it wrapped in a `Defect`
+    # (`raiseAsDefect`, exempt from the raises effect system - the same
+    # mechanism `raiseOsDefect` already uses to cross an unwidenable
+    # boundary for an unrecoverable real-mode condition) instead of
+    # letting it propagate normally. Recovered here, by type
+    # (`exc.parent of ...`), never by parsing `exc.msg` - the one
+    # narrow, type-checked exception to this retirement round's "no
+    # Defect trampoline" aim, forced by those boundaries' reach rather
+    # than chosen for convenience. Any other `Defect` (a genuine
+    # unrecoverable condition, e.g. `raiseOsDefect`) is not this
+    # round's concern and re-raises unchanged.
+    if not exc.parent.isNil and exc.parent of SimLedgerError:
+      let ledgerExc = (ref SimLedgerError)(exc.parent)
+      ledgerExc.seed = seed
+      ledgerFailure = ledgerExc
+    elif not exc.parent.isNil and exc.parent of SimEngineError:
+      let engineExc = (ref SimEngineError)(exc.parent)
+      failure = newSimulationError(engineExc.kind, seed, tracePath,
+                                    engineExc.msg, engineExc)
+    elif not exc.parent.isNil and exc.parent of SimBarrierError:
+      # As the direct-propagation `SimBarrierError` case above
+      # (`except CatchableError`): indistinguishable from the body's
+      # own failure.
+      failure = newSimulationError(SimFailureKind.BodyError, seed,
+                                    tracePath, exc.parent.msg, exc.parent)
+    else:
+      raise exc
   finally:
     deactivateSimClock()
     disp.simAttachTraceWriter(nil)

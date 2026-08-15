@@ -9,13 +9,23 @@
 
 {.push raises: [].}
 
-import "."/[asyncloop, osdefs, osutils]
+import "."/[asyncloop, config, osdefs, osutils]
 import results
 from nativesockets import Domain, Protocol, SockType, toInt
 export Domain, Protocol, SockType, results
 
 when defined(windows):
   export raiseSignal, raiseConsoleCtrlSignal
+
+when chronosSimulation:
+  import ./internal/simengine
+    # `register2`'s provenance guard now raises `SimBarrierError`
+    # directly (fork issue #19 workstream 2's barrier retirement); this
+    # module's own `register2`/`wrapAsyncSocket2` callers need the type
+    # named to widen their own `raises` effect onto it.
+  {.pragma: mayBarrier, raises: [SimBarrierError].}
+else:
+  {.pragma: mayBarrier, raises: [].}
 
 const
   asyncInvalidSocket* = AsyncFD(osdefs.INVALID_SOCKET)
@@ -127,7 +137,8 @@ proc isAvailable*(domain: Domain): bool =
 
 proc createAsyncSocket2*(domain: Domain, sockType: SockType,
                          protocol: Protocol,
-                         inherit = true): Result[AsyncFD, OSErrorCode] =
+                         inherit = true): Result[AsyncFD, OSErrorCode]
+                        {.mayBarrier.} =
   ## Creates new asynchronous socket.
   when defined(windows):
     let flags =
@@ -174,7 +185,8 @@ proc createAsyncSocket2*(domain: Domain, sockType: SockType,
         return err(error)
       ok(AsyncFD(fd))
 
-proc wrapAsyncSocket2*(sock: cint|SocketHandle): Result[AsyncFD, OSErrorCode] =
+proc wrapAsyncSocket2*(sock: cint|SocketHandle): Result[AsyncFD, OSErrorCode]
+                       {.mayBarrier.} =
   ## Wraps socket to asynchronous socket handle.
   let fd =
     when defined(windows):
@@ -187,7 +199,7 @@ proc wrapAsyncSocket2*(sock: cint|SocketHandle): Result[AsyncFD, OSErrorCode] =
 
 proc createAsyncSocket*(domain: Domain, sockType: SockType,
                         protocol: Protocol,
-                        inherit = true): AsyncFD =
+                        inherit = true): AsyncFD {.mayBarrier.} =
   ## Creates new asynchronous socket.
   ## Returns ``asyncInvalidSocket`` on error.
   createAsyncSocket2(domain, sockType, protocol, inherit).valueOr:

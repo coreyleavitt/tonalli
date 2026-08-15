@@ -8,16 +8,23 @@
 #                MIT license (LICENSE-MIT)
 
 ## Private mechanism backing the deterministic simulation substrate's
-## dispatcher fork: the fd provenance table and its minting counter, the
-## reserved barrier error code, `SimBarrierError`, the discrete-event
-## virtual clock's `decideTime` choice point, the sim event set's
-## `decideBatch` choice point (readiness/arrival delivery order, oracle
-## interface, and the registration-routing bookkeeping that lets
-## sim-minted fds carry armed reader/writer interest with no selector),
-## and the I/O outcome's `decideIo` choice point (RFC 0003 3.3's D2
-## triple, completed at S6; no live producer wires it before the
-## transport seam at S10). Also `RandomOracle`, the seeded stock oracle
-## scripted stub oracles are an alternative to.
+## dispatcher fork: the fd provenance table and its minting counter,
+## `SimBarrierError` and `raiseSimBarrier` (a provenance-guarded touch
+## site's typed, catchable failure - raised directly at the point of
+## detection, never encoded through a reserved `OSErrorCode`), the
+## discrete-event virtual clock's `decideTime` choice point, the sim
+## event set's `decideBatch` choice point (readiness/arrival delivery
+## order, oracle interface, and the registration-routing bookkeeping
+## that lets sim-minted fds carry armed reader/writer interest with no
+## selector), and the I/O outcome's `decideIo` choice point (RFC 0003
+## 3.3's D2 triple, completed at S6; no live producer wires it before
+## the transport seam at S10). Also `RandomOracle`, the seeded stock
+## oracle scripted stub oracles are an alternative to, and
+## `SimEngineError`/`SimFailureKind`, the typed, by-type-classified
+## failure the engine's own protocol/livelock checks raise directly
+## (retiring the `AssertionDefect`-plus-message-prefix trampoline
+## `chronos/simulation.nim`'s `simulate()` used to convert those checks
+## through).
 ##
 ## Imports and re-exports `chronos/internal/simtrace.nim` for the
 ## entity-id types every choice point and decision carries; this module
@@ -45,7 +52,41 @@ type
     ## fd, or a cross-thread entry point incompatible with simulation
     ## (`wake()`, `handle()`) was reached. Deliberately not a subtype of
     ## `AsyncError`, so an existing `except AsyncError` handler cannot
-    ## silently swallow a hermeticity violation.
+    ## silently swallow a hermeticity violation. Raised directly, by
+    ## `raiseSimBarrier` below, at the point of detection - never
+    ## encoded through a reserved `OSErrorCode` threaded through an
+    ## otherwise-unchanged `Result` return.
+
+  SimFailureKind* {.pure.} = enum
+    ## What made a `simulate()` run fail (RFC 0003 3.8). `BodyError` is
+    ## the async body's own exception, classified by
+    ## `chronos/simulation.nim`'s `runSimulation` itself (never raised
+    ## from in here); the rest name every failure `SimEngineError`
+    ## carries directly from its point of detection in this module or
+    ## in `asyncengine.nim`'s sim poll loop - `kind` classifies which,
+    ## by a type-safe field, never by parsing `msg`.
+    BodyError
+    Deadlock
+    OracleDeferral
+    ProtocolViolation
+    DecisionBudgetExhausted
+    TimeBudgetExhausted
+
+  SimEngineError* = object of CatchableError
+    ## Raised directly, at the point of detection, for every internal
+    ## sim run failure the engine or the sim poll loop can detect on
+    ## its own (RFC 0003 3.5/3.8): an oracle error, an out-of-range
+    ## oracle answer, a decision- or virtual-time-budget exhaustion, a
+    ## deadlock (no runnable work), or an oracle deferring all
+    ## deliverable work with no fallback. `kind` classifies which;
+    ## `chronos/simulation.nim`'s `runSimulation` is the sole boundary
+    ## that catches this (by type, via a plain `except SimEngineError`)
+    ## and converts it into the public, per-seed `SimulationError` -
+    ## retiring the `AssertionDefect`-plus-message-prefix trampoline
+    ## this used to flow through, which was the only shape available
+    ## while `poll()`'s `raises: []` surface and
+    ## `chronos/internal/asyncfutures.nim` were untouchable.
+    kind*: SimFailureKind
 
   TimeAdvancePoint* = object
     ## The discrete-event clock's decision point (RFC 0003 3.3):
@@ -236,13 +277,26 @@ type
       ## every field on this object stays private to this module, the
       ## same discipline the rest of `SimEngineState` already follows.
 
-const
-  SimBarrierCode* = OSErrorCode(1_397_835_586'i32)
-    ## Reserved `OSErrorCode`, outside every platform's errno range
-    ## ("SIMB" packed as ASCII bytes). A provenance-guarded touch site
-    ## under simulation returns `err(SimBarrierCode)` through its
-    ## unchanged `Result` signature instead of touching a real fd or a
-    ## nil selector.
+proc raiseSimBarrier*(site: string) {.noreturn, raises: [SimBarrierError].} =
+  ## Raised directly by a provenance-guarded touch site (RFC 0003 3.2)
+  ## reached by a real fd or resource, or an API that inherently
+  ## touches a real OS resource, under simulation - retires the
+  ## reserved-`OSErrorCode` sentinel (`SimBarrierCode`/`isSimBarrier`/
+  ## `raiseIfSimBarrier`) this used to flow through as a magic value
+  ## threaded through the touch site's otherwise-unchanged real-mode
+  ## `Result` signature. `site` names the specific touch site.
+  raise newException(SimBarrierError,
+    "simulation barrier: " & site & " reached a real OS resource " &
+    "under -d:chronosSimulation")
+
+proc raiseSimEngineError*(kind: SimFailureKind, msg: string)
+                          {.noreturn, raises: [SimEngineError].} =
+  ## Raised directly by every internal sim-engine/poll-loop check this
+  ## module and `asyncengine.nim`'s sim poll loop make (RFC 0003
+  ## 3.5/3.8) - see `SimEngineError`.
+  let exc = newException(SimEngineError, msg)
+  exc.kind = kind
+  raise exc
 
 proc newSimOracle*(
     decideBatch: proc(cp: SelectBatchPoint):
@@ -494,58 +548,53 @@ proc attachTraceWriter*(state: SimEngineState, writer: ptr SimTraceWriter) =
   ## never touched again by a later call reusing this engine state.
   state.traceWriter = writer
 
-proc noteDecision(state: SimEngineState) =
+proc noteDecision(state: SimEngineState) {.raises: [SimEngineError].} =
   ## Counts one oracle `decide*` call against the run's decision budget
   ## (RFC 0003 3.8): the same mechanism bounds a runaway poll loop
   ## (`decideBatch`/`decideTime`, once per iteration) and a retry spin
   ## inside one callback (`decideIo`, once per sub-step). Exhaustion is
-  ## a livelock, reported the same structured-Defect way
-  ## `simDecideBatch`/`simDecideTimeAdvance` already report a protocol
-  ## violation - `simulate()` (chronos/simulation.nim) is the boundary
-  ## that converts it into a catchable, structured outcome.
+  ## a livelock, raised directly as a typed `SimEngineError` -
+  ## `simulate()` (chronos/simulation.nim) is the boundary that catches
+  ## it by type and converts it into a catchable, structured outcome.
   inc state.decisionCount
   if state.decisionBudget > 0 and state.decisionCount > state.decisionBudget:
-    raiseAssert "livelock: decision budget exhausted at decision " &
-      $state.decisionCount & ", seed " & $state.seed
-
-proc isSimBarrier*(code: OSErrorCode): bool {.inline.} =
-  code == SimBarrierCode
-
-proc raiseIfSimBarrier*(code: OSErrorCode) {.raises: [SimBarrierError].} =
-  if isSimBarrier(code):
-    raise newException(SimBarrierError,
-      "simulation barrier: a provenance-guarded call reached a real " &
-      "OS resource under -d:chronosSimulation")
+    raiseSimEngineError(SimFailureKind.DecisionBudgetExhausted,
+      "livelock: decision budget exhausted at decision " &
+      $state.decisionCount & ", seed " & $state.seed)
 
 proc simDecideTimeAdvance*(state: SimEngineState, armed: seq[Moment],
-                            curTime: Moment): Moment =
+                            curTime: Moment): Moment
+                           {.raises: [SimEngineError].} =
   ## The virtual clock's sole write point (3.4): asks `state`'s oracle
   ## to pick an advance among `armed` (sorted earliest first by the
   ## caller) and writes the sim clock counter to its answer.
   ##
   ## An oracle failure or a `decideTime` answer outside the engine's
   ## validation rule (`>= armed[0]` and `>= curTime`) is a structured
-  ## simulation-protocol violation, reported the same way `poll()`'s own
-  ## `raiseOsDefect` does for an unrecoverable real-mode condition: a
-  ## Defect carrying the message, not a silent or backward clock write.
-  ## `chronos/simulation.nim`'s `simulate()` (S8) is the boundary that
-  ## converts the Defect into a catchable, per-seed `SimulationError`.
+  ## simulation-protocol violation, raised directly as a typed
+  ## `SimEngineError` - never a silent or backward clock write.
+  ## `chronos/simulation.nim`'s `runSimulation` is the boundary that
+  ## catches it by type and converts it into a catchable, per-seed
+  ## `SimulationError`.
   doAssert armed.len > 0,
     "simDecideTimeAdvance(): requires at least one armed deadline"
   state.noteDecision()
   let decision = state.oracle.decideTimeImpl(TimeAdvancePoint(armed: armed))
   if decision.isErr:
-    raiseAssert "simulation oracle error: " & decision.error.msg
+    raiseSimEngineError(SimFailureKind.ProtocolViolation,
+      "simulation oracle error: " & decision.error.msg)
   let advanceTo = decision.get().advanceTo
   if advanceTo < armed[0] or advanceTo < curTime:
-    raiseAssert "simulation clock violation: decideTime returned " &
+    raiseSimEngineError(SimFailureKind.ProtocolViolation,
+      "simulation clock violation: decideTime returned " &
       $advanceTo & ", earlier than the earliest armed deadline or the " &
-      "current virtual clock"
+      "current virtual clock")
   if state.hasTimeBudget and
      advanceTo.epochNanoSeconds > state.timeBudgetCutoffNanoseconds:
-    raiseAssert "livelock: virtual-time budget exhausted at decision " &
+    raiseSimEngineError(SimFailureKind.TimeBudgetExhausted,
+      "livelock: virtual-time budget exhausted at decision " &
       $state.decisionCount & ", seed " & $state.seed & ", virtual time " &
-      $advanceTo.epochNanoSeconds & "ns"
+      $advanceTo.epochNanoSeconds & "ns")
   setSimClockNanoseconds(advanceTo.epochNanoSeconds)
   if not state.traceWriter.isNil:
     var armedNs = newSeq[int64](armed.len)
@@ -554,29 +603,33 @@ proc simDecideTimeAdvance*(state: SimEngineState, armed: seq[Moment],
     try:
       state.traceWriter[].writeTimeDecision(armedNs, advanceTo.epochNanoSeconds)
     except IOError as exc:
-      raiseAssert "simulation trace write failure: " & exc.msg
+      raiseSimEngineError(SimFailureKind.ProtocolViolation,
+        "simulation trace write failure: " & exc.msg)
   advanceTo
 
-proc simDecideIo*(state: SimEngineState, cp: IoOutcomePoint): IoDecision =
+proc simDecideIo*(state: SimEngineState, cp: IoOutcomePoint): IoDecision
+                  {.raises: [SimEngineError].} =
   ## Asks the oracle's `decideIo` closure to resolve one I/O outcome
   ## (3.3). No live producer wires this before the transport seam (S10);
   ## S6 exercises it with hand-built `IoOutcomePoint` values to validate
   ## the choice-point shape ahead of the seam that will drive it. An
-  ## oracle error is a structured simulation-protocol violation, the
-  ## same `raiseAssert` discipline `simDecideBatch`/`simDecideTimeAdvance`
-  ## already use.
+  ## oracle error is a structured simulation-protocol violation, raised
+  ## directly as a typed `SimEngineError`, the same discipline
+  ## `simDecideBatch`/`simDecideTimeAdvance` already use.
   state.noteDecision()
   let decision = state.oracle.decideIoImpl(cp)
   if decision.isErr:
-    raiseAssert "simulation oracle error: " & decision.error.msg
+    raiseSimEngineError(SimFailureKind.ProtocolViolation,
+      "simulation oracle error: " & decision.error.msg)
   result = decision.get()
   if result.outcome == SimIoOutcome.Ok:
     let minBytes = if cp.maxBytes == 0: 0 else: 1
     if result.bytes < minBytes or result.bytes > cp.maxBytes:
-      raiseAssert "simulation I/O violation: decideIo returned " &
+      raiseSimEngineError(SimFailureKind.ProtocolViolation,
+        "simulation I/O violation: decideIo returned " &
         $result.bytes & " bytes, outside the legal " & $minBytes & ".." &
         $cp.maxBytes & " range for this request (a 0-byte answer against " &
-        "a positive request would be read downstream as EOF)"
+        "a positive request would be read downstream as EOF)")
   if not state.traceWriter.isNil:
     var faultNames = newSeq[string]()
     for f in cp.faults:
@@ -591,7 +644,8 @@ proc simDecideIo*(state: SimEngineState, cp: IoOutcomePoint): IoDecision =
         toLowerAscii($cp.op), cp.maxBytes, faultNames, outcomeStr, bytes,
         faultStr)
     except IOError as exc:
-      raiseAssert "simulation trace write failure: " & exc.msg
+      raiseSimEngineError(SimFailureKind.ProtocolViolation,
+        "simulation trace write failure: " & exc.msg)
 
 proc simFaultToError*(fault: SimFault): OSErrorCode {.inline.} =
   ## Maps a scripted `SimFault` onto the real `OSErrorCode` the
@@ -745,7 +799,8 @@ proc simStreamDeliver(state: SimEngineState, fd: int, data: pointer, n: int) =
   state.simMarkReadyOnce(peerFd, SimReadyDirection.Read)
 
 proc simStreamIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
-                   maxBytes: int): tuple[res: int, err: OSErrorCode] =
+                   maxBytes: int): tuple[res: int, err: OSErrorCode]
+                  {.raises: [SimEngineError].} =
   ## The sim stream seam's full orchestration (RFC 0003 3.2 N4, S11a):
   ## for a fd with a live `SimNet` endpoint, real content moves through
   ## the endpoint pair's in-memory queue - a read with nothing queued
@@ -874,7 +929,8 @@ proc simDatagramDeliver(state: SimEngineState, fd: int, data: pointer, n: int,
 
 proc simDatagramIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
                      maxBytes: int):
-    tuple[res: int, err: OSErrorCode, fromAddr: seq[byte]] =
+    tuple[res: int, err: OSErrorCode, fromAddr: seq[byte]]
+    {.raises: [SimEngineError].} =
   ## The sim datagram seam's orchestration (RFC 0003 6, slices S12a/
   ## S12b). A fd with no live endpoint (a bare minted fd, e.g.
   ## `testsimdatagram.nim`'s seam probes) keeps S12a's original
@@ -1012,18 +1068,20 @@ proc simDeliverableEvents*(state: SimEngineState): seq[SimEvent] =
   result.sort(proc(x, y: SimEvent): int = cmp(uint64(x.id), uint64(y.id)))
 
 proc simDecideBatch*(state: SimEngineState,
-                      deliverable: seq[SimEvent]): BatchDecision =
+                      deliverable: seq[SimEvent]): BatchDecision
+                     {.raises: [SimEngineError].} =
   ## Asks the oracle to choose a delivery order among `deliverable`
   ## (RFC 0003 3.3/3.5). Validates every returned id is a member of
   ## `deliverable`, appearing at most once - an oracle answer naming an
   ## unknown or duplicate id is a structured simulation-protocol
-  ## violation, the same `raiseAssert` discipline `simDecideTimeAdvance`
-  ## already uses.
+  ## violation, raised directly as a typed `SimEngineError`, the same
+  ## discipline `simDecideTimeAdvance` already uses.
   state.noteDecision()
   let decision = state.oracle.decideBatchImpl(
     SelectBatchPoint(deliverable: deliverable))
   if decision.isErr:
-    raiseAssert "simulation oracle error: " & decision.error.msg
+    raiseSimEngineError(SimFailureKind.ProtocolViolation,
+      "simulation oracle error: " & decision.error.msg)
   result = decision.get()
   var seen = initHashSet[uint64]()
   for id in result.order:
@@ -1033,11 +1091,13 @@ proc simDecideBatch*(state: SimEngineState,
         found = true
         break
     if not found:
-      raiseAssert "simulation batch violation: decideBatch named an id " &
-        "not in deliverable: " & $id
+      raiseSimEngineError(SimFailureKind.ProtocolViolation,
+        "simulation batch violation: decideBatch named an id " &
+        "not in deliverable: " & $id)
     if uint64(id) in seen:
-      raiseAssert "simulation batch violation: decideBatch named id " &
-        $id & " more than once"
+      raiseSimEngineError(SimFailureKind.ProtocolViolation,
+        "simulation batch violation: decideBatch named id " &
+        $id & " more than once")
     seen.incl(uint64(id))
   if not state.traceWriter.isNil:
     var deliverableIds = newSeq[SimEventId](deliverable.len)
@@ -1046,10 +1106,12 @@ proc simDecideBatch*(state: SimEngineState,
     try:
       state.traceWriter[].writeBatchDecision(deliverableIds, result.order)
     except IOError as exc:
-      raiseAssert "simulation trace write failure: " & exc.msg
+      raiseSimEngineError(SimFailureKind.ProtocolViolation,
+        "simulation trace write failure: " & exc.msg)
 
 proc simTakeDelivery*(state: SimEngineState, id: SimEventId):
-    tuple[kind: SimEventKind, callback: InternalAsyncCallback] =
+    tuple[kind: SimEventKind, callback: InternalAsyncCallback]
+    {.raises: [SimEngineError].} =
   ## Pops the delivery payload for `id`, already validated against the
   ## pending event set by `simDecideBatch`: the armed callback for a
   ## `Readiness` event, or a bare `Arrival` marker (S13 gives it a real
@@ -1065,5 +1127,6 @@ proc simTakeDelivery*(state: SimEngineState, id: SimEventId):
       result = (SimEventKind.Arrival, InternalAsyncCallback())
       state.arrivalQueue.delete(idx)
       return
-  raiseAssert "simTakeDelivery(): unknown id " & $id &
-    " - validated ids must exist in the pending event set"
+  raiseSimEngineError(SimFailureKind.ProtocolViolation,
+    "simTakeDelivery(): unknown id " & $id &
+    " - validated ids must exist in the pending event set")
