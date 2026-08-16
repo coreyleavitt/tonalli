@@ -71,7 +71,11 @@ proc traceForSeed(seed: uint64, path: string): string =
   let deliverable = deliverableOf([1'u64, 2, 3, 4, 5, 6, 7, 8])
   let state = newSimEngineState(oracle = RandomOracle(seed))
   let order = state.simDecideBatch(deliverable).order
-  var writer = openSimTraceWriter(path, seed = seed)
+  var writer = openSimTraceWriter(path, seed = seed,
+
+    decisionBudget = 10_000,
+
+    timeBudgetNanoseconds = 3_600_000_000_000'i64)
   writer.writeBatchDecision(
     @[SimEventId(1'u64), SimEventId(2'u64), SimEventId(3'u64),
       SimEventId(4'u64), SimEventId(5'u64), SimEventId(6'u64),
@@ -374,7 +378,11 @@ suite "sim PCT-primitive oracle (interface freeze gate)":
 suite "sim ReplayOracle":
   test "replay reproduces a recorded decideBatch decision":
     let path = getTempDir() / "chronos-simreplay-batch.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeBatchDecision(@[SimEventId(1'u64), SimEventId(2'u64), SimEventId(3'u64)],
                                @[SimEventId(3'u64), SimEventId(1'u64), SimEventId(2'u64)])
     writer.close()
@@ -387,7 +395,11 @@ suite "sim ReplayOracle":
 
   test "replay reproduces a recorded decideTime decision":
     let path = getTempDir() / "chronos-simreplay-time.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeTimeDecision(@[500'i64, 900'i64], 500'i64)
     writer.close()
     let oracle = ReplayOracle(path)
@@ -399,7 +411,11 @@ suite "sim ReplayOracle":
 
   test "replay reproduces a recorded decideIo decision":
     let path = getTempDir() / "chronos-simreplay-io.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeIoDecision(SimEventId(1'u64), SimEndpointId(2'u32), "read",
                             64, newSeq[string](), "ok", 64, "")
     writer.close()
@@ -415,7 +431,11 @@ suite "sim ReplayOracle":
 
   test "a live decideBatch digest mismatch fails as a named divergence":
     let path = getTempDir() / "chronos-simreplay-mismatch.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeBatchDecision(@[SimEventId(1'u64), SimEventId(2'u64)],
                                @[SimEventId(2'u64), SimEventId(1'u64)])
     writer.close()
@@ -435,7 +455,11 @@ suite "sim ReplayOracle":
 
   test "a payload-changed io fixture (same ids, different maxBytes) is detected divergence":
     let path = getTempDir() / "chronos-simreplay-io-mismatch.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeIoDecision(SimEventId(1'u64), SimEndpointId(2'u32), "read",
                             64, newSeq[string](), "ok", 64, "")
     writer.close()
@@ -456,7 +480,11 @@ suite "sim ReplayOracle":
 
   test "replay exhaustion is reported, not a silent default decision":
     let path = getTempDir() / "chronos-simreplay-exhausted.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeBatchDecision(@[SimEventId(1'u64)], @[SimEventId(1'u64)])
     writer.close()
     let oracle = ReplayOracle(path)
@@ -473,7 +501,11 @@ suite "sim ReplayOracle":
 
   test "a recorded-kind mismatch names both the recorded and live choice points":
     let path = getTempDir() / "chronos-simreplay-kind-mismatch.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeTimeDecision(@[100'i64], 100'i64)
     writer.close()
     let oracle = ReplayOracle(path)

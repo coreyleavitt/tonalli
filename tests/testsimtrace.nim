@@ -67,20 +67,27 @@ suite "digestOf pinned grammar":
                      @["reset"]) == "224e66f4bb617941"
 
 suite "sim decision-log writer":
-  test "the header line carries trace name, version, seed, commit, config":
+  test "the header line carries trace name, version, seed, budgets, commit, config":
     let path = getTempDir() / "chronos-simtrace-header.ndjson"
     var writer = openSimTraceWriter(path, seed = 12648430'u64,
+                                     decisionBudget = 10_000,
+                                     timeBudgetNanoseconds = 3_600_000_000_000'i64,
                                      commit = "abc123", config = "refc")
     writer.close()
     let lines = readFile(path).splitLines()
     check lines[0] ==
-      "{\"trace\":\"chronos-sim\",\"v\":1,\"seed\":12648430," &
+      "{\"trace\":\"chronos-sim\",\"v\":2,\"seed\":12648430," &
+      "\"decisionBudget\":10000,\"timeBudgetNanoseconds\":3600000000000," &
       "\"commit\":\"abc123\",\"config\":\"refc\"}"
     removeFile(path)
 
   test "a time decision line carries its index, digest, and advanceTo":
     let path = getTempDir() / "chronos-simtrace-time.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeTimeDecision(@[100'i64], 100'i64)
     writer.close()
     let lines = readFile(path).splitLines()
@@ -91,7 +98,11 @@ suite "sim decision-log writer":
 
   test "a batch decision line carries its index, digest, and order":
     let path = getTempDir() / "chronos-simtrace-batch.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     let deliverable = @[SimEventId(1'u64), SimEventId(2'u64)]
     let order = @[SimEventId(2'u64), SimEventId(1'u64)]
     writer.writeBatchDecision(deliverable, order)
@@ -104,7 +115,11 @@ suite "sim decision-log writer":
 
   test "the decision index increments across writes":
     let path = getTempDir() / "chronos-simtrace-index.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeTimeDecision(@[100'i64], 100'i64)
     writer.writeBatchDecision(@[SimEventId(1'u64)], @[SimEventId(1'u64)])
     writer.close()
@@ -115,7 +130,11 @@ suite "sim decision-log writer":
 
   test "an io decision line with an Ok outcome carries its bytes":
     let path = getTempDir() / "chronos-simtrace-io-ok.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeIoDecision(SimEventId(1'u64), SimEndpointId(2'u32), "read",
                             64, newSeq[string](), "ok", 64, "")
     writer.close()
@@ -129,7 +148,11 @@ suite "sim decision-log writer":
 
   test "an io decision line with a Fault outcome carries its fault":
     let path = getTempDir() / "chronos-simtrace-io-fault.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeIoDecision(SimEventId(1'u64), SimEndpointId(2'u32), "write",
                             64, @["reset"], "fault", 0, "reset")
     writer.close()
@@ -145,10 +168,14 @@ suite "sim trace reader":
   test "reads back the header a writer wrote":
     let path = getTempDir() / "chronos-simtrace-read-header.ndjson"
     var writer = openSimTraceWriter(path, seed = 12648430'u64,
+                                     decisionBudget = 10_000,
+                                     timeBudgetNanoseconds = 3_600_000_000_000'i64,
                                      commit = "abc123", config = "refc")
     writer.close()
     let trace = readSimTrace(path)
     check trace.header.seed == 12648430'u64
+    check trace.header.decisionBudget == 10_000
+    check trace.header.timeBudgetNanoseconds == 3_600_000_000_000'i64
     check trace.header.commit == "abc123"
     check trace.header.config == "refc"
     check trace.records.len == 0
@@ -156,7 +183,11 @@ suite "sim trace reader":
 
   test "reads back a time decision":
     let path = getTempDir() / "chronos-simtrace-read-time.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeTimeDecision(@[100'i64, 200'i64], 150'i64)
     writer.close()
     let trace = readSimTrace(path)
@@ -169,7 +200,11 @@ suite "sim trace reader":
 
   test "reads back a batch decision":
     let path = getTempDir() / "chronos-simtrace-read-batch.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     let deliverable = @[SimEventId(1'u64), SimEventId(2'u64)]
     let order = @[SimEventId(2'u64), SimEventId(1'u64)]
     writer.writeBatchDecision(deliverable, order)
@@ -183,7 +218,11 @@ suite "sim trace reader":
 
   test "reads back an io decision with an Ok outcome":
     let path = getTempDir() / "chronos-simtrace-read-io-ok.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeIoDecision(SimEventId(1'u64), SimEndpointId(2'u32), "read",
                             64, newSeq[string](), "ok", 64, "")
     writer.close()
@@ -198,7 +237,11 @@ suite "sim trace reader":
 
   test "reads back an io decision with a Fault outcome":
     let path = getTempDir() / "chronos-simtrace-read-io-fault.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+
+      decisionBudget = 10_000,
+
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeIoDecision(SimEventId(1'u64), SimEndpointId(2'u32), "write",
                             64, @["reset"], "fault", 0, "reset")
     writer.close()
@@ -209,7 +252,9 @@ suite "sim trace reader":
 
   test "the decision index round-trips across multiple records":
     let path = getTempDir() / "chronos-simtrace-read-index.ndjson"
-    var writer = openSimTraceWriter(path, seed = 1'u64)
+    var writer = openSimTraceWriter(path, seed = 1'u64,
+      decisionBudget = 10_000,
+      timeBudgetNanoseconds = 3_600_000_000_000'i64)
     writer.writeTimeDecision(@[100'i64], 100'i64)
     writer.writeBatchDecision(@[SimEventId(1'u64)], @[SimEventId(1'u64)])
     writer.close()
@@ -237,7 +282,8 @@ suite "sim trace reader":
     removeFile(path)
 
   const validHeaderLine =
-    "{\"trace\":\"chronos-sim\",\"v\":1,\"seed\":1,\"commit\":\"\"," &
+    "{\"trace\":\"chronos-sim\",\"v\":2,\"seed\":1,\"decisionBudget\":10000," &
+    "\"timeBudgetNanoseconds\":3600000000000,\"commit\":\"\"," &
     "\"config\":\"\"}\n"
 
   test "an empty trace file is refused":
@@ -258,7 +304,8 @@ suite "sim trace reader":
   test "an unterminated string field in the header is refused":
     let path = getTempDir() / "chronos-simtrace-read-unterminated.ndjson"
     writeFile(path,
-      "{\"trace\":\"chronos-sim\",\"v\":1,\"seed\":1,\"commit\":\"abc\n")
+      "{\"trace\":\"chronos-sim\",\"v\":2,\"seed\":1,\"decisionBudget\":10000," &
+      "\"timeBudgetNanoseconds\":3600000000000,\"commit\":\"abc\n")
     expect SimTraceReadError:
       discard readSimTrace(path)
     removeFile(path)
@@ -301,13 +348,15 @@ suite "sim trace reader":
 
   test "a full-range uint64 seed round-trips through the header":
     let header = parseSimTraceHeader(
-      renderHeaderLine(high(uint64), "abc", "cfg"))
+      renderHeaderLine(high(uint64), 10_000, 3_600_000_000_000'i64,
+                        "abc", "cfg"))
     check header.seed == high(uint64)
 
   test "a negative seed is refused":
     expect SimTraceReadError:
       discard parseSimTraceHeader(
-        "{\"trace\":\"chronos-sim\",\"v\":1,\"seed\":-5,\"commit\":\"\"," &
+        "{\"trace\":\"chronos-sim\",\"v\":2,\"seed\":-5,\"decisionBudget\":" &
+        "10000,\"timeBudgetNanoseconds\":3600000000000,\"commit\":\"\"," &
         "\"config\":\"\"}")
 
   test "an unrecognized decision kind is refused":
@@ -320,13 +369,24 @@ suite "sim trace reader":
     removeFile(path)
 
   test "an out-of-range decision index is refused":
-    let path = getTempDir() / "chronos-simtrace-read-bigindex.ndjson"
-    writeFile(path, validHeaderLine &
-      "{\"i\":99999999999,\"kind\":\"time\",\"digest\":\"0000000000000000\"," &
-      "\"decision\":{\"advanceTo\":100}}\n")
-    expect SimTraceReadError:
-      discard readSimTrace(path)
-    removeFile(path)
+    ## R2-7: the bound is width-gated (`extractBoundedIntField`'s
+    ## docstring, `chronos/internal/simtrace.nim`) - `int32.high` only
+    ## when `int` itself is 32 bits. On a 64-bit target there is no
+    ## practical value left to pin here: anything that still parses as
+    ## an `int64` is, by construction, within the (now `int64`-wide)
+    ## bound, and anything past `int64.high` fails to parse as a number
+    ## at all (a different, already-covered `SimTraceReadError` path,
+    ## not this one) - so this pin is honestly i386-only.
+    when sizeof(int) == 4:
+      let path = getTempDir() / "chronos-simtrace-read-bigindex.ndjson"
+      writeFile(path, validHeaderLine &
+        "{\"i\":99999999999,\"kind\":\"time\",\"digest\":\"0000000000000000\"," &
+        "\"decision\":{\"advanceTo\":100}}\n")
+      expect SimTraceReadError:
+        discard readSimTrace(path)
+      removeFile(path)
+    else:
+      skip()
 
   test "an out-of-range io byte count is refused":
     let path = getTempDir() / "chronos-simtrace-read-bigbytes.ndjson"
@@ -336,3 +396,30 @@ suite "sim trace reader":
     expect SimTraceReadError:
       discard readSimTrace(path)
     removeFile(path)
+
+  test "R2-7: a decision index past int32.high round-trips on a 64-bit target":
+    ## Before R2-7, `extractBoundedIntField` capped every width at
+    ## `int32.high`, so a legitimate long-running trace (more than ~2.1
+    ## billion decisions - plausible for a generous `sweepSeeds` sweep or
+    ## a deliberately large `decisionBudget`) became unreadable even on a
+    ## 64-bit target that has no trouble holding the value. `5_000_000_000`
+    ## is past `int32.high` (~2.1 billion) but well inside `int64`.
+    when sizeof(int) == 8:
+      let path = getTempDir() / "chronos-simtrace-read-bigindex-ok.ndjson"
+      writeFile(path, validHeaderLine &
+        "{\"i\":5000000000,\"kind\":\"time\",\"digest\":\"0000000000000000\"," &
+        "\"decision\":{\"advanceTo\":100}}\n")
+      let trace = readSimTrace(path)
+      check trace.records[0].index == 5_000_000_000
+      removeFile(path)
+    else:
+      skip()
+
+  test "R2-7: a decisionBudget past int32.high round-trips in the header on a 64-bit target":
+    when sizeof(int) == 8:
+      let header = parseSimTraceHeader(
+        renderHeaderLine(1'u64, 5_000_000_000, 3_600_000_000_000'i64,
+                          "", ""))
+      check header.decisionBudget == 5_000_000_000
+    else:
+      skip()

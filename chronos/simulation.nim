@@ -11,12 +11,15 @@
 ## 3.10): `simulate`, the single-run harness primitive that runs an
 ## async body on a fresh hermetic sim dispatcher and restores the
 ## thread's real dispatcher afterward, whatever the body's outcome, plus
-## its `simulateWithBudget`/`simulateWithLedger`/
-## `simulateWithBudgetAndLedger`/`simulateWithOracle`/`simulateReplay`
-## siblings and the matching `sweepSeeds*` family - every one a fixed-
+## its `simulateWith`/`simulateReplay`/`simulateReplayWith` siblings and
+## the matching `sweepSeeds`/`sweepSeedsWith` pair - every one a fixed-
 ## arity template funneling into the same private `runSimulation` core,
-## never an overload or a defaulted parameter (`simulateCore`'s
-## docstring records why).
+## never an overload or a defaulted parameter (`simulateWith`'s
+## docstring records why). Every optional knob (decision/time budget,
+## ledger checking, a scripted oracle) is bundled into one `SimRunOptions`
+## value built by `simOptions`, an ordinary proc that resolves its own
+## defaults before a `simulateWith`/`simulateReplayWith`/`sweepSeedsWith`
+## template call ever sees the result (R2-3's consolidation).
 ##
 ## Re-exports `chronos/internal/simengine` (which itself re-exports
 ## `chronos/internal/simtrace` and `chronos/internal/simledger`), so
@@ -25,7 +28,7 @@
 ## `RandomOracle`, `ReplayOracle`, `SimBarrierError`, `SimEngineError`,
 ## `SimFailureKind`, `SimLedgerError`, and the trace schema.
 
-import std/[deques, os, strutils, tables]
+import std/[deques, options, os, strutils, tables]
 import unittest2
 import ../chronos
 import ./internal/simengine
@@ -263,19 +266,22 @@ proc runSimulation(seed: uint64, decisionBudget: int, timeBudget: Duration,
   ## raised, or the sim loop itself failed - so the original failure
   ## always survives and the calling thread's real dispatcher is always
   ## left intact. `oracle` is a caller-supplied parameter, not hardcoded:
-  ## `simulate`/`simulateWithBudget`/`simulateWithLedger` pass
-  ## `RandomOracle(seed)`, `simulateWithOracle` passes its caller's
-  ## scripted oracle, `simulateReplay` passes a `ReplayOracle` - every
-  ## path through this proc gets the same restore/budget/trace/
-  ## `SimulationError` guarantees regardless of which oracle drives it.
-  ## `enableLedger` turns on the D8 ghost-ledger laws (RFC 0003 3.9,
-  ## slice S14); see `simulateWithLedger`. Stays private: every public
-  ## entry point is one of the fixed-arity `simulate*` templates below,
-  ## never a direct caller of this proc.
+  ## `simulate`/`simulateWith` (absent an `opts.oracle`) pass
+  ## `RandomOracle(seed)`, `simulateWith(seed, simOptions(oracle = ...))`
+  ## passes its caller's scripted oracle instead, `simulateReplay`/
+  ## `simulateReplayWith` pass a `ReplayOracle` - every path through this
+  ## proc gets the same restore/budget/trace/`SimulationError` guarantees
+  ## regardless of which oracle drives it. `enableLedger` turns on the D8
+  ## ghost-ledger laws (RFC 0003 3.9, slice S14); see
+  ## `simulateWith(seed, simOptions(ledger = true))`. Stays private:
+  ## every public entry point is one of the fixed-arity `simulate*`
+  ## templates below, never a direct caller of this proc.
   let savedDisp = getThreadDispatcherOrNil()
   let tracePath = simTracePath(seed)
   createDir(tracePath.parentDir)
-  var writer = openSimTraceWriter(tracePath, seed = seed)
+  var writer = openSimTraceWriter(tracePath, seed = seed,
+    decisionBudget = decisionBudget,
+    timeBudgetNanoseconds = timeBudget.nanoseconds)
   let timeBudgetCutoffNanoseconds =
     simClockAnchorNanoseconds + timeBudget.nanoseconds
   let disp = newSimDispatcher(oracle = oracle,
@@ -394,6 +400,55 @@ template simulateCore(seed: uint64, decisionBudget: int, timeBudget: Duration,
     proc() {.async, gcsafe.} =
       body)
 
+type
+  SimRunOptions* = object
+    ## Bundles `simulate()`'s optional knobs - decision/time budget,
+    ## ledger checking, a caller-scripted oracle - into one value
+    ## `simOptions` resolves (R2-3's consolidation): the family's only
+    ## defaulted parameters live on that plain proc, never on a
+    ## `simulateWith`/`simulateReplayWith`/`sweepSeedsWith` template
+    ## itself (see `simulateWith`'s docstring for why). By the time a
+    ## template call's `opts` argument is evaluated, every default is
+    ## already resolved, so the template carries none of its own.
+    decisionBudget*: int
+    timeBudget*: Duration
+    ledger*: bool
+    oracle*: Option[SimOracle]
+      ## `none` (the default): the run is driven by `RandomOracle(seed)`
+      ## (`simulateWith`), the trace's own `ReplayOracle`
+      ## (`simulateReplayWith`), or one `RandomOracle(seed)` per seed
+      ## (`sweepSeedsWith`) - the latter two refuse `some` outright (see
+      ## their docstrings), since neither a replay nor a multi-seed sweep
+      ## has one single oracle to hand it to. `some(oracle)`:
+      ## `simulateWith` drives the run with `oracle` instead. Left
+      ## `Option` rather than a bare `SimOracle`
+      ## defaulted to `defaultSimOracle()`: `defaultSimOracle()` is
+      ## itself a legitimate caller choice, so collapsing "the caller
+      ## didn't ask" and "the caller asked for exactly the deterministic
+      ## default" onto the same sentinel would be a silent correctness
+      ## gap, not a simplification.
+
+proc simOptions*(decisionBudget = simulateDefaultDecisionBudget,
+                  timeBudget = simulateDefaultTimeBudget,
+                  ledger = false,
+                  oracle = none(SimOracle)): SimRunOptions =
+  ## Resolves `simulateWith`/`simulateReplayWith`/`sweepSeedsWith`'s
+  ## optional knobs into a `SimRunOptions` value. An ordinary proc, not a
+  ## template or an overload of `simulate`: Nim resolves every default
+  ## argument here, at this call, before the surrounding
+  ## `simulateWith(seed, simOptions(...)): body` template call ever sees
+  ## the result - the fixed-arity discipline every `simulate*`/
+  ## `sweepSeeds*` template needs (`simulateWith`'s docstring) stays
+  ## intact because the template's own `opts` parameter is never
+  ## defaulted, only what built it. (Verified standalone before adoption:
+  ## a fixed-arity template taking a pre-built options value plus a
+  ## trailing `untyped` body, called both with an options argument that
+  ## overrides one field and with a bare `simOptions()`, compiles and
+  ## runs `await` inside `body` correctly against the pinned Nim 2.2.10
+  ## toolchain - see the module docstring's toolchain-quirk note.)
+  SimRunOptions(decisionBudget: decisionBudget, timeBudget: timeBudget,
+                 ledger: ledger, oracle: oracle)
+
 template simulate*(seed: uint64, body: untyped): untyped =
   ## Runs `body` (async code) to completion on a fresh, hermetic
   ## simulated dispatcher driven by `RandomOracle(seed)`, then restores
@@ -401,68 +456,46 @@ template simulate*(seed: uint64, body: untyped): untyped =
   ## the simulation itself fails. A run that exceeds the default
   ## decision/time budget (RFC 0003 3.8), deadlocks, or hits an oracle/
   ## protocol violation raises `SimulationError`, and so does a raising
-  ## `body` (unwrapped as `.parent`). See `simulateWithBudget` to
-  ## override the budgets, `simulateWithLedger`/`simulateWithBudgetAndLedger`
-  ## to additionally check RFC 0003 3.9's ghost-ledger conservation
-  ## laws, `simulateWithOracle` to drive the run with a scripted oracle
-  ## instead of `RandomOracle`, and `simulateReplay` to replay a
-  ## recorded trace.
+  ## `body` (unwrapped as `.parent`). See `simulateWith` to override the
+  ## budgets, check RFC 0003 3.9's ghost-ledger conservation laws, or
+  ## drive the run with a scripted oracle, in any combination, and
+  ## `simulateReplay`/`simulateReplayWith` to replay a recorded trace.
   let seedOnce = seed
   simulateCore(seedOnce, simulateDefaultDecisionBudget,
     simulateDefaultTimeBudget, false, RandomOracle(seedOnce), body)
 
-template simulateWithLedger*(seed: uint64, body: untyped): untyped =
-  ## As `simulate`, additionally checking RFC 0003 3.9's ghost-ledger
-  ## conservation laws (callback conservation, future lifecycle) at
-  ## every step boundary and at teardown - slice S14. A violation
-  ## raises `SimLedgerError`, distinct by type from `SimulationError`
-  ## (3.9: "a test distinguishes a ledger violation from a barrier hit
-  ## or oracle failure by type, never by string-matching the message").
-  ## A separate entry point rather than a flag on `simulate`: every
-  ## pre-S14 caller of `simulate`/`sweepSeeds` is unaffected, since
-  ## ledger checking depends on producer coverage this slice does not
-  ## claim to be exhaustive over (see `tests/testsimledger.nim`'s
-  ## module docstring for the scoping judgment call). See
-  ## `simulateWithBudgetAndLedger` to also override the budgets.
+template simulateWith*(seed: uint64, opts: SimRunOptions,
+                        body: untyped): untyped =
+  ## As `simulate`, with every optional knob `opts` (`simOptions`)
+  ## carries: `decisionBudget`/`timeBudget` override the defaults (the
+  ## bounds a livelock trips at, RFC 0003 3.8), `ledger` additionally
+  ## checks RFC 0003 3.9's ghost-ledger conservation laws (callback
+  ## conservation, future lifecycle, and more) at every step boundary
+  ## and at teardown, raising `SimLedgerError` (distinct by type from
+  ## `SimulationError`) on a violation, and `oracle`, if `some`, drives
+  ## the run with a caller-scripted `SimOracle` (`newSimOracle`) instead
+  ## of `RandomOracle(seed)` - the harness-level escape hatch for a test
+  ## that scripts a specific interleaving or fault, still getting every
+  ## harness guarantee (restore-on-any-outcome, decision/time budgets,
+  ## trace recording, typed `SimulationError` classification) instead of
+  ## hand-rolling a throwaway `newSimDispatcher`/`setThreadDispatcher`
+  ## pair on its own thread and losing all of them. One template, not an
+  ## overload of `simulate` sharing its name: on the pinned Nim 2.2.10
+  ## toolchain, both a same-named overload and *any* defaulted parameter
+  ## ahead of a trailing `untyped` body miscompile `await` inside `body`
+  ## the moment a caller omits it (standalone-reproduced, not specific to
+  ## this module) - which is why `opts` is a single pre-resolved value
+  ## from `simOptions` (an ordinary proc, defaults and all) rather than
+  ## `simulateWith` carrying `decisionBudget`/`timeBudget`/`ledger`/
+  ## `oracle` as defaulted parameters of its own. `seed` and `opts` are
+  ## each evaluated exactly once, regardless of `body`.
   let seedOnce = seed
-  simulateCore(seedOnce, simulateDefaultDecisionBudget,
-    simulateDefaultTimeBudget, true, RandomOracle(seedOnce), body)
-
-template simulateWithBudget*(seed: uint64, decisionBudget: int,
-                              timeBudget: Duration, body: untyped): untyped =
-  ## As `simulate`, with `decisionBudget`/`timeBudget` overriding the
-  ## defaults - the bounds a livelock trips at (RFC 0003 3.8). A
-  ## separate template rather than an overload of `simulate`: with both
-  ## sharing a name, resolving a call to either miscompiles `await` in
-  ## `body` (reproduced standalone against the Nim 2.2.10 toolchain;
-  ## not specific to this module - see `simulateCore`'s docstring).
-  let seedOnce = seed
-  simulateCore(seedOnce, decisionBudget, timeBudget, false,
-    RandomOracle(seedOnce), body)
-
-template simulateWithBudgetAndLedger*(seed: uint64, decisionBudget: int,
-                                       timeBudget: Duration,
-                                       body: untyped): untyped =
-  ## As `simulateWithLedger`, with `decisionBudget`/`timeBudget`
-  ## overriding the defaults - the budget-and-ledger corner of the
-  ## `{budget}x{ledger}` matrix `simulate`/`simulateWithBudget`/
-  ## `simulateWithLedger` alone left uncovered.
-  let seedOnce = seed
-  simulateCore(seedOnce, decisionBudget, timeBudget, true,
-    RandomOracle(seedOnce), body)
-
-template simulateWithOracle*(seed: uint64, oracle: SimOracle,
-                              body: untyped): untyped =
-  ## As `simulate`, driven by `oracle` instead of `RandomOracle(seed)` -
-  ## the harness-level escape hatch for a scripted `SimOracle`
-  ## (`newSimOracle`), so a test that scripts a specific interleaving or
-  ## fault still gets the full harness's guarantees (restore-on-any-
-  ## outcome, decision/time budgets, trace recording, typed
-  ## `SimulationError` classification) instead of hand-rolling a
-  ## throwaway `newSimDispatcher`/`setThreadDispatcher` pair on its own
-  ## thread and losing all of them.
-  simulateCore(seed, simulateDefaultDecisionBudget, simulateDefaultTimeBudget,
-    false, oracle, body)
+  let optsOnce = opts
+  let oracleOnce =
+    if optsOnce.oracle.isSome: optsOnce.oracle.get()
+    else: RandomOracle(seedOnce)
+  simulateCore(seedOnce, optsOnce.decisionBudget, optsOnce.timeBudget,
+    optsOnce.ledger, oracleOnce, body)
 
 template simulateReplay*(tracePath: string, body: untyped): untyped =
   ## Replays a previously recorded trace (RFC 0003 3.8's sketch): drives
@@ -471,16 +504,43 @@ template simulateReplay*(tracePath: string, body: untyped): untyped =
   ## attributed to the seed recorded in the trace's own header - a
   ## replay has no seed of its own to offer, and the header's is the
   ## only honest answer (RFC 0003 3.7's header already carries it for
-  ## exactly this kind of attribution). Reads and parses `tracePath`
-  ## exactly once, for both the attribution and the oracle. `body` must
-  ## be the same code that produced the trace; a divergent decision
-  ## sequence surfaces as a `SimulationError` with `kind ==
-  ## SimFailureKind.ProtocolViolation` (`ReplayOracle`'s structured
-  ## digest mismatch, converted the same way any other oracle error is -
-  ## see `SimulationError`'s docstring).
+  ## exactly this kind of attribution). The decision/time budgets default
+  ## to the ones *recorded in the trace's own header* (R2-4), not this
+  ## module's global defaults: a trace recorded under a tighter budget
+  ## replays under that same tighter budget, so a run that failed by
+  ## exhausting its budget still fails the same way on replay
+  ## (`SimulationError.kind == DecisionBudgetExhausted`/
+  ## `TimeBudgetExhausted`) instead of running past where the recording
+  ## stopped and misreporting a replay-exhausted `ProtocolViolation` once
+  ## the recorded decisions run out. See `simulateReplayWith` to override
+  ## the budgets, or check ghost-ledger laws, during a replay. Reads and
+  ## parses `tracePath` exactly once, for the attribution, the budgets,
+  ## and the oracle alike.
   let trace = readSimTrace(tracePath)
-  simulateCore(trace.header.seed, simulateDefaultDecisionBudget,
-    simulateDefaultTimeBudget, false, ReplayOracle(trace.records), body)
+  simulateCore(trace.header.seed, trace.header.decisionBudget,
+    nanoseconds(trace.header.timeBudgetNanoseconds), false,
+    ReplayOracle(trace.records), body)
+
+template simulateReplayWith*(tracePath: string, opts: SimRunOptions,
+                              body: untyped): untyped =
+  ## As `simulateReplay`, with `opts.decisionBudget`/`opts.timeBudget`/
+  ## `opts.ledger` (`simOptions`) overriding what would otherwise default
+  ## to the trace header's own recorded budgets - an explicit `opts`
+  ## always wins, the same "caller asked, caller gets it" rule
+  ## `simulateWith` follows for a live run. `opts.oracle` must be `none`:
+  ## a replay always drives the run from the trace's own `ReplayOracle`,
+  ## never a caller-supplied one, so a `some` here is refused with a
+  ## `doAssert` rather than silently ignored - a scripted oracle and
+  ## deterministic replay are two different, mutually exclusive ways of
+  ## resolving the same choice points. `tracePath` and `opts` are each
+  ## evaluated exactly once.
+  let trace = readSimTrace(tracePath)
+  let optsOnce = opts
+  doAssert optsOnce.oracle.isNone,
+    "simulateReplayWith(): opts.oracle must be unset - a replay always " &
+    "drives the run from the trace's own ReplayOracle"
+  simulateCore(trace.header.seed, optsOnce.decisionBudget,
+    optsOnce.timeBudget, optsOnce.ledger, ReplayOracle(trace.records), body)
 
 proc simLedgerDebugPlantDroppedEnqueue*(kind: SimLedgerQueueKind) =
   ## TEST-ONLY escape hatch (RFC 0003 slice S14's RED phase): records
@@ -489,12 +549,12 @@ proc simLedgerDebugPlantDroppedEnqueue*(kind: SimLedgerQueueKind) =
   ## law's "dropped callback" violation - the #703 bug class (a queued
   ## callback surviving the frame that owns its captured state)
   ## caught structurally, without needing an actual crash to
-  ## reproduce it. Requires a currently-running `simulateWithLedger`
+  ## reproduce it. Requires a currently-running `simulateWith(ledger = true)`
   ## body; not part of the stable API.
   let loop = getThreadDispatcher()
   let ledger = loop.simLedgerOf()
   doAssert not ledger.isNil,
-    "simLedgerDebugPlantDroppedEnqueue() requires simulateWithLedger()"
+    "simLedgerDebugPlantDroppedEnqueue() requires simulateWith(ledger = true)"
   ledger.noteEnqueue(kind)
 
 proc simLedgerDebugCurrentStep*(): int =
@@ -502,11 +562,11 @@ proc simLedgerDebugCurrentStep*(): int =
   ## `tests/testsimledger.nim` uses this to pin that a synchronous
   ## cancellation cascade does not advance it (3.9: cascades account to
   ## the enclosing step). Requires a currently-running
-  ## `simulateWithLedger` body; not part of the stable API.
+  ## `simulateWith(ledger = true)` body; not part of the stable API.
   let loop = getThreadDispatcher()
   let ledger = loop.simLedgerOf()
   doAssert not ledger.isNil,
-    "simLedgerDebugCurrentStep() requires simulateWithLedger()"
+    "simLedgerDebugCurrentStep() requires simulateWith(ledger = true)"
   ledger.currentStep()
 
 proc simLedgerDebugNilPopCount*(kind: SimLedgerQueueKind): uint64 =
@@ -514,7 +574,7 @@ proc simLedgerDebugNilPopCount*(kind: SimLedgerQueueKind): uint64 =
   let loop = getThreadDispatcher()
   let ledger = loop.simLedgerOf()
   doAssert not ledger.isNil,
-    "simLedgerDebugNilPopCount() requires simulateWithLedger()"
+    "simLedgerDebugNilPopCount() requires simulateWith(ledger = true)"
   ledger.nilPopCount(kind)
 
 proc simLedgerDebugPlantContextImbalance*() =
@@ -525,11 +585,11 @@ proc simLedgerDebugPlantContextImbalance*() =
   ## planting the "capture and restore balance across every scheduling
   ## point" law's violation without needing a genuine capture/restore
   ## bug to reproduce it. Requires a currently-running
-  ## `simulateWithLedger` body; not part of the stable API.
+  ## `simulateWith(ledger = true)` body; not part of the stable API.
   let loop = getThreadDispatcher()
   let ledger = loop.simLedgerOf()
   doAssert not ledger.isNil,
-    "simLedgerDebugPlantContextImbalance() requires simulateWithLedger()"
+    "simLedgerDebugPlantContextImbalance() requires simulateWith(ledger = true)"
   ledger.noteContextCaptured()
 
 proc simLedgerDebugPlantTimerImbalance*() =
@@ -537,11 +597,11 @@ proc simLedgerDebugPlantTimerImbalance*() =
   ## accounting analogue of `simLedgerDebugPlantDroppedEnqueue`: records
   ## an `armed` the ledger will never observe a matching `fired`/
   ## `cancelled`/still-pending for. Requires a currently-running
-  ## `simulateWithLedger` body; not part of the stable API.
+  ## `simulateWith(ledger = true)` body; not part of the stable API.
   let loop = getThreadDispatcher()
   let ledger = loop.simLedgerOf()
   doAssert not ledger.isNil,
-    "simLedgerDebugPlantTimerImbalance() requires simulateWithLedger()"
+    "simLedgerDebugPlantTimerImbalance() requires simulateWith(ledger = true)"
   ledger.noteTimerArmed()
 
 proc simLedgerRegisterWaiter*(desc: string,
@@ -553,17 +613,17 @@ proc simLedgerRegisterWaiter*(desc: string,
   ## generic, low-level entry point behind the typed
   ## `simLedgerTrackWaiters` overloads below - use those directly
   ## unless tracking a primitive they don't cover. Requires a currently-
-  ## running `simulateWithLedger` body.
+  ## running `simulateWith(ledger = true)` body.
   let loop = getThreadDispatcher()
   let ledger = loop.simLedgerOf()
   doAssert not ledger.isNil,
-    "simLedgerRegisterWaiter() requires simulateWithLedger()"
+    "simLedgerRegisterWaiter() requires simulateWith(ledger = true)"
   ledger.registerWaiterPrimitive(desc, countProc)
 
 proc simLedgerTrackWaiters*(lock: AsyncLock) =
   ## Opts `lock` into waiter conservation (RFC 0003 3.9's 2026-08-15
   ## amendment). Call once per instance, after construction, from
-  ## inside a `simulateWithLedger` body.
+  ## inside a `simulateWith(ledger = true)` body.
   simLedgerRegisterWaiter("AsyncLock.waiters",
     proc(): int {.gcsafe, raises: [].} = lock.waitersCount())
 
@@ -656,18 +716,18 @@ proc collectSweepSeeds*(seeds: Slice[uint64], decisionBudget: int,
                          body: proc(): Future[void] {.gcsafe.},
                          enableLedger: bool = false):
     seq[SimSeedOutcome] =
-  ## The aggregation loop behind `sweepSeeds`/`sweepSeedsWithBudget`/
-  ## `sweepSeedsWithLedger`/`sweepSeedsWithBudgetAndLedger`, exposed on
-  ## its own (RFC 0003 3.8): runs `body` once per seed in `seeds`, every
-  ## seed regardless of its siblings' outcomes, and returns every
+  ## The aggregation loop behind `sweepSeeds`/`sweepSeedsWith`, exposed
+  ## on its own (RFC 0003 3.8): runs `body` once per seed in `seeds`,
+  ## every seed regardless of its siblings' outcomes, and returns every
   ## `SimSeedOutcome` in seed order. `enableLedger` (default `false`, so
   ## every pre-existing caller is unaffected) turns on the D8 ghost-
   ## ledger laws for every seed in the sweep, the same flag
-  ## `simulateWithLedger` threads through the single-run harness. Unlike
-  ## the `sweepSeeds` templates, this never touches `unittest2` - the
-  ## aggregate verdict is the caller's to report however it chooses
-  ## (`sweepSeeds` reports it the `checkLeaks` way; a caller wanting a
-  ## different report, or none, calls this directly).
+  ## `simulateWith(seed, simOptions(ledger = true))` threads through the
+  ## single-run harness. Unlike the `sweepSeeds` templates, this never
+  ## touches `unittest2` - the aggregate verdict is the caller's to
+  ## report however it chooses (`sweepSeeds` reports it the `checkLeaks`
+  ## way; a caller wanting a different report, or none, calls this
+  ## directly).
   for seed in seeds:
     result.add runSweepSeed(seed, decisionBudget, timeBudget, enableLedger,
                              body)
@@ -708,39 +768,30 @@ template sweepSeeds*(seeds: Slice[uint64], body: untyped): seq[SimSeedOutcome] =
   ## `SimSeedOutcome` and reporting the aggregate the `checkLeaks` way
   ## (RFC 0003 3.8): every failing seed's seed, kind, message, and trace
   ## path via `checkpoint`, then one `check` failing the enclosing test
-  ## if any seed failed. See `sweepSeedsWithBudget` to override the
-  ## per-seed budgets, `sweepSeedsWithLedger`/`sweepSeedsWithBudgetAndLedger`
-  ## to additionally check RFC 0003 3.9's ghost-ledger conservation laws
-  ## over every seed in the sweep, and `collectSweepSeeds` to aggregate
-  ## without the `unittest2` reporting.
+  ## if any seed failed. See `sweepSeedsWith` to override the per-seed
+  ## budgets or additionally check RFC 0003 3.9's ghost-ledger
+  ## conservation laws over every seed in the sweep, and
+  ## `collectSweepSeeds` to aggregate without the `unittest2` reporting.
   sweepSeedsCore(seeds, simulateDefaultDecisionBudget,
                  simulateDefaultTimeBudget, false, body)
 
-template sweepSeedsWithBudget*(seeds: Slice[uint64], decisionBudget: int,
-                                timeBudget: Duration,
-                                body: untyped): seq[SimSeedOutcome] =
-  ## As `sweepSeeds`, with `decisionBudget`/`timeBudget` overriding the
-  ## defaults for every seed in the sweep. A separate template rather
-  ## than an overload of `sweepSeeds`, the same `await`-miscompiles
-  ## reason `simulateWithBudget` is separate from `simulate`.
-  sweepSeedsCore(seeds, decisionBudget, timeBudget, false, body)
-
-template sweepSeedsWithLedger*(seeds: Slice[uint64],
-                                body: untyped): seq[SimSeedOutcome] =
-  ## As `sweepSeeds`, additionally checking RFC 0003 3.9's ghost-ledger
-  ## conservation laws over every seed in the sweep (the same laws
-  ## `simulateWithLedger` checks for a single run). A violating seed's
-  ## `SimSeedOutcome` reports `failureKind == SimSeedFailureKind.Ledger`;
-  ## a non-violating seed passes exactly as it would under `sweepSeeds`.
-  sweepSeedsCore(seeds, simulateDefaultDecisionBudget,
-                 simulateDefaultTimeBudget, true, body)
-
-template sweepSeedsWithBudgetAndLedger*(seeds: Slice[uint64],
-                                         decisionBudget: int,
-                                         timeBudget: Duration,
-                                         body: untyped): seq[SimSeedOutcome] =
-  ## As `sweepSeedsWithLedger`, with `decisionBudget`/`timeBudget`
-  ## overriding the defaults - completing the sweep side of the
-  ## `{budget}x{ledger}` matrix `simulateWithBudgetAndLedger` completes
-  ## for a single run.
-  sweepSeedsCore(seeds, decisionBudget, timeBudget, true, body)
+template sweepSeedsWith*(seeds: Slice[uint64], opts: SimRunOptions,
+                          body: untyped): seq[SimSeedOutcome] =
+  ## As `sweepSeeds`, with `opts.decisionBudget`/`opts.timeBudget`
+  ## (`simOptions`) overriding the defaults, and `opts.ledger`
+  ## additionally checking RFC 0003 3.9's ghost-ledger conservation laws,
+  ## for every seed in the sweep - the same knobs `simulateWith` applies
+  ## to a single run. A violating seed's `SimSeedOutcome` reports
+  ## `failureKind == SimSeedFailureKind.Ledger`; a non-violating seed
+  ## passes exactly as it would under `sweepSeeds`. `opts.oracle` must be
+  ## `none`: each seed in a sweep drives its own `RandomOracle(seed)`, so
+  ## a single caller-supplied oracle shared across every seed is not a
+  ## meaningful request - refused with a `doAssert` rather than silently
+  ## ignored, the same discipline `simulateReplayWith` applies to its own
+  ## oracle field. `opts` is evaluated exactly once.
+  let optsOnce = opts
+  doAssert optsOnce.oracle.isNone,
+    "sweepSeedsWith(): opts.oracle must be unset - each seed in a sweep " &
+    "drives its own RandomOracle(seed), never a single shared oracle"
+  sweepSeedsCore(seeds, optsOnce.decisionBudget, optsOnce.timeBudget,
+                 optsOnce.ledger, body)

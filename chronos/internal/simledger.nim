@@ -27,8 +27,9 @@
 ## construction (a hook inside `newAsyncLock`/`newAsyncEvent`/etc.,
 ## i.e. a seam), check-at-use (a hook inside `acquire`/`release`/`wait`/
 ## `set`/etc., also a seam), or test-registered (the caller of
-## `simulateWithLedger` opts a primitive in explicitly, after
-## constructing it normally). The amendment's own words - "the law
+## `simulateWith(seed, simOptions(ledger = true))` opts a primitive in
+## explicitly, after constructing it normally). The amendment's own
+## words - "the law
 ## reads state through the ... accessors ... and changes no behavior -
 ## asyncsync still needs no seam" - rule out the first two directly, so
 ## this module implements the third: `registerWaiterPrimitive` stores a
@@ -175,7 +176,8 @@ type
     ## One per sim run, carried on `SimEngineState` (`simengine.nim`)
     ## only when a caller opts into ledger checking (RFC 0003 3.9 is a
     ## verification tool, not a change to `simulate()`'s default
-    ## behavior - see `chronos/simulation.nim`'s `simulateWithLedger`).
+    ## behavior - see `chronos/simulation.nim`'s
+    ## `simulateWith(seed, simOptions(ledger = true))`).
     queues: array[SimLedgerQueueKind, SimLedgerQueueCounts]
     stepDepth: int
     stepIndex: int

@@ -63,19 +63,27 @@ nondeterminism comes from: the clock, the readiness/arrival delivery
 order, and I/O outcomes are all decided by an oracle instead of the real
 OS, and every decision is logged.
 
-## `simulate`, `simulateWithBudget`, `simulateWithLedger`
+## `simulate`, `simulateWith`, `simulateReplay`, `simulateReplayWith`
 
 ```nim
+type
+  SimRunOptions* = object
+    decisionBudget*: int
+    timeBudget*: Duration
+    ledger*: bool
+    oracle*: Option[SimOracle]
+
+proc simOptions*(decisionBudget = simulateDefaultDecisionBudget,
+                  timeBudget = simulateDefaultTimeBudget,
+                  ledger = false,
+                  oracle = none(SimOracle)): SimRunOptions
+
 template simulate*(seed: uint64, body: untyped): untyped
-template simulateWithBudget*(seed: uint64, decisionBudget: int,
-                              timeBudget: Duration, body: untyped): untyped
-template simulateWithLedger*(seed: uint64, body: untyped): untyped
-template simulateWithBudgetAndLedger*(seed: uint64, decisionBudget: int,
-                                       timeBudget: Duration,
-                                       body: untyped): untyped
-template simulateWithOracle*(seed: uint64, oracle: SimOracle,
-                              body: untyped): untyped
+template simulateWith*(seed: uint64, opts: SimRunOptions,
+                        body: untyped): untyped
 template simulateReplay*(tracePath: string, body: untyped): untyped
+template simulateReplayWith*(tracePath: string, opts: SimRunOptions,
+                              body: untyped): untyped
 ```
 
 `simulate` runs `body` to completion on a fresh, hermetic simulated
@@ -91,16 +99,42 @@ partial-write retry spin inside one callback) and a virtual-time budget
 either is a distinct, named failure ("livelock: decision budget
 exhausted..." / "livelock: virtual-time budget exhausted..."), separate
 from quiescence deadlock ("deadlock: no runnable work" -- a body
-awaiting a future nothing will ever complete). `simulateWithBudget`
-overrides both defaults for one run; it is a separate template rather
-than an overload of `simulate` because the two sharing a name
-miscompiles `await` inside `body` on the pinned Nim 2.2.10 toolchain (a
-standalone-reproduced compiler quirk, not a design choice, and not
-specific to overloading either: a follow-up review round found any
-*defaulted* parameter ahead of `body` in the same template hits the
-same miscompile the moment a caller omits it, so every `simulate*`/
-`sweepSeeds*` template has its own fixed arity instead of sharing one
-name with optional parameters).
+awaiting a future nothing will ever complete).
+
+`simulateWith(seed, opts): body` is `simulate` with every optional knob
+`opts` carries: `decisionBudget`/`timeBudget` override the defaults,
+`ledger` additionally checks the D8 ghost-ledger conservation laws
+(callback, future, contextvar, timer, and waiter conservation -- see
+[Ghost ledgers](#ghost-ledgers)) at every step boundary and at teardown,
+and `oracle`, if `some`, drives the run with a caller-scripted
+`SimOracle` ([Oracles](#oracles)) instead of `RandomOracle(seed)` --
+the harness-level escape hatch for a test that scripts a specific
+interleaving or fault, still getting every harness guarantee (restore-
+on-any-outcome, decision/time budgets, trace recording, typed
+`SimulationError` classification) instead of hand-rolling a throwaway
+`newSimDispatcher`/`setThreadDispatcher` pair on its own thread and
+losing all of them. `opts` comes from `simOptions`, an ordinary proc
+that resolves its own defaults -- `simulateWith(1'u64, simOptions(
+decisionBudget = 500)): body` overrides one field and leaves the rest
+at their defaults. `simOptions`/`SimRunOptions` fold what used to be
+five separate templates (`simulateWithBudget`/`simulateWithLedger`/
+`simulateWithBudgetAndLedger`/`simulateWithOracle`, plus the
+`sweepSeedsWith*` siblings below) into one: a review round found the
+split family left six of the budget/ledger/oracle matrix's twelve cells
+unreachable (only `RandomOracle` ever got budget *and* ledger *and* a
+choice of oracle together), because `simulateWithOracle`/`simulateReplay`
+each hardcoded the plain defaults with no way to also override a budget
+or turn on the ledger. `simulateWith` is not an overload of `simulate`
+sharing its name, and `opts` is a single pre-resolved value rather than
+`decisionBudget`/`timeBudget`/`ledger`/`oracle` as `simulateWith`'s own
+defaulted parameters: on the pinned Nim 2.2.10 toolchain, both a same-
+named overload and *any* defaulted parameter ahead of a trailing
+`untyped` body miscompile `await` inside `body` the moment a caller
+omits it (standalone-reproduced, not specific to this module) -- which
+is why every `simulate*`/`sweepSeeds*` template has its own fixed arity,
+and why the family's only defaulted parameters live on `simOptions`, a
+plain proc that resolves every default before the surrounding template
+call ever sees the result.
 
 A failing run raises `SimulationError`, carrying `kind: SimFailureKind`
 (`BodyError`, `BarrierHit`, `Deadlock`, `OracleDeferral`,
@@ -110,54 +144,62 @@ A failing run raises `SimulationError`, carrying `kind: SimFailureKind`
 own exception is unwrapped as `.parent`. The seed banner
 (`[chronos-sim] seed=... trace=...`) is written and flushed before the
 body runs, so even a process-fatal `Defect` escaping a run is
-attributable to its seed from stray output alone.
-
-`simulateWithLedger` additionally checks the D8 ghost-ledger
-conservation laws (callback, future, contextvar, timer, and waiter
-conservation -- see [Ghost ledgers](#ghost-ledgers)) at every step
-boundary and at teardown. A violation raises `SimLedgerError`, a
+attributable to its seed from stray output alone. `opts.ledger`
+additionally raises `SimLedgerError` on a conservation-law violation, a
 distinct type from `SimulationError`, so a caller distinguishes a
 ledger violation from a body failure, an oracle error, or a barrier hit
-by type, never by string-matching a message. It is a separate entry
-point, not a flag on `simulate`, because ledger checking depends on
-instrumentation coverage that is not exhaustive over every producer in
-the codebase (see [Ghost ledgers](#ghost-ledgers)); every pre-existing
-`simulate`/`sweepSeeds` caller is unaffected by construction.
-`simulateWithBudgetAndLedger` combines both: the budget-and-ledger
-corner of the matrix the three plain entry points alone leave
-uncovered.
-
-`simulateWithOracle` runs `body` under a caller-supplied `oracle`
-instead of `RandomOracle(seed)` -- the harness-level escape hatch for a
-scripted `SimOracle` ([Oracles](#oracles)), so a test that scripts a
-specific interleaving or fault still gets every harness guarantee
-(restore-on-any-outcome, decision/time budgets, trace recording, typed
-`SimulationError` classification) instead of hand-rolling a throwaway
-`newSimDispatcher`/`setThreadDispatcher` pair on its own thread and
-losing all of them.
+by type, never by string-matching a message; ledger checking is opt-in,
+not `simulate`'s default behavior, because it depends on instrumentation
+coverage that is not exhaustive over every producer in the codebase
+(see [Ghost ledgers](#ghost-ledgers)).
 
 `simulateReplay` replays a previously recorded trace (see
 [Oracles](#oracles)'s `ReplayOracle` for what "replay" means): `body`
 must be the same code that produced the trace, and the run is
 attributed to the seed recorded in the trace's own header, not any
 seed the caller has to hand -- a replay has no seed of its own to
-offer, and the header's is the only honest answer. A divergent decision
-sequence surfaces the same way any other oracle error does: a
-`SimulationError` with `kind == SimFailureKind.ProtocolViolation`.
+offer, and the header's is the only honest answer. The decision/time
+budgets default to the ones *recorded in the trace's own header*, not
+this module's global defaults: a trace recorded under a tighter budget
+replays under that same tighter budget. This matters because the
+budget-tripping decision itself is never in the trace -- the run
+raised before recording one more line -- so a replay driven by the
+wrong (looser, global-default) budget runs past where the recording
+stopped, exhausts the trace's own recorded decisions, and misreports
+the true `DecisionBudgetExhausted`/`TimeBudgetExhausted` as a
+`ProtocolViolation` (replay exhaustion is itself an oracle error,
+converted the same way any other oracle error is). `simulateReplayWith
+(tracePath, opts): body` overrides this default the same way
+`simulateWith` overrides `simulate`'s: an explicit `opts.decisionBudget`/
+`opts.timeBudget`/`opts.ledger` always wins over the recorded header.
+`opts.oracle` must stay `none` for a replay -- the run always drives
+from the trace's own `ReplayOracle`, never a caller-supplied one, so a
+`some` here is refused with a `doAssert` rather than silently ignored.
+A divergent decision sequence surfaces the same way any other oracle
+error does: a `SimulationError` with `kind ==
+SimFailureKind.ProtocolViolation`.
+
+**Trace format and version.** The ndjson header (`chronos/internal/
+simtrace.nim`'s `renderHeaderLine`/`parseSimTraceHeader`) is versioned
+(`simTraceVersion`); `readSimTrace` refuses a trace whose header version
+does not match the reading build's, rather than guessing at a schema it
+was not built against. The header carries `decisionBudget`/
+`timeBudgetNanoseconds` alongside the seed, commit, and config fields --
+added at version 2, the source `simulateReplay` reads the recorded
+budgets from. Bumping the version changes the header's required keys
+only; the decision-record digest grammar (RFC 0003 3.3) is unchanged, so
+a version bump never invalidates a recorded digest's meaning, only a
+trace's readability by an older/newer build. A pre-version-2 trace is
+refused outright rather than read with an assumed default budget -- an
+accepted pre-release break (the format has no external readers yet),
+not a migration this fork carries.
 
 ## `sweepSeeds`
 
 ```nim
 template sweepSeeds*(seeds: Slice[uint64], body: untyped): seq[SimSeedOutcome]
-template sweepSeedsWithBudget*(seeds: Slice[uint64], decisionBudget: int,
-                                timeBudget: Duration,
-                                body: untyped): seq[SimSeedOutcome]
-template sweepSeedsWithLedger*(seeds: Slice[uint64],
-                                body: untyped): seq[SimSeedOutcome]
-template sweepSeedsWithBudgetAndLedger*(seeds: Slice[uint64],
-                                         decisionBudget: int,
-                                         timeBudget: Duration,
-                                         body: untyped): seq[SimSeedOutcome]
+template sweepSeedsWith*(seeds: Slice[uint64], opts: SimRunOptions,
+                          body: untyped): seq[SimSeedOutcome]
 proc collectSweepSeeds*(seeds: Slice[uint64], decisionBudget: int,
                          timeBudget: Duration,
                          body: proc(): Future[void] {.gcsafe.},
@@ -172,13 +214,19 @@ per failing seed (seed, kind, message, trace path), so a green sweep of
 a hundred seeds stays quiet, then one `check` at the end that fails the
 enclosing test once -- never once per seed -- if any seed did. Every
 seed in the range runs regardless of its siblings' outcomes, so a
-multi-seed bug never hides behind the first failure. `sweepSeedsWithLedger`/
-`sweepSeedsWithBudgetAndLedger` check RFC 0003 3.9's ghost-ledger
-conservation laws over every seed in the sweep, the same laws
-`simulateWithLedger` checks for a single run: a violating seed's
-`SimSeedOutcome` is that seed's own failure, classified
-`SimSeedFailureKind.Ledger`, never a process-ending raise -- its
-non-violating siblings still pass alongside it.
+multi-seed bug never hides behind the first failure. `sweepSeedsWith
+(seeds, opts): body` is `sweepSeeds` with `opts.decisionBudget`/
+`opts.timeBudget` (`simOptions`, as `simulateWith`'s) overriding the
+per-seed defaults, and `opts.ledger` checking RFC 0003 3.9's ghost-
+ledger conservation laws over every seed in the sweep, the same laws
+`simulateWith(seed, simOptions(ledger = true))` checks for a single
+run: a violating seed's `SimSeedOutcome` is that seed's own failure,
+classified `SimSeedFailureKind.Ledger`, never a process-ending raise --
+its non-violating siblings still pass alongside it. `opts.oracle` must
+stay `none`: each seed in a sweep drives its own `RandomOracle(seed)`,
+so a single caller-supplied oracle shared across every seed is refused
+with a `doAssert` rather than silently ignored, the same discipline
+`simulateReplayWith` applies to its own oracle field.
 
 `SimSeedOutcome` is a plain value the sweep produces, never parsed back
 out of a message string:
@@ -252,10 +300,10 @@ test suite exercises slices ahead of a live producer, and how a test
 targeting one specific bug (a reset at a specific point in a stream, an
 out-of-order datagram) scripts the exact conditions that reproduce it,
 without waiting on `RandomOracle` to find them by chance.
-`simulateWithOracle(seed, oracle): body` drives one through the full
-harness -- restore-on-any-outcome, decision/time budgets, trace
-recording, typed `SimulationError` classification -- instead of the
-scripted oracle's test having to hand-roll a throwaway
+`simulateWith(seed, simOptions(oracle = some(oracle))): body` drives one
+through the full harness -- restore-on-any-outcome, decision/time
+budgets, trace recording, typed `SimulationError` classification --
+instead of the scripted oracle's test having to hand-roll a throwaway
 `newSimDispatcher`/`setThreadDispatcher` pair on its own thread and
 lose all of them.
 
@@ -268,8 +316,9 @@ construction; a live digest diverging from the recording surfaces as a
 structured `SimOracleError` carrying the expected and actual digest,
 never a silent wrong decision. `simulateReplay(tracePath): body` (RFC
 0003 section 3.8's sketch) wires one through the full harness the same
-way `simulateWithOracle` does, attributed to the seed recorded in the
-trace's own header rather than any seed the caller has to hand:
+way `simulateWith(opts.oracle = some(...))` does, attributed to the
+seed recorded in the trace's own header rather than any seed the caller
+has to hand:
 
 ```nim
 simulateReplay("build/simtraces/seed-0xC0FFEE.ndjson"):
@@ -389,7 +438,8 @@ actually raise.
 ## Ghost ledgers
 
 Ghost ledgers (RFC 0003 section 3.9) are simulation-only conservation
-checks, opt-in via `simulateWithLedger`: every quantity they track
+checks, opt-in via `simulateWith(seed, simOptions(ledger = true))`:
+every quantity they track
 either balances exactly, or the run fails loudly with the seed, a step
 index, and the specific object involved -- never a silent pass that
 only happened to avoid the bug this run.
@@ -437,7 +487,7 @@ many futures are currently parked and not cancelled. A test opts a
 constructed primitive into the law explicitly:
 
 ```nim
-simulateWithLedger(seed = 0xC0FFEE'u64):
+simulateWith(seed = 0xC0FFEE'u64, simOptions(ledger = true)):
   let lock = newAsyncLock()
   simLedgerTrackWaiters(lock)
   ...
@@ -587,7 +637,7 @@ the same cost class slice S1's inactive clock seam measured as noise
 own policy, sim-enabled builds are test builds nobody benchmarks, so
 this is not bench-gated either.
 
-`simulateWithLedger` active (the real new cost, paid only by a test that
+`opts.ledger = true` active (the real new cost, paid only by a test that
 opts in): O(1) counter increments per touchpoint for contextvar and
 timer accounting, matching callback conservation's existing cost; at
 `simulate()` teardown, one additional per-item context check folded

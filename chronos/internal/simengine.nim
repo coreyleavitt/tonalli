@@ -275,8 +275,9 @@ type
     nextEndpointIdValue: uint32
     ledger: SimLedgerState
       ## `nil` unless the caller opted into ledger checking (RFC 0003
-      ## 3.9, slice S14): `chronos/simulation.nim`'s `simulateWithLedger`
-      ## is the sole caller that constructs one, so the existing
+      ## 3.9, slice S14): `chronos/simulation.nim`'s
+      ## `simulateWith(seed, simOptions(ledger = true))` is the sole
+      ## caller that constructs one, so the existing
       ## `simulate()`/`sweepSeeds` entry points and every pre-S14 test
       ## are unaffected. `simLedgerState()` below is the sole accessor -
       ## every field on this object stays private to this module, the

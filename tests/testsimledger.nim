@@ -9,11 +9,11 @@
 ## Tests for `chronos/internal/simledger.nim`'s D8 ghost-ledger laws
 ## (RFC 0003 3.9, slices S14/S15): callback conservation, future
 ## lifecycle, contextvar accounting, timer accounting, and waiter
-## conservation, checked at step boundaries (`simulateWithLedger`) plus
-## a final check at teardown.
+## conservation, checked at step boundaries (`simulateWith(seed, simOptions(
+## ledger = true))`) plus a final check at teardown.
 ##
 ## Producer-coverage scoping judgment call: ledger checking is opt-in
-## (`simulateWithLedger`, never the plain `simulate`/`sweepSeeds` every
+## (`simOptions(ledger = true)`, never the plain `simulate`/`sweepSeeds` every
 ## pre-S14 test already uses), so the S1-S13 suites are unaffected by
 ## construction. The `Callbacks`-queue enqueue instrumentation wired
 ## into `asyncengine.nim` for this slice covers every producer this
@@ -46,8 +46,9 @@ import std/strutils
 {.used.}
 
 when defined(chronosSimulation) and compileOption("threads"):
-  ## Every probe below drives `simulateWithLedger()` from its own OS
-  ## thread, the same isolation `tests/testsimulation.nim` uses.
+  ## Every probe below drives `simulateWith(seed, simOptions(ledger = true))`
+  ## from its own OS thread, the same isolation `tests/testsimulation.nim`
+  ## uses.
   import ../chronos
   import ../chronos/simulation
   import ../chronos/contextvars
@@ -74,7 +75,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeHappyPathRaisesNothing() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 1'u64):
+      simulateWith(seed = 1'u64, simOptions(ledger = true)):
         for _ in 0 ..< 5:
           await sleepAsync(0.milliseconds)
         let fut = newFuture[void]("test.happyPath")
@@ -94,7 +95,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probePlantedDroppedCallbackCaughtWithSeedStepObject() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 0xDEAD'u64):
+      simulateWith(seed = 0xDEAD'u64, simOptions(ledger = true)):
         await sleepAsync(0.milliseconds)
         # Plants the violation: tells the ledger to expect one more
         # `Callbacks` enqueue than will ever actually fire, nil-pop, or
@@ -104,7 +105,7 @@ when defined(chronosSimulation) and compileOption("threads"):
         # The very next real fire's per-step check catches the mismatch.
         await sleepAsync(0.milliseconds)
       outcome = ProbeOutcome(ok: false,
-        msg: "simulateWithLedger did not raise for the planted drop")
+        msg: "simulateWith(ledger = true) did not raise for the planted drop")
     except SimLedgerError as exc:
       if exc.seed != 0xDEAD'u64:
         outcome = ProbeOutcome(ok: false, msg: "wrong seed: " & $exc.seed)
@@ -132,7 +133,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probePlantedDoubleCompletionCaughtWithSeedStepObject() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 0xBEEF'u64):
+      simulateWith(seed = 0xBEEF'u64, simOptions(ledger = true)):
         let fut = newFuture[void]("test.doubleComplete")
         fut.complete()
         # A real second `finish()` call is unreachable here - it would
@@ -144,7 +145,7 @@ when defined(chronosSimulation) and compileOption("threads"):
         await sleepAsync(0.milliseconds)
         simLedgerDebugForceFutureState(fut, FutureState.Failed)
       outcome = ProbeOutcome(ok: false,
-        msg: "simulateWithLedger did not raise for the planted double " &
+        msg: "simulateWith(ledger = true) did not raise for the planted double " &
              "completion")
     except SimLedgerError as exc:
       if exc.seed != 0xBEEF'u64:
@@ -175,7 +176,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeCancellationCascadeAccountsToEnclosingStep() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 3'u64):
+      simulateWith(seed = 3'u64, simOptions(ledger = true)):
         let parent = newFuture[void]("test.cascadeParent",
                                       {FutureFlag.OwnCancelSchedule})
         let child = newFuture[void]("test.cascadeChild")
@@ -214,7 +215,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probePreFirstFireCancellationAccountsToTeardown() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 5'u64):
+      simulateWith(seed = 5'u64, simOptions(ledger = true)):
         # Cancelled from the body's synchronous prefix, before any
         # callback has ever fired - no step is open yet (RFC 0003 3.9:
         # "a cancellation initiated from the body's synchronous prefix
@@ -252,7 +253,7 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## readiness, idler/tick) and pins the empirical count at zero.
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 7'u64):
+      simulateWith(seed = 7'u64, simOptions(ledger = true)):
         for _ in 0 ..< 3:
           await sleepAsync(0.milliseconds)
         let disp = getThreadDispatcher()
@@ -283,7 +284,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probePlantedContextImbalanceCaughtAtTeardown() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 0xC0DE'u64):
+      simulateWith(seed = 0xC0DE'u64, simOptions(ledger = true)):
         # A real capture/restore pair (exercises the happy-path
         # touchpoints too) before planting the imbalance, so the
         # violation is genuinely attributable to the plant, not to an
@@ -291,7 +292,7 @@ when defined(chronosSimulation) and compileOption("threads"):
         await sleepAsync(0.milliseconds)
         simLedgerDebugPlantContextImbalance()
       outcome = ProbeOutcome(ok: false,
-        msg: "simulateWithLedger did not raise for the planted context " &
+        msg: "simulateWith(ledger = true) did not raise for the planted context " &
              "imbalance")
     except SimLedgerError as exc:
       if exc.seed != 0xC0DE'u64:
@@ -321,12 +322,12 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## touchpoints (`asyncengine.nim`'s `simLedgerNoteEnqueue`/
     ## `noteContextRestored`, wired at S15). This probe binds a real
     ## `ContextVar` across a real await and asserts nothing else: a clean
-    ## `simulateWithLedger` completion is itself the positive pin - the
+    ## `simulateWith(ledger = true)` completion is itself the positive pin - the
     ## law's teardown check ran and found the real captures/restores
     ## balanced.
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 0x7EA1'u64):
+      simulateWith(seed = 0x7EA1'u64, simOptions(ledger = true)):
         simLedgerCtxVar.withValue(11):
           if simLedgerCtxVar.value != 11:
             raise newException(ValueError,
@@ -354,7 +355,7 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## timer idiom, for context accounting instead of timer accounting.
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 0x7EA2'u64):
+      simulateWith(seed = 0x7EA2'u64, simOptions(ledger = true)):
         simLedgerCtxVar.withValue(21):
           let cancelled = sleepAsync(1.hours)
           discard tryCancel(cancelled)
@@ -378,7 +379,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probePlantedTimerImbalanceCaughtAtTeardown() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 0x71DE'u64):
+      simulateWith(seed = 0x71DE'u64, simOptions(ledger = true)):
         # A real armed/fired/cancelled mix before planting the
         # imbalance: one timer fires normally, one is cancelled before
         # firing (`clearTimer`, via cancelling the `sleepAsync` future).
@@ -392,7 +393,7 @@ when defined(chronosSimulation) and compileOption("threads"):
         # constraint forcing a teardown-only cadence here).
         await sleepAsync(0.milliseconds)
       outcome = ProbeOutcome(ok: false,
-        msg: "simulateWithLedger did not raise for the planted timer " &
+        msg: "simulateWith(ledger = true) did not raise for the planted timer " &
              "imbalance")
     except SimLedgerError as exc:
       if exc.seed != 0x71DE'u64:
@@ -429,7 +430,7 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## violate conservation.
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 0x7EA9'u64):
+      simulateWith(seed = 0x7EA9'u64, simOptions(ledger = true)):
         let toCancel = sleepAsync(1.milliseconds)
         discard tryCancel(toCancel)
         # Both under the same near-future window as `toCancel`, so the
@@ -453,7 +454,7 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## that never parked anything.
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 0xA11'u64):
+      simulateWith(seed = 0xA11'u64, simOptions(ledger = true)):
         let lock = newAsyncLock()
         simLedgerTrackWaiters(lock)
         await lock.acquire()
@@ -512,7 +513,7 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## since the effect on `lock.waiters` is identical either way.
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 0x1EA6'u64):
+      simulateWith(seed = 0x1EA6'u64, simOptions(ledger = true)):
         let lock = newAsyncLock()
         simLedgerTrackWaiters(lock)
         await lock.acquire()
@@ -520,7 +521,7 @@ when defined(chronosSimulation) and compileOption("threads"):
                                  # never cancelled
         await sleepAsync(0.milliseconds)
       outcome = ProbeOutcome(ok: false,
-        msg: "simulateWithLedger did not raise for the leaked waiter")
+        msg: "simulateWith(ledger = true) did not raise for the leaked waiter")
     except SimLedgerError as exc:
       if exc.seed != 0x1EA6'u64:
         outcome = ProbeOutcome(ok: false, msg: "wrong seed: " & $exc.seed)
@@ -550,7 +551,7 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## primitive), exercised end to end through the ledger.
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 0xE9EA'u64):
+      simulateWith(seed = 0xE9EA'u64, simOptions(ledger = true)):
         let eventQueue = newAsyncEventQueue[int]()
         simLedgerTrackWaiters(eventQueue)
         let key = eventQueue.register()
@@ -559,7 +560,7 @@ when defined(chronosSimulation) and compileOption("threads"):
                                              # unregistered/cancelled
         await sleepAsync(0.milliseconds)
       outcome = ProbeOutcome(ok: false,
-        msg: "simulateWithLedger did not raise for the leaked waiter")
+        msg: "simulateWith(ledger = true) did not raise for the leaked waiter")
     except SimLedgerError as exc:
       if exc.seed != 0xE9EA'u64:
         outcome = ProbeOutcome(ok: false, msg: "wrong seed: " & $exc.seed)
@@ -583,14 +584,14 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## As the `AsyncLock` leak above, for `AsyncEvent`.
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 0x3EA7'u64):
+      simulateWith(seed = 0x3EA7'u64, simOptions(ledger = true)):
         let event = newAsyncEvent()
         simLedgerTrackWaiters(event)
         discard event.wait()  # parks, then abandoned: never awaited,
                                # never set, never cancelled
         await sleepAsync(0.milliseconds)
       outcome = ProbeOutcome(ok: false,
-        msg: "simulateWithLedger did not raise for the leaked waiter")
+        msg: "simulateWith(ledger = true) did not raise for the leaked waiter")
     except SimLedgerError as exc:
       if exc.seed != 0x3EA7'u64:
         outcome = ProbeOutcome(ok: false, msg: "wrong seed: " & $exc.seed)
@@ -620,14 +621,14 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## amendment names.
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 0x6E77'u64):
+      simulateWith(seed = 0x6E77'u64, simOptions(ledger = true)):
         let queue = newAsyncQueue[int]()
         simLedgerTrackWaiters(queue)
         discard queue.get()  # parks: queue empty, then abandoned: never
                               # awaited, never cancelled
         await sleepAsync(0.milliseconds)
       outcome = ProbeOutcome(ok: false,
-        msg: "simulateWithLedger did not raise for the leaked waiter")
+        msg: "simulateWith(ledger = true) did not raise for the leaked waiter")
     except SimLedgerError as exc:
       if exc.seed != 0x6E77'u64:
         outcome = ProbeOutcome(ok: false, msg: "wrong seed: " & $exc.seed)
@@ -655,7 +656,7 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## the two-list accounting's other half.
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 0x6E88'u64):
+      simulateWith(seed = 0x6E88'u64, simOptions(ledger = true)):
         let queue = newAsyncQueue[int](maxsize = 1)
         simLedgerTrackWaiters(queue)
         await queue.put(1)
@@ -663,7 +664,7 @@ when defined(chronosSimulation) and compileOption("threads"):
                                # awaited, never cancelled
         await sleepAsync(0.milliseconds)
       outcome = ProbeOutcome(ok: false,
-        msg: "simulateWithLedger did not raise for the leaked waiter")
+        msg: "simulateWith(ledger = true) did not raise for the leaked waiter")
     except SimLedgerError as exc:
       if exc.seed != 0x6E88'u64:
         outcome = ProbeOutcome(ok: false, msg: "wrong seed: " & $exc.seed)
@@ -690,7 +691,7 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## As the `AsyncLock` leak above, for `AsyncSemaphore`.
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithLedger(seed = 0x5EA5'u64):
+      simulateWith(seed = 0x5EA5'u64, simOptions(ledger = true)):
         let sema = newAsyncSemaphore(1)
         simLedgerTrackWaiters(sema)
         await sema.acquire()
@@ -699,7 +700,7 @@ when defined(chronosSimulation) and compileOption("threads"):
                                  # released
         await sleepAsync(0.milliseconds)
       outcome = ProbeOutcome(ok: false,
-        msg: "simulateWithLedger did not raise for the leaked waiter")
+        msg: "simulateWith(ledger = true) did not raise for the leaked waiter")
     except SimLedgerError as exc:
       if exc.seed != 0x5EA5'u64:
         outcome = ProbeOutcome(ok: false, msg: "wrong seed: " & $exc.seed)
@@ -726,13 +727,14 @@ when defined(chronosSimulation) and compileOption("threads"):
     proc probeTransportCloseConservation() {.thread.} =
       ## The `SimNet` idiom `tests/testsimnet.nim` runs under plain
       ## `simulate()` (ledger checking off), exercised here under
-      ## `simulateWithLedger()` instead: `closeWait` drives `closeSocket`'s
+      ## `simulateWith(seed, simOptions(ledger = true))` instead: `closeWait`
+      ## drives `closeSocket`'s
       ## sim flush branch and its POSIX continuation callback, both of
       ## which enqueue onto `Callbacks` outside this slice's original
       ## instrumentation.
       var outcome = ProbeOutcome(ok: true)
       try:
-        simulateWithLedger(seed = 1234'u64):
+        simulateWith(seed = 1234'u64, simOptions(ledger = true)):
           let net = simNet()
           let address = initTAddress("127.0.0.1:0")
           let server = net.listenStream(address)

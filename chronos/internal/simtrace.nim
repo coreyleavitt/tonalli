@@ -43,9 +43,16 @@ type
 const
   simTraceFormatName* = "chronos-sim"
     ## The ndjson header's `"trace"` field (RFC 0003 3.7).
-  simTraceVersion* = 1
+  simTraceVersion* = 2
     ## The ndjson header's `"v"` field. A version bump changes required
-    ## keys only; a replay oracle refuses a mismatched version.
+    ## keys only; a replay oracle refuses a mismatched version. v2 (R2-4)
+    ## adds `"decisionBudget"`/`"timeBudgetNanoseconds"` to the header so
+    ## a trace recorded under a tighter-than-default budget replays under
+    ## that same budget by default, rather than misreporting the true
+    ## `DecisionBudgetExhausted`/`TimeBudgetExhausted` as a `ProtocolViolation`
+    ## once the recorded decisions run out under a looser default. A v1
+    ## trace has neither field and is refused by the version gate below -
+    ## an accepted pre-release break, not a migration this fork carries.
 
   fnvOffsetBasis64 = 0xcbf29ce484222325'u64
   fnvPrime64 = 0x100000001b3'u64
@@ -107,10 +114,13 @@ proc digestOf*(trigger: SimEventId, endpoint: SimEndpointId, op: string,
   SimDigest(fnv1a64(canonicalJoin(
     [$trigger, $endpoint, op, $maxBytes, canonicalJoin(faults)])))
 
-proc renderHeaderLine*(seed: uint64, commit, config: string): string =
+proc renderHeaderLine*(seed: uint64, decisionBudget: int,
+                        timeBudgetNanoseconds: int64,
+                        commit, config: string): string =
   "{\"trace\":\"" & simTraceFormatName & "\",\"v\":" & $simTraceVersion &
-    ",\"seed\":" & $seed & ",\"commit\":\"" & commit & "\",\"config\":\"" &
-    config & "\"}"
+    ",\"seed\":" & $seed & ",\"decisionBudget\":" & $decisionBudget &
+    ",\"timeBudgetNanoseconds\":" & $timeBudgetNanoseconds &
+    ",\"commit\":\"" & commit & "\",\"config\":\"" & config & "\"}"
 
 proc renderTimeDecisionLine*(index: int, digest: SimDigest,
                               advanceToNanoseconds: int64): string =
@@ -147,11 +157,19 @@ type
     file: File
     nextIndex: int
 
-proc openSimTraceWriter*(path: string, seed: uint64, commit = "",
+proc openSimTraceWriter*(path: string, seed: uint64, decisionBudget: int,
+                          timeBudgetNanoseconds: int64, commit = "",
                           config = ""): SimTraceWriter
                          {.raises: [IOError].} =
+  ## `decisionBudget`/`timeBudgetNanoseconds` are required, not defaulted:
+  ## every real caller (`runSimulation`) already has its own configured
+  ## budgets in scope, and a trace's header should always record the run
+  ## it actually came from (R2-4) rather than silently falling back to a
+  ## value this leaf module would have to duplicate from
+  ## `chronos/simulation.nim`'s own defaults.
   let file = open(path, fmWrite)
-  file.writeLine(renderHeaderLine(seed, commit, config))
+  file.writeLine(renderHeaderLine(seed, decisionBudget, timeBudgetNanoseconds,
+                                   commit, config))
   file.flushFile()
   SimTraceWriter(file: file, nextIndex: 0)
 
@@ -200,6 +218,15 @@ type
 
   SimTraceHeader* = object
     seed*: uint64
+    decisionBudget*: int
+      ## R2-4: the run's configured decision budget, so a replay can
+      ## default to it instead of the harness's global default.
+    timeBudgetNanoseconds*: int64
+      ## R2-4: the run's configured time budget, in nanoseconds - kept
+      ## as a raw `int64` rather than a `chronos/timer.nim` `Duration` so
+      ## this leaf module (see the module docstring) takes on no
+      ## dispatcher-adjacent dependency; `chronos/simulation.nim` is
+      ## where this converts back via `nanoseconds()`.
     commit*: string
     config*: string
 
@@ -274,12 +301,36 @@ proc extractUIntField(line, key: string): uint64
 
 proc extractBoundedIntField(line, key: string): int
                             {.raises: [SimTraceReadError].} =
-  ## `"i"` (a decision index) and `"bytes"` (a byte count) are never
-  ## negative and never legitimately astronomical - reject a value
-  ## outside `0 .. int32.high` before narrowing to `int`, so a
-  ## malformed trace surfaces as `SimTraceReadError` on every target
-  ## width instead of an uncatchable `RangeDefect` on a 32-bit one
-  ## (this fork runs i386 CI legs).
+  ## `"i"` (a decision index) and `"decisionBudget"` (R2-4's header
+  ## field) are never negative, but on a 64-bit target they are not
+  ## capped at `int32.high` either - a long-running sweep or a
+  ## deliberately generous budget can legitimately pass `2^31` decisions,
+  ## and R2-7 found that the old fixed `int32.high` bound made such a
+  ## trace unreadable on every platform, not just the 32-bit ones it was
+  ## written to protect. The bound is width-gated instead: `int32.high`
+  ## when `int` itself is 32 bits (this fork runs i386 CI legs, where
+  ## narrowing a wider value would otherwise be an uncatchable
+  ## `RangeDefect`), the full `int64` range - i.e. no additional cap
+  ## beyond what `extractIntField`'s own parse already enforces -
+  ## everywhere `int` is 64 bits.
+  let value = extractIntField(line, key)
+  let bound = when sizeof(int) == 4: int64(int32.high) else: int64.high
+  if value < 0 or value > bound:
+    raise newException(SimTraceReadError,
+      "field \"" & key & "\" out of range: " & $value & " in: " & line)
+  int(value)
+
+proc extractBoundedByteCountField(line, key: string): int
+                                  {.raises: [SimTraceReadError].} =
+  ## `"bytes"`: unlike `"i"`/`"decisionBudget"` above, a single sim I/O
+  ## outcome's byte count has no legitimate reason to be astronomical on
+  ## any target width - one `read`/`write` call completing more than
+  ## `int32.high` bytes (2 GiB) in a single outcome is already nonsensical
+  ## for this harness's own I/O model (`chronos/transports/stream.nim`'s
+  ## buffer sizes, `chronos/internal/simengine.nim`'s `IoOutcomePoint.
+  ## maxBytes`), so this keeps the tight, platform-independent bound
+  ## `extractBoundedIntField` used before R2-7 widened that one for the
+  ## decision-index/decision-budget case.
   let value = extractIntField(line, key)
   if value < 0 or value > int64(int32.high):
     raise newException(SimTraceReadError,
@@ -344,6 +395,8 @@ proc parseSimTraceHeader*(line: string): SimTraceHeader
       "trace version mismatch: expected " & $simTraceVersion & ", got " &
       $version)
   SimTraceHeader(seed: extractUIntField(line, "seed"),
+                 decisionBudget: extractBoundedIntField(line, "decisionBudget"),
+                 timeBudgetNanoseconds: extractIntField(line, "timeBudgetNanoseconds"),
                  commit: extractStringField(line, "commit"),
                  config: extractStringField(line, "config"))
 
@@ -365,7 +418,8 @@ proc parseSimTraceRecord*(line: string): SimTraceRecord
     if outcome == "ok":
       SimTraceRecord(index: index, digest: digest,
                       kind: SimTraceRecordKind.Io, outcome: outcome,
-                      bytes: extractBoundedIntField(line, "bytes"), fault: "")
+                      bytes: extractBoundedByteCountField(line, "bytes"),
+                      fault: "")
     else:
       SimTraceRecord(index: index, digest: digest,
                       kind: SimTraceRecordKind.Io, outcome: outcome,

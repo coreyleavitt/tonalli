@@ -24,6 +24,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   ## saved/restored here must never be this test binary's shared
   ## per-thread dispatcher.
   import results
+  import std/options
   import ../chronos
   import ../chronos/simulation
 
@@ -105,7 +106,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeDecisionBudgetCatchesZeroDurationLivelock() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithBudget(seed = 5'u64, decisionBudget = 20, timeBudget = 1_000.seconds):
+      simulateWith(seed = 5'u64, simOptions(decisionBudget = 20, timeBudget = 1_000.seconds)):
         while true:
           await sleepAsync(0.milliseconds)
       outcome = ProbeOutcome(ok: false,
@@ -121,7 +122,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeDecisionBudgetCatchesPartialWriteRetrySpin() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithBudget(seed = 6'u64, decisionBudget = 20, timeBudget = 1_000.seconds):
+      simulateWith(seed = 6'u64, simOptions(decisionBudget = 20, timeBudget = 1_000.seconds)):
         let disp = getThreadDispatcher()
         let cp = IoOutcomePoint(trigger: SimEventId(0'u64),
           endpoint: SimEndpointId(0'u32), op: SimIoOp.Write, maxBytes: 64,
@@ -141,7 +142,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeTimeBudgetCatchesFastVirtualTimeRunaway() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithBudget(seed = 7'u64, decisionBudget = 10_000, timeBudget = 10.seconds):
+      simulateWith(seed = 7'u64, simOptions(decisionBudget = 10_000, timeBudget = 10.seconds)):
         while true:
           await sleepAsync(1_000_000.seconds)
       outcome = ProbeOutcome(ok: false,
@@ -382,20 +383,20 @@ when defined(chronosSimulation) and compileOption("threads"):
 
   proc probeScriptedOracleThroughHarnessKeepsGuarantees() {.thread.} =
     ## Finding 5's seam: a scripted oracle driven through the full
-    ## harness (`simulateWithOracle`), not a throwaway `newSimDispatcher`/
-    ## `setThreadDispatcher` pair on its own thread - proves the harness
-    ## guarantees (restore-on-any-outcome, typed `SimulationError`
-    ## classification, trace recording) hold around it exactly as they
-    ## do for `RandomOracle`.
+    ## harness (`simulateWith(seed, simOptions(oracle = some(oracle)))`),
+    ## not a throwaway `newSimDispatcher`/`setThreadDispatcher` pair on
+    ## its own thread - proves the harness guarantees (restore-on-any-
+    ## outcome, typed `SimulationError` classification, trace recording)
+    ## hold around it exactly as they do for `RandomOracle`.
     var outcome = ProbeOutcome(ok: true)
     let realDisp = getThreadDispatcher()
     let oracle = newSimOracle(defaultDecideBatch, defaultDecideIo,
                                defaultDecideTime)
     try:
-      simulateWithOracle(seed = 9'u64, oracle = oracle):
+      simulateWith(seed = 9'u64, simOptions(oracle = some(oracle))):
         raise newException(ValueError, "boom from scripted-oracle body")
       outcome = ProbeOutcome(ok: false,
-        msg: "simulateWithOracle did not propagate the body's error")
+        msg: "simulateWith did not propagate the body's error")
     except SimulationError as exc:
       if exc.kind != SimFailureKind.BodyError:
         outcome = ProbeOutcome(ok: false, msg: "wrong kind: " & $exc.kind)
@@ -407,7 +408,7 @@ when defined(chronosSimulation) and compileOption("threads"):
           msg: "no trace file written: " & exc.tracePath)
     except CatchableError as exc:
       outcome = ProbeOutcome(ok: false,
-        msg: "wrong exception type escaped simulateWithOracle(): " & exc.msg)
+        msg: "wrong exception type escaped simulateWith(): " & exc.msg)
     if outcome.ok and getThreadDispatcherOrNil() != realDisp:
       outcome = ProbeOutcome(ok: false,
         msg: "the real dispatcher was not restored after a scripted-oracle run")
@@ -422,12 +423,12 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## actually catches. A scripted oracle that defers all deliverable
     ## work with no fallback (no armed timers, no queued callbacks)
     ## against a body with one ready reader reproduces the same shape
-    ## through `simulateWithOracle` - awaiting a future the deferred
-    ## reader callback would otherwise complete, never a timer: an
-    ## armed timer is itself a legal fallback (3.5's deferral protocol),
-    ## so this probe must arm none, the same "no fallback" shape
-    ## `probeOracleDeferralNotDeadlock` reproduces directly against
-    ## `poll()`.
+    ## through `simulateWith(seed, simOptions(oracle = some(oracle)))` -
+    ## awaiting a future the deferred reader callback would otherwise
+    ## complete, never a timer: an armed timer is itself a legal fallback
+    ## (3.5's deferral protocol), so this probe must arm none, the same
+    ## "no fallback" shape `probeOracleDeferralNotDeadlock` reproduces
+    ## directly against `poll()`.
     var outcome = ProbeOutcome(ok: true)
     proc decideBatchDefer(cp: SelectBatchPoint):
         Result[BatchDecision, SimOracleError] {.gcsafe, raises: [].} =
@@ -435,7 +436,7 @@ when defined(chronosSimulation) and compileOption("threads"):
     let oracle = newSimOracle(decideBatchDefer, defaultDecideIo,
                                defaultDecideTime)
     try:
-      simulateWithOracle(seed = 14'u64, oracle = oracle):
+      simulateWith(seed = 14'u64, simOptions(oracle = some(oracle))):
         let disp = getThreadDispatcher()
         let fd = disp.mintSimFd()
         let fut = newFuture[void]("oracleDeferral")
@@ -444,7 +445,7 @@ when defined(chronosSimulation) and compileOption("threads"):
         discard disp.simMarkReady(fd, SimReadyDirection.Read)
         await fut
       outcome = ProbeOutcome(ok: false,
-        msg: "simulateWithOracle did not report the oracle deferral")
+        msg: "simulateWith did not report the oracle deferral")
     except SimulationError as exc:
       if exc.kind != SimFailureKind.OracleDeferral:
         outcome = ProbeOutcome(ok: false, msg: "wrong kind: " & $exc.kind)
@@ -504,17 +505,73 @@ when defined(chronosSimulation) and compileOption("threads"):
           msg: "divergence raised the wrong exception type: " & exc.msg)
     probeChan.send(outcome)
 
+  proc livelockUntilDecisionBudgetBody() {.async.} =
+    ## Shared shape for `probeReplayHonorsRecordedDecisionBudget` below:
+    ## a zero-duration sleep loop, the same livelock
+    ## `probeDecisionBudgetCatchesZeroDurationLivelock` uses, chosen so
+    ## a tight `decisionBudget` reliably trips before the (generous)
+    ## `timeBudget` does, both on the recording run and on a replay
+    ## driven by the identical body.
+    while true:
+      await sleepAsync(0.milliseconds)
+
+  proc probeReplayHonorsRecordedDecisionBudget() {.thread.} =
+    ## R2-4: a trace recorded under a tighter-than-default decision
+    ## budget must replay under that *same* recorded budget, not this
+    ## module's global default - otherwise the replay runs past where
+    ## the recording stopped, exhausts the trace's own recorded
+    ## decisions instead, and misreports the true
+    ## `DecisionBudgetExhausted` as a `ProtocolViolation` (replay
+    ## exhaustion is itself an oracle error, converted the same way any
+    ## other oracle error is). Verified RED against the pre-R2-4 code
+    ## standalone (`build/reviewrepro/`, not part of this tree): the
+    ## record run below already raised `DecisionBudgetExhausted`, but
+    ## `simulateReplay` (hardcoding the global default budget at the
+    ## time) raised `ProtocolViolation` instead.
+    var outcome = ProbeOutcome(ok: true)
+    let seed = 0x8EAD'u64
+    let tracePath = simTracePath(seed)
+    try:
+      simulateWith(seed = seed, simOptions(decisionBudget = 20,
+                                            timeBudget = 1_000.seconds)):
+        await livelockUntilDecisionBudgetBody()
+      outcome = ProbeOutcome(ok: false,
+        msg: "recording run did not hit the decision budget as expected")
+    except SimulationError as exc:
+      if exc.kind != SimFailureKind.DecisionBudgetExhausted:
+        outcome = ProbeOutcome(ok: false,
+          msg: "recording run raised the wrong kind: " & $exc.kind)
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "recording run raised the wrong exception type: " & exc.msg)
+
+    if outcome.ok:
+      try:
+        simulateReplay(tracePath):
+          await livelockUntilDecisionBudgetBody()
+        outcome = ProbeOutcome(ok: false,
+          msg: "replay did not reproduce the decision budget exhaustion")
+      except SimulationError as exc:
+        if exc.kind != SimFailureKind.DecisionBudgetExhausted:
+          outcome = ProbeOutcome(ok: false,
+            msg: "replay raised the wrong kind (R2-4 regression): " &
+                 $exc.kind)
+      except CatchableError as exc:
+        outcome = ProbeOutcome(ok: false,
+          msg: "replay raised the wrong exception type: " & exc.msg)
+    probeChan.send(outcome)
+
   proc probeSweepWithLedgerClassifiesViolatingSeedsByKind() {.thread.} =
-    ## Finding 12's sweep gap: `sweepSeedsWithLedger` over a body that
-    ## plants a ledger violation only on the sweep's second seed (the
-    ## same planted-imbalance idiom `tests/testsimledger.nim` uses for a
-    ## single run) - the violating seed's outcome must be a
-    ## `SimSeedOutcome` failure classified `SimSeedFailureKind.Ledger`,
-    ## never a process-ending raise, and its non-violating siblings must
-    ## still pass alongside it.
+    ## Finding 12's sweep gap: `sweepSeedsWith(seeds, simOptions(ledger =
+    ## true))` over a body that plants a ledger violation only on the
+    ## sweep's second seed (the same planted-imbalance idiom
+    ## `tests/testsimledger.nim` uses for a single run) - the violating
+    ## seed's outcome must be a `SimSeedOutcome` failure classified
+    ## `SimSeedFailureKind.Ledger`, never a process-ending raise, and its
+    ## non-violating siblings must still pass alongside it.
     var outcome = ProbeOutcome(ok: true)
     var runIndex = 0
-    let outcomes = sweepSeedsWithLedger(100'u64 .. 102'u64):
+    let outcomes = sweepSeedsWith(100'u64 .. 102'u64, simOptions(ledger = true)):
       await sleepAsync(0.milliseconds)
       inc runIndex
       if runIndex == 2:
@@ -546,12 +603,168 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## and ledger checking together.
     var outcome = ProbeOutcome(ok: true)
     try:
-      simulateWithBudgetAndLedger(seed = 12'u64, decisionBudget = 500,
-                                   timeBudget = 10.seconds):
+      simulateWith(seed = 12'u64, simOptions(decisionBudget = 500,
+                                              timeBudget = 10.seconds,
+                                              ledger = true)):
         await sleepAsync(0.milliseconds)
     except CatchableError as exc:
       outcome = ProbeOutcome(ok: false,
         msg: "unexpected " & $exc.name & ": " & exc.msg)
+    probeChan.send(outcome)
+
+  proc probeOraclePlusBudgetPlusLedgerCombinationReachable() {.thread.} =
+    ## R2-3: before this round, `oracle+budget`, `oracle+ledger`, and
+    ## `oracle+budget+ledger` were three of the matrix's six unreachable
+    ## cells - `simulateWithOracle` hardcoded the default budgets and
+    ## never checked the ledger, and no template combined a scripted
+    ## oracle with either. `simulateWith`'s single `opts` (`simOptions`)
+    ## carries every knob at once, so all three cells are now one
+    ## ordinary call; this probe exercises the fullest one (all three
+    ## knobs together), which proves the other two by construction.
+    var outcome = ProbeOutcome(ok: true)
+    let oracle = newSimOracle(defaultDecideBatch, defaultDecideIo,
+                               defaultDecideTime)
+    try:
+      simulateWith(seed = 200'u64, simOptions(oracle = some(oracle),
+                                               decisionBudget = 5,
+                                               timeBudget = 1_000.seconds,
+                                               ledger = true)):
+        while true:
+          await sleepAsync(0.milliseconds)
+      outcome = ProbeOutcome(ok: false,
+        msg: "oracle+budget+ledger combination did not trip the tight " &
+             "decision budget")
+    except SimulationError as exc:
+      if exc.kind != SimFailureKind.DecisionBudgetExhausted:
+        outcome = ProbeOutcome(ok: false, msg: "wrong kind: " & $exc.kind)
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "wrong exception type: " & exc.msg)
+    probeChan.send(outcome)
+
+  proc probeReplayWithBudgetOverrideWinsOverRecorded() {.thread.} =
+    ## R2-3/R2-4: `simulateReplayWith`'s `opts.decisionBudget` overrides
+    ## the trace header's recorded budget - previously unreachable
+    ## (`simulateReplay` took no budget override at all). Proven by a
+    ## sharper signal than "compiles and runs": record under a *tight*
+    ## budget (5), then replay the identical infinite-loop body with a
+    ## *looser* override (500). If the override is honored, the replay
+    ## runs past where the recording stopped and hits genuine replay
+    ## exhaustion (`ProtocolViolation`) instead of re-tripping the
+    ## recorded budget (`DecisionBudgetExhausted`) - the two are
+    ## distinguishable failure kinds, so this pins the override actually
+    ## taking effect, not just the call compiling.
+    var outcome = ProbeOutcome(ok: true)
+    let seed = 0x8EB0'u64
+    let tracePath = simTracePath(seed)
+    try:
+      simulateWith(seed = seed, simOptions(decisionBudget = 5,
+                                            timeBudget = 1_000.seconds)):
+        while true:
+          await sleepAsync(0.milliseconds)
+      outcome = ProbeOutcome(ok: false,
+        msg: "recording run did not hit the tight decision budget as " &
+             "expected")
+    except SimulationError as exc:
+      if exc.kind != SimFailureKind.DecisionBudgetExhausted:
+        outcome = ProbeOutcome(ok: false,
+          msg: "recording run raised the wrong kind: " & $exc.kind)
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "recording run raised the wrong exception type: " & exc.msg)
+
+    if outcome.ok:
+      try:
+        simulateReplayWith(tracePath, simOptions(decisionBudget = 500,
+                                                  timeBudget = 1_000.seconds)):
+          while true:
+            await sleepAsync(0.milliseconds)
+        outcome = ProbeOutcome(ok: false,
+          msg: "replay with a looser override budget did not run past " &
+               "the recorded exhaustion point")
+      except SimulationError as exc:
+        if exc.kind != SimFailureKind.ProtocolViolation:
+          outcome = ProbeOutcome(ok: false,
+            msg: "opts.decisionBudget override was not honored - wrong " &
+                 "kind: " & $exc.kind)
+      except CatchableError as exc:
+        outcome = ProbeOutcome(ok: false,
+          msg: "replay raised the wrong exception type: " & exc.msg)
+    probeChan.send(outcome)
+
+  proc probeReplayWithLedgerCombinationReachable() {.thread.} =
+    ## R2-3: `replay+ledger` - checking RFC 0003 3.9's ghost-ledger laws
+    ## during a replay, previously unreachable (`simulateReplay` never
+    ## checked the ledger, and there was no ledger-checking replay entry
+    ## point at all).
+    var outcome = ProbeOutcome(ok: true)
+    let seed = 0x8EB1'u64
+    let tracePath = simTracePath(seed)
+    try:
+      simulate(seed = seed):
+        await sleepAsync(0.milliseconds)
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "recording run unexpectedly failed: " & exc.msg)
+    if outcome.ok:
+      try:
+        simulateReplayWith(tracePath, simOptions(ledger = true)):
+          await sleepAsync(0.milliseconds)
+      except CatchableError as exc:
+        outcome = ProbeOutcome(ok: false,
+          msg: "replay+ledger combination unexpectedly failed: " &
+               $exc.name & ": " & exc.msg)
+    probeChan.send(outcome)
+
+  proc probeSimulateReplayWithRefusesOracleOverride() {.thread.} =
+    ## `simulateReplayWith`'s `opts.oracle` must stay `none`: a replay
+    ## always drives the run from the trace's own `ReplayOracle`, so a
+    ## caller-supplied oracle is refused with a `doAssert` rather than
+    ## silently ignored - a scripted oracle and deterministic replay are
+    ## two different, mutually exclusive ways of resolving the same
+    ## choice points.
+    var outcome = ProbeOutcome(ok: true)
+    let seed = 0x8EB2'u64
+    let tracePath = simTracePath(seed)
+    try:
+      simulate(seed = seed):
+        await sleepAsync(0.milliseconds)
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "recording run unexpectedly failed: " & exc.msg)
+    if outcome.ok:
+      let oracle = newSimOracle(defaultDecideBatch, defaultDecideIo,
+                                 defaultDecideTime)
+      try:
+        simulateReplayWith(tracePath, simOptions(oracle = some(oracle))):
+          await sleepAsync(0.milliseconds)
+        outcome = ProbeOutcome(ok: false,
+          msg: "simulateReplayWith did not refuse an explicit opts.oracle")
+      except AssertionDefect:
+        discard
+      except CatchableError as exc:
+        outcome = ProbeOutcome(ok: false,
+          msg: "wrong exception type escaped: " & exc.msg)
+    probeChan.send(outcome)
+
+  proc probeSweepSeedsWithRefusesOracleOverride() {.thread.} =
+    ## `sweepSeedsWith`'s `opts.oracle` must stay `none`: each seed in a
+    ## sweep drives its own `RandomOracle(seed)`, so a single caller-
+    ## supplied oracle shared across every seed is refused with a
+    ## `doAssert` rather than silently ignored.
+    var outcome = ProbeOutcome(ok: true)
+    let oracle = newSimOracle(defaultDecideBatch, defaultDecideIo,
+                               defaultDecideTime)
+    try:
+      discard sweepSeedsWith(300'u64 .. 301'u64, simOptions(oracle = some(oracle))):
+        await sleepAsync(0.milliseconds)
+      outcome = ProbeOutcome(ok: false,
+        msg: "sweepSeedsWith did not refuse an explicit opts.oracle")
+    except AssertionDefect:
+      discard
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "wrong exception type escaped: " & exc.msg)
     probeChan.send(outcome)
 
   proc probeDefectEnvelopedEngineErrorRecoversItsKind() {.thread.} =
@@ -694,6 +907,25 @@ when defined(chronosSimulation) and compileOption("threads"):
                " times, expected 1")
     probeChan.send(outcome)
 
+  proc nextArgEvalOpts(): SimRunOptions =
+    inc argEvalCount
+    simOptions(decisionBudget = 42)
+
+  proc probeSimulateWithEvaluatesOptsArgumentExactlyOnce() {.thread.} =
+    ## R2-3/R2-6: `simulateWith`'s `opts` template parameter must be
+    ## substituted exactly once (`optsOnce`) - the same once-binding
+    ## hygiene `seed`/`tracePath` already get, extended to the value
+    ## R2-3's consolidation added.
+    var outcome = ProbeOutcome(ok: true)
+    argEvalCount = 0
+    simulateWith(seed = 970'u64, nextArgEvalOpts()):
+      discard
+    if argEvalCount != 1:
+      outcome = ProbeOutcome(ok: false,
+        msg: "opts argument evaluated " & $argEvalCount & " times, " &
+             "expected 1")
+    probeChan.send(outcome)
+
   suite "simulate() harness core":
     test "an empty body round-trips the real dispatcher":
       let outcome = runProbe(probeEmptyBodyRoundTrips)
@@ -757,7 +989,7 @@ when defined(chronosSimulation) and compileOption("threads"):
       checkpoint outcome.msg
       check outcome.ok
 
-  suite "simulateWithOracle":
+  suite "simulateWith(opts.oracle)":
     test "a scripted oracle driven through the harness keeps every guarantee":
       let outcome = runProbe(probeScriptedOracleThroughHarnessKeepsGuarantees)
       checkpoint outcome.msg
@@ -774,6 +1006,11 @@ when defined(chronosSimulation) and compileOption("threads"):
       checkpoint outcome.msg
       check outcome.ok
 
+    test "R2-4: replay honors the trace header's recorded decision budget":
+      let outcome = runProbe(probeReplayHonorsRecordedDecisionBudget)
+      checkpoint outcome.msg
+      check outcome.ok
+
   suite "template argument evaluation (R2-6)":
     test "simulate evaluates a non-idempotent seed argument exactly once":
       let outcome = runProbe(probeSimulateEvaluatesSeedArgumentExactlyOnce)
@@ -785,14 +1022,45 @@ when defined(chronosSimulation) and compileOption("threads"):
       checkpoint outcome.msg
       check outcome.ok
 
+    test "simulateWith evaluates a non-idempotent opts argument exactly once":
+      let outcome = runProbe(probeSimulateWithEvaluatesOptsArgumentExactlyOnce)
+      checkpoint outcome.msg
+      check outcome.ok
+
   suite "budget/ledger matrix":
-    test "sweepSeedsWithLedger classifies a planted violation by SimSeedFailureKind":
+    test "sweepSeedsWith(ledger = true) classifies a planted violation by SimSeedFailureKind":
       let outcome = runProbe(probeSweepWithLedgerClassifiesViolatingSeedsByKind)
       checkpoint outcome.msg
       check outcome.ok
 
-    test "simulateWithBudgetAndLedger compiles and runs":
+    test "simulateWith(decisionBudget, timeBudget, ledger = true) compiles and runs":
       let outcome = runProbe(probeBudgetAndLedgerCombinationCompilesAndRuns)
+      checkpoint outcome.msg
+      check outcome.ok
+
+  suite "R2-3: every opts cell of the oracle/replay matrix is reachable":
+    test "oracle+budget+ledger (the fullest previously-unreachable cell)":
+      let outcome = runProbe(probeOraclePlusBudgetPlusLedgerCombinationReachable)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "replay+budget: an explicit override wins over the trace's recorded budget":
+      let outcome = runProbe(probeReplayWithBudgetOverrideWinsOverRecorded)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "replay+ledger":
+      let outcome = runProbe(probeReplayWithLedgerCombinationReachable)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "simulateReplayWith refuses an explicit opts.oracle":
+      let outcome = runProbe(probeSimulateReplayWithRefusesOracleOverride)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "sweepSeedsWith refuses an explicit opts.oracle":
+      let outcome = runProbe(probeSweepSeedsWithRefusesOracleOverride)
       checkpoint outcome.msg
       check outcome.ok
 
