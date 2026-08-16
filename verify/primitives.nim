@@ -28,7 +28,7 @@
 ## needs distinct names regardless. A thin pass-through with no logic of
 ## its own proves nothing different from proving the real proc directly.
 
-include ../chronos/internal/callbackqueue
+include ../tonalli/internal/callbackqueue
 {.pop.}
 
 proc capMaskV*(cap: int): uint {.inline.} =

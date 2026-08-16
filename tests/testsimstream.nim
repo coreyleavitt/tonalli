@@ -17,8 +17,8 @@ when defined(chronosSimulation) and compileOption("threads") and
     not defined(windows):
   import unittest2
   import results
-  import ../chronos
-  import ../chronos/internal/simengine
+  import ../tonalli
+  import ../tonalli/internal/simengine
 
   ## Every probe below runs on a freshly spawned OS thread so its
   ## `setThreadDispatcher` call never touches this test binary's real

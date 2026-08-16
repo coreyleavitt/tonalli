@@ -1,6 +1,6 @@
 ## Simple cancellation example
 
-import chronos
+import tonalli
 
 proc someTask() {.async.} =
   await sleepAsync(10.minutes)

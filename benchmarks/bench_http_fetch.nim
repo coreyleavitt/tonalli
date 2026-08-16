@@ -8,9 +8,9 @@
 import
   std/[strformat, times],
 
-  ../chronos,
-  ../chronos/threadsync,
-  ../chronos/apps/http/[httpserver, httpclient, httpcommon]
+  ../tonalli,
+  ../tonalli/threadsync,
+  ../tonalli/apps/http/[httpserver, httpclient, httpcommon]
 
 {.used.}
 

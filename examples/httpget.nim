@@ -1,4 +1,4 @@
-import chronos/apps/http/httpclient
+import tonalli/apps/http/httpclient
 
 proc retrievePage*(uri: string): Future[string] {.async.} =
   # Create a new HTTP session

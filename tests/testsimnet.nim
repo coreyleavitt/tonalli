@@ -29,9 +29,9 @@ when defined(chronosSimulation) and compileOption("threads") and
     not defined(windows):
   import unittest2
   import results
-  import ../chronos
-  import ../chronos/simulation
-  import ../chronos/streams/asyncstream
+  import ../tonalli
+  import ../tonalli/simulation
+  import ../tonalli/streams/asyncstream
 
   type
     ProbeOutcome = object

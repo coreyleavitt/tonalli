@@ -7,7 +7,7 @@
 #              MIT license (LICENSE-MIT)
 import unittest2
 import results
-import ../chronos, ../chronos/unittest2/asynctests
+import ../tonalli, ../tonalli/unittest2/asynctests
 
 {.used.}
 

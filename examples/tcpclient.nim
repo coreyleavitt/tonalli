@@ -4,7 +4,7 @@
 ##
 ## ./tcpclient 127.0.0.1 port
 
-import std/[os, strformat, strutils], chronos
+import std/[os, strformat, strutils], tonalli
 
 proc handleConnection(transport: StreamTransport, id: int) {.async.} =
   try:

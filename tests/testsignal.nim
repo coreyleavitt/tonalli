@@ -6,8 +6,8 @@
 #  Apache License, version 2.0, (LICENSE-APACHEv2)
 #              MIT license (LICENSE-MIT)
 import unittest2
-import ../chronos, ../chronos/oserrno
-import ../chronos/config
+import ../tonalli, ../tonalli/oserrno
+import ../tonalli/config
 
 {.used.}
 
@@ -15,7 +15,7 @@ when not defined(windows):
   import posix
 
 when chronosSimulation:
-  from ../chronos/internal/simengine import SimBarrierError
+  from ../tonalli/internal/simengine import SimBarrierError
 
 suite "Signal handling test suite":
   proc testSignal(signal, value: int): Future[bool] {.async.} =

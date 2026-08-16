@@ -7,7 +7,7 @@
 #              MIT license (LICENSE-MIT)
 import std/os
 import unittest2
-import ../chronos, ../chronos/timer
+import ../tonalli, ../tonalli/timer
 
 {.used.}
 

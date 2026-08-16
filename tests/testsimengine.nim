@@ -14,16 +14,16 @@
 
 import unittest2
 import std/strutils
-import ../chronos/oserrno
-import ../chronos/futures
-import ../chronos/internal/simengine
+import ../tonalli/oserrno
+import ../tonalli/futures
+import ../tonalli/internal/simengine
 
 when defined(chronosSimulation):
   import std/heapqueue
-  import ../chronos
-  import ../chronos/config
+  import ../tonalli
+  import ../tonalli/config
   when defined(windows):
-    import ../chronos/osdefs
+    import ../tonalli/osdefs
   else:
     import std/posix
 

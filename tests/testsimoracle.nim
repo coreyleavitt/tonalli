@@ -20,9 +20,9 @@
 import unittest2
 import std/[os, algorithm, tables, strutils]
 import results
-import ../chronos/timer
-import ../chronos/internal/simengine
-import ../chronos/internal/simtrace
+import ../tonalli/timer
+import ../tonalli/internal/simengine
+import ../tonalli/internal/simtrace
 
 {.used.}
 

@@ -6,10 +6,10 @@
 #  Apache License, version 2.0, (LICENSE-APACHEv2)
 #              MIT license (LICENSE-MIT)
 import std/[strutils, algorithm]
-import ".."/chronos/unittest2/asynctests,
-       ".."/chronos,
-       ".."/chronos/apps/http/[httpserver, httpcommon, httpdebug]
-import ".."/chronos/config
+import ".."/tonalli/unittest2/asynctests,
+       ".."/tonalli,
+       ".."/tonalli/apps/http/[httpserver, httpcommon, httpdebug]
+import ".."/tonalli/config
 import stew/base10
 
 {.used.}

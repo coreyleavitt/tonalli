@@ -1,5 +1,5 @@
 ## The peculiarities of `discard` in `async` procedures
-import chronos
+import tonalli
 
 proc failingOperation() {.async.} =
   echo "Raising!"

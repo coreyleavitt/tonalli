@@ -22,7 +22,7 @@
 ## is only meaningful on the `chronosDebug` ones.
 
 import unittest2
-import ../chronos/contextvars
+import ../tonalli/contextvars
 
 {.used.}
 

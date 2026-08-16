@@ -6,16 +6,16 @@
 #  Apache License, version 2.0, (LICENSE-APACHEv2)
 #              MIT license (LICENSE-MIT)
 import std/[sequtils, strutils, sha1]
-import ".."/chronos/unittest2/asynctests
-import ".."/chronos,
-       ".."/chronos/apps/http/[httpserver, shttpserver, httpclient]
-import ".."/chronos/config
+import ".."/tonalli/unittest2/asynctests
+import ".."/tonalli,
+       ".."/tonalli/apps/http/[httpserver, shttpserver, httpclient]
+import ".."/tonalli/config
 import stew/[byteutils, base10]
 
 {.used.}
 
 when chronosSimulation:
-  from ".."/chronos/internal/simengine import SimBarrierError, SimEngineError
+  from ".."/tonalli/internal/simengine import SimBarrierError, SimEngineError
 
 # To create self-signed certificate and key you can use openssl
 # openssl req -new -x509 -sha256 -newkey rsa:2048 -nodes \

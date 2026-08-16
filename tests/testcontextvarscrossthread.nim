@@ -23,7 +23,7 @@
 ## runs in every build, not only under `chronosDebug`.
 
 import unittest2
-import ../chronos/contextvars
+import ../tonalli/contextvars
 
 {.used.}
 

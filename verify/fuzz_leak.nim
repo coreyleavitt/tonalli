@@ -46,7 +46,7 @@
 
 import std/[times, strutils, tables, algorithm]
 import proptest
-import ../chronos/internal/callbackqueue
+import ../tonalli/internal/callbackqueue
 
 type
   LeakItem = ref object

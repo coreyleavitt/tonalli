@@ -11,7 +11,7 @@
 ## repeated growth.
 
 import unittest2
-import ../chronos/internal/callbackqueue
+import ../tonalli/internal/callbackqueue
 
 {.used.}
 
@@ -259,8 +259,8 @@ when defined(chronosSimulation) and compileOption("threads"):
   ## harness runs unmodified library code correctly, distinct from the
   ## structural CallbackQueue[T] tests above. Every probe runs on its
   ## own OS thread, the isolation `tests/testsimulation.nim` uses.
-  import ../chronos
-  import ../chronos/simulation
+  import ../tonalli
+  import ../tonalli/simulation
 
   type
     SweepProbeOutcome = object

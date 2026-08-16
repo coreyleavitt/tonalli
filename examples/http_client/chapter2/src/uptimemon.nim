@@ -1,5 +1,5 @@
 # ANCHOR: all
-import chronos/apps/http/httpclient
+import tonalli/apps/http/httpclient
 
 # ANCHOR: uris
 const uris = @[

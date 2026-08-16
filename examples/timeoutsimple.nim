@@ -1,5 +1,5 @@
 ## Simple timeouts
-import chronos
+import tonalli
 
 proc longTask() {.async.} =
   try:

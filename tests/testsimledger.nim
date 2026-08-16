@@ -48,9 +48,9 @@ when defined(chronosSimulation) and compileOption("threads"):
   ## Every probe below drives `simulateWith(seed, simOptions(ledger = true))`
   ## from its own OS thread, the same isolation `tests/testsimulation.nim`
   ## uses.
-  import ../chronos
-  import ../chronos/simulation
-  import ../chronos/contextvars
+  import ../tonalli
+  import ../tonalli/simulation
+  import ../tonalli/contextvars
 
   type
     ProbeOutcome = object

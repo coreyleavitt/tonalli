@@ -26,9 +26,9 @@
 when defined(chronosSimulation) and compileOption("threads"):
   import std/uri
   import unittest2
-  import ../chronos
-  import ../chronos/simulation
-  import ../chronos/apps/http/[httpserver, httpclient]
+  import ../tonalli
+  import ../tonalli/simulation
+  import ../tonalli/apps/http/[httpserver, httpclient]
 
   type
     ProbeOutcome = object

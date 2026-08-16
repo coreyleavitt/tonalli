@@ -15,7 +15,7 @@
 ## module boundaries.
 
 import unittest2
-import ../chronos/contextvars  # currentContext, AsyncContext, dumpContext
+import ../tonalli/contextvars  # currentContext, AsyncContext, dumpContext
 import ./contextvarsexportfixture
 
 {.used.}

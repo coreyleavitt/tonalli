@@ -1,6 +1,6 @@
 # ANCHOR: all
 import std/sequtils
-import chronos/apps/http/httpclient
+import tonalli/apps/http/httpclient
 
 # ANCHOR: maxConcurrency
 const

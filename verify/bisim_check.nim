@@ -41,7 +41,7 @@
 
 import std/[deques, hashes, strutils]
 import proptest
-import ../chronos/internal/callbackqueue
+import ../tonalli/internal/callbackqueue
 
 const
   initialCap = 2

@@ -1,6 +1,6 @@
 # ANCHOR: all
 import std/sequtils
-import chronos/apps/http/httpclient
+import tonalli/apps/http/httpclient
 
 # ANCHOR: ntfy_topic
 const
@@ -73,17 +73,17 @@ proc findMarker(
 
 # ANCHOR: check
 proc check(session: HttpSessionRef, uri: string) {.async: (raises: [CancelledError]).} =
-  let
-    request = HttpClientRequestRef.new(session, uri).valueOr:
-      echo "[ERR] " & uri & ": " & error
-      return
-    response =
-      try:
-        await request.send().wait(5.seconds)
-      except HttpError, AsyncTimeoutError:
-        echo "[ERR] " & uri & ": " & getCurrentExceptionMsg()
-      finally:
-        await request.closeWait()
+  let request = HttpClientRequestRef.new(session, uri).valueOr:
+    echo "[ERR] " & uri & ": " & error
+    return
+
+  var response: HttpClientResponseRef
+  try:
+    response = await request.send().wait(5.seconds)
+  except HttpError, AsyncTimeoutError:
+    echo "[ERR] " & uri & ": " & getCurrentExceptionMsg()
+  finally:
+    await request.closeWait()
 
   try:
     if response.status == 200:

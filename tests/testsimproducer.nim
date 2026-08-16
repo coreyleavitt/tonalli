@@ -24,9 +24,9 @@ when defined(chronosSimulation) and compileOption("threads"):
   ## `tests/testsimnet.nim` uses: `setThreadDispatcher`/the sim clock
   ## are thread-local, so each probe needs a dispatcher no earlier probe
   ## in the same binary has touched.
-  import ../chronos
-  import ../chronos/simulation
-  import ../chronos/internal/simclock
+  import ../tonalli
+  import ../tonalli/simulation
+  import ../tonalli/internal/simclock
 
   type
     ProbeOutcome = object

@@ -66,6 +66,19 @@ proc tryExec(cmd: string) =
   except Exception as e:
     echo e.msg
 
+proc buildChapter(chapterDir: string) =
+  # Resolve the engine dependency against this checkout, not the registry.
+  writeFile(chapterDir / "nimble.develop", """{
+  "version": 1,
+  "includes": [],
+  "dependencies": [
+    "../../.."
+  ]
+}
+""")
+  withDir(chapterDir):
+    exec "nimble build"
+
 task examples, "Build examples":
   # Build book examples
   for file in listFiles("examples"):
@@ -74,13 +87,11 @@ task examples, "Build examples":
 
   # Build HTTP client tutorial examples
   for chapterDir in listDirs("examples/http_client"):
-    withDir(chapterDir):
-      tryExec "nimble build"
+    buildChapter(chapterDir)
 
   # Build HTTP server tutorial examples
   for chapterDir in listDirs("examples/http_server"):
-    withDir(chapterDir):
-      tryExec "nimble build"
+    buildChapter(chapterDir)
 
 task benchmarks, "Run benchmarks":
   # Make sure benchmarks compile

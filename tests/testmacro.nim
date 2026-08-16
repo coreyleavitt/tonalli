@@ -7,14 +7,14 @@
 #              MIT license (LICENSE-MIT)
 import std/[macros, strutils]
 import unittest2
-import ../chronos
-import ../chronos/config
+import ../tonalli
+import ../tonalli/config
 
 {.used.}
 
 when chronosSimulation:
-  from ../chronos/internal/simengine import SimEngineError
-  from ../chronos/internal/simledger import SimLedgerError
+  from ../tonalli/internal/simengine import SimEngineError
+  from ../tonalli/internal/simledger import SimLedgerError
   {.pragma: testWaitForNoRaises, raises: [SimEngineError, SimLedgerError].}
 else:
   {.pragma: testWaitForNoRaises, raises: [].}

@@ -17,9 +17,9 @@
 import unittest2
 import std/strutils
 import results
-import ../chronos/timer
-import ../chronos/futures
-import ../chronos/internal/simengine
+import ../tonalli/timer
+import ../tonalli/futures
+import ../tonalli/internal/simengine
 
 {.used.}
 
@@ -159,8 +159,8 @@ when defined(chronosSimulation) and compileOption("threads"):
   ## real per-thread dispatcher.
   import std/monotimes
   import std/times except seconds, milliseconds
-  import ../chronos
-  import ../chronos/internal/simclock
+  import ../tonalli
+  import ../tonalli/internal/simclock
 
   type
     ProbeOutcome = object

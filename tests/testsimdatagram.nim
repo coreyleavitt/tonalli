@@ -31,9 +31,9 @@
 when defined(chronosSimulation) and compileOption("threads"):
   import unittest2
   import results
-  import ../chronos
-  import ../chronos/oserrno
-  import ../chronos/internal/simengine
+  import ../tonalli
+  import ../tonalli/oserrno
+  import ../tonalli/internal/simengine
 
   type
     ProbeOutcome = object
@@ -346,7 +346,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   ## platform-neutral, since they call the engine wrapper directly and
   ## never reach `datagram.nim`'s POSIX-only branch.
   when not defined(windows):
-    import ../chronos/simulation
+    import ../tonalli/simulation
 
     proc bytesToStr(b: seq[byte]): string =
       result = newString(b.len)

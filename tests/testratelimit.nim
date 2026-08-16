@@ -9,8 +9,8 @@
 {.used.}
 
 import unittest2
-import ../chronos
-import ../chronos/ratelimit
+import ../tonalli
+import ../tonalli/ratelimit
 
 suite "Token Bucket":
   test "Sync test":

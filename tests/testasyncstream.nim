@@ -8,8 +8,8 @@
 import unittest2
 import bearssl/[ssl, x509]
 import stew/byteutils
-import ../chronos/unittest2/asynctests
-import ../chronos/streams/[tlsstream, chunkstream, boundstream]
+import ../tonalli/unittest2/asynctests
+import ../tonalli/streams/[tlsstream, chunkstream, boundstream]
 
 {.used.}
 

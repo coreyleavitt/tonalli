@@ -9,10 +9,10 @@
 ## leaking back. See testcontextvars.nim for the sync-only baseline.
 
 import unittest2
-import ../chronos
-import ../chronos/config
-import ../chronos/contextvars
-import ../chronos/futures
+import ../tonalli
+import ../tonalli/config
+import ../tonalli/contextvars
+import ../tonalli/futures
   # Whitebox: capturingCallback is excluded from the public `import chronos`
   # surface (see chronos/internal/asyncengine.nim's `export futures except
   # ...`); the internalCallTick pin below needs it to opt a caller-supplied
@@ -24,17 +24,17 @@ when not defined(windows):
     # Signal/process registration exists on the epoll/kqueue engines
     # only - same gate testall.nim applies to testsignal/testproc.
     when chronosSimulation:
-      from ../chronos/internal/simengine import SimBarrierError
+      from ../tonalli/internal/simengine import SimBarrierError
     when not (defined(android) or defined(ios)):
       # asyncproc (used here only to spawn a child for the addProcess2
       # test) does not compile on mobile: Android's spawn.h withholds
       # the posix_spawn family below API 28 - same exclusion
       # testall.nim applies to testproc.
-      import ../chronos/asyncproc
+      import ../tonalli/asyncproc
 
 when chronosSimulation:
-  from ../chronos/internal/simengine import SimEngineError
-  from ../chronos/internal/simledger import SimLedgerError
+  from ../tonalli/internal/simengine import SimEngineError
+  from ../tonalli/internal/simledger import SimLedgerError
 
 {.used.}
 
@@ -1170,7 +1170,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   ## own OS thread, the isolation `tests/testsimulation.nim` and
   ## `tests/testcallbackqueue.nim`'s sweep-proof suite use.
   import std/strutils
-  import ../chronos/simulation
+  import ../tonalli/simulation
 
   type
     SimContextProbeOutcome = object

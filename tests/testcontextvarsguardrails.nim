@@ -23,13 +23,13 @@
 
 import std/[sequtils, tables]
 import unittest2
-import ../chronos/contextvars
-import ../chronos/internal/contextnode
+import ../tonalli/contextvars
+import ../tonalli/internal/contextnode
   # Whitebox: guardrails 5 and 11 below name `ContextNodeBase` directly,
   # which `chronos/contextvars.nim` no longer re-exports (see guardrail
   # 11) — those checks import the internal module the same way an
   # attacker attempting the forgery in guardrail 11 would have to.
-import ../chronos
+import ../tonalli
   # Brings `withTimeout` into scope for guardrail 9 below, and
   # InternalAsyncCallback/AsyncCallback/InternalCancelCallback/
   # CompletionData for the capture-discipline guardrails.

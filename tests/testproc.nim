@@ -7,15 +7,15 @@
 #              MIT license (LICENSE-MIT)
 import std/os
 import stew/[base10, byteutils]
-import ".."/chronos/unittest2/asynctests
-import ".."/chronos/asyncproc
-import ".."/chronos/config
+import ".."/tonalli/unittest2/asynctests
+import ".."/tonalli/asyncproc
+import ".."/tonalli/config
 
 when defined(posix):
-  from ".."/chronos/osdefs import SIGKILL
+  from ".."/tonalli/osdefs import SIGKILL
 
 when chronosSimulation:
-  from ".."/chronos/internal/simengine import SimBarrierError
+  from ".."/tonalli/internal/simengine import SimBarrierError
 
 when defined(nimHasUsed): {.used.}
 

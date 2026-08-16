@@ -14,8 +14,8 @@
 ## surface reachability.
 
 import unittest2
-import ../chronos
-import ../chronos/contextvars
+import ../tonalli
+import ../tonalli/contextvars
   # Looks unused to the compiler (declared() doesn't mark usage) but is
   # load-bearing for every assert below.
 

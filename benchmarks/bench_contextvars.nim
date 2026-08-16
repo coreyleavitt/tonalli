@@ -40,8 +40,8 @@
 
 import std/[algorithm, monotimes, strformat]
 
-import chronos
-import chronos/contextvars
+import tonalli
+import tonalli/contextvars
 
 {.used.}
 

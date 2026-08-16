@@ -7,14 +7,14 @@
 #              MIT license (LICENSE-MIT)
 import std/[strutils, net]
 import stew/byteutils
-import ".."/chronos/unittest2/asynctests
-import ".."/chronos
-import ".."/chronos/config
+import ".."/tonalli/unittest2/asynctests
+import ".."/tonalli
+import ".."/tonalli/config
 
 {.used.}
 
 when chronosSimulation:
-  from ".."/chronos/internal/simengine import SimBarrierError
+  from ".."/tonalli/internal/simengine import SimBarrierError
 
 suite "Datagram Transport test suite":
   teardown:

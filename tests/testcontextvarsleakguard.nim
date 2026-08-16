@@ -39,15 +39,15 @@
 
 import std/strutils
 import unittest2
-import ../chronos/contextvars
-import ../chronos/internal/contextnode
+import ../tonalli/contextvars
+import ../tonalli/internal/contextnode
   # Whitebox: the identity-arm case constructs a bare `ContextNodeBase`
   # directly, which `chronos/contextvars.nim` does not expose.
-import ../chronos/futures
+import ../tonalli/futures
   # Whitebox: `currentAsyncContext` is the threadvar the net inspects, and
   # `withRestoredContext` is the template under test; neither is reachable
   # through `import chronos`.
-import ../chronos
+import ../tonalli
   # Brings in `callSoon`/`poll`.
 
 {.used.}

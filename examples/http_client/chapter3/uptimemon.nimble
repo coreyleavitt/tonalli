@@ -5,4 +5,4 @@ license       = "MIT"
 srcDir        = "src"
 bin           = @["uptimemon"]
 
-requires "nim#head", "chronos >= 4.2.2"
+requires "nim#head", "tonalli >= 4.2.2"

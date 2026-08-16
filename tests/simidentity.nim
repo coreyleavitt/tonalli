@@ -16,9 +16,9 @@
 ## stringification) shows up as a nonzero diff, not a parsed assertion.
 
 import std/os
-import ../chronos
-import ../chronos/simulation
-import ../chronos/contextvars
+import ../tonalli
+import ../tonalli/simulation
+import ../tonalli/contextvars
 
 const identitySeed = 0xC0FFEE'u64
 

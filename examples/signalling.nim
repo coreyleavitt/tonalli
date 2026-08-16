@@ -1,4 +1,4 @@
-import chronos, chronos/threadsync
+import tonalli, tonalli/threadsync
 import os
 
 type Context = object

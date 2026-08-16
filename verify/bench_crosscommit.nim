@@ -49,7 +49,7 @@
 ##   nim c -d:release --mm:orc  -r benchmarks/bench_crosscommit
 ##   nim c -d:release --mm:refc -r benchmarks/bench_crosscommit
 
-import ../chronos
+import ../tonalli
 import std/[monotimes, strformat]
 
 {.used.}

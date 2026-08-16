@@ -6,11 +6,11 @@
 #  Apache License, version 2.0, (LICENSE-APACHEv2)
 #              MIT license (LICENSE-MIT)
 import unittest2
-import ../chronos
+import ../tonalli
 
 when defined(posix):
   import stew/ptrops
-  import ../chronos/[config, osdefs, osutils]
+  import ../tonalli/[config, osdefs, osutils]
 
 {.used.}
 

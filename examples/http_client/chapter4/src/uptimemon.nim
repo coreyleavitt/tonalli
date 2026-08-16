@@ -1,6 +1,6 @@
 # ANCHOR: all
 import std/sequtils
-import chronos/apps/http/httpclient
+import tonalli/apps/http/httpclient
 
 const uris = @[
   "https://duckduckgo.com/?q=chronos", "https://mock.codes/403", "http://10.255.255.1",

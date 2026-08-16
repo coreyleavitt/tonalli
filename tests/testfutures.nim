@@ -9,7 +9,7 @@
 {.used.}
 
 import unittest2
-import ../chronos/futures
+import ../tonalli/futures
 
 suite "Futures":
   test "Future constructors":

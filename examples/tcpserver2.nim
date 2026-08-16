@@ -5,7 +5,7 @@
 ##
 ## This example also takes care not to allow exceptions to crash the application
 ## as is customary when writing server / library code.
-import std/sequtils, chronos
+import std/sequtils, tonalli
 
 {.push raises: [].} # Prevent spurious exceptions at compile time!
 

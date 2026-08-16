@@ -1,6 +1,6 @@
 ## Make two http requests concurrently and output the one that wins
 
-import chronos
+import tonalli
 import ./httpget
 
 proc twoGets() {.async.} =

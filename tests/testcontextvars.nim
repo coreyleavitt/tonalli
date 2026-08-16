@@ -15,7 +15,7 @@
 
 import std/[algorithm, sequtils, strutils, tables]
 import unittest2
-import ../chronos/contextvars
+import ../tonalli/contextvars
 
 when (NimMajor, NimMinor) >= (2, 0):
   # Only the `{.contextVar.}` pragma-sugar suite at the tail of this file

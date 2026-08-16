@@ -12,7 +12,7 @@
 ## export-decoupling case documented in docs/src/contextvars.md,
 ## "Privacy and the raw constructor".
 
-import ../chronos/contextvars
+import ../tonalli/contextvars
 
 when (NimMajor, NimMinor) >= (2, 0):
   # `{.contextVar.}` is 2.x-only — macro pragmas on `let`/`var` sections

@@ -11,7 +11,7 @@
 
 import unittest2
 import std/[os, strutils]
-import ../chronos/internal/simtrace
+import ../tonalli/internal/simtrace
 
 {.used.}
 

@@ -6,14 +6,14 @@
 #  Apache License, version 2.0, (LICENSE-APACHEv2)
 #              MIT license (LICENSE-MIT)
 import std/[strutils, os]
-import ../chronos/unittest2/asynctests
-import ../chronos, ../chronos/[osdefs, oserrno]
-import ../chronos/config
+import ../tonalli/unittest2/asynctests
+import ../tonalli, ../tonalli/[osdefs, oserrno]
+import ../tonalli/config
 
 {.used.}
 
 when chronosSimulation:
-  from ../chronos/internal/simengine import SimBarrierError
+  from ../tonalli/internal/simengine import SimBarrierError
 
 when defined(windows):
   proc get_osfhandle*(fd: FileHandle): HANDLE {.

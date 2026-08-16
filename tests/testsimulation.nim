@@ -24,8 +24,8 @@ when defined(chronosSimulation) and compileOption("threads"):
   ## per-thread dispatcher.
   import results
   import std/options
-  import ../chronos
-  import ../chronos/simulation
+  import ../tonalli
+  import ../tonalli/simulation
 
   type
     ProbeOutcome = object

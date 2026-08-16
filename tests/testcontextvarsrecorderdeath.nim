@@ -25,7 +25,7 @@
 ## two branches below).
 
 import unittest2
-import ../chronos/contextvars
+import ../tonalli/contextvars
 
 {.used.}
 

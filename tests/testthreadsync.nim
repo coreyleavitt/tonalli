@@ -6,8 +6,8 @@
 #  Apache License, version 2.0, (LICENSE-APACHEv2)
 #              MIT license (LICENSE-MIT)
 import std/[cpuinfo, locks, strutils]
-import ../chronos/unittest2/asynctests
-import ../chronos/threadsync
+import ../tonalli/unittest2/asynctests
+import ../tonalli/threadsync
 
 {.used.}
 

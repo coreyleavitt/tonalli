@@ -1,6 +1,6 @@
 # ANCHOR: all
 # ANCHOR: import
-import chronos/apps/http/httpclient
+import tonalli/apps/http/httpclient
 # ANCHOR_END: import
 
 # ANCHOR: check

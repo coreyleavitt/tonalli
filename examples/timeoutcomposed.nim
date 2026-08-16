@@ -1,5 +1,5 @@
 ## Single timeout for several operations
-import chronos
+import tonalli
 
 proc shortTask() {.async.} =
   try:

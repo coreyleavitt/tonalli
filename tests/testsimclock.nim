@@ -10,10 +10,10 @@
 ## `Moment.now()` seam in `chronos/timer.nim` that consults it.
 
 import unittest2
-import ../chronos/internal/simclock
+import ../tonalli/internal/simclock
 
 when defined(chronosSimulation):
-  import ../chronos, ../chronos/timer
+  import ../tonalli, ../tonalli/timer
 
 {.used.}
 
