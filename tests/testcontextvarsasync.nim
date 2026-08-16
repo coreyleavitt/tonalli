@@ -21,12 +21,16 @@ import ../chronos/futures
 when not defined(windows):
   import std/posix
   when chronosEventEngine in ["epoll", "kqueue"]:
-    # Signal/process registration (and asyncproc, which this file uses
-    # only for spawning a child) exists on the epoll/kqueue engines
-    # only — same gate testall.nim applies to testsignal/testproc.
-    import ../chronos/asyncproc
+    # Signal/process registration exists on the epoll/kqueue engines
+    # only - same gate testall.nim applies to testsignal/testproc.
     when chronosSimulation:
       from ../chronos/internal/simengine import SimBarrierError
+    when not (defined(android) or defined(ios)):
+      # asyncproc (used here only to spawn a child for the addProcess2
+      # test) does not compile on mobile: Android's spawn.h withholds
+      # the posix_spawn family below API 28 - same exclusion
+      # testall.nim applies to testproc.
+      import ../chronos/asyncproc
 
 when chronosSimulation:
   from ../chronos/internal/simengine import SimEngineError
@@ -375,43 +379,44 @@ suite "contextvars: scheduling-site capture coverage":
         waitFor(driver())
         check seenBinding == 456
 
-      test "addProcess2 handler fires with the registrant's binding":
-        var seenBinding = -1
-        var pidFd: ProcessHandle
-        let handlerFut = newFuture[void]("ctx.process.handler")
-        var process: AsyncProcessRef
-        proc processHandler(udata: pointer) {.gcsafe.} =
-          seenBinding = asyncInt.value
-          when chronosSimulation:
-            let res =
-              try:
-                removeProcess2(pidFd)
-              except SimBarrierError as exc:
-                raiseAsDefect(exc, "processHandler(): removeProcess2 " &
-                                    "crossed the simulated barrier")
-          else:
-            let res = removeProcess2(pidFd)
-          if res.isErr():
-            handlerFut.fail(newException(ValueError, osErrorMsg(res.error())))
-          else:
-            handlerFut.complete()
+      when not (defined(android) or defined(ios)):
+        test "addProcess2 handler fires with the registrant's binding":
+          var seenBinding = -1
+          var pidFd: ProcessHandle
+          let handlerFut = newFuture[void]("ctx.process.handler")
+          var process: AsyncProcessRef
+          proc processHandler(udata: pointer) {.gcsafe.} =
+            seenBinding = asyncInt.value
+            when chronosSimulation:
+              let res =
+                try:
+                  removeProcess2(pidFd)
+                except SimBarrierError as exc:
+                  raiseAsDefect(exc, "processHandler(): removeProcess2 " &
+                                      "crossed the simulated barrier")
+            else:
+              let res = removeProcess2(pidFd)
+            if res.isErr():
+              handlerFut.fail(newException(ValueError, osErrorMsg(res.error())))
+            else:
+              handlerFut.complete()
 
-        proc driver(): Future[void] {.async: (raises: [Exception]).} =
-          process = await startProcess("sleep 0.3",
-                                       options = {AsyncProcessOption.EvalCommand})
-          try:
-            asyncInt.withValue(789):
-              pidFd =
-                block:
-                  let res = addProcess2(process.pid(), processHandler)
-                  if res.isErr():
-                    raiseAssert osErrorMsg(res.error())
-                  res.get()
-              await handlerFut.wait(5.seconds)
-          finally:
-            await process.closeWait()
-        waitFor(driver())
-        check seenBinding == 789
+          proc driver(): Future[void] {.async: (raises: [Exception]).} =
+            process = await startProcess("sleep 0.3",
+                                         options = {AsyncProcessOption.EvalCommand})
+            try:
+              asyncInt.withValue(789):
+                pidFd =
+                  block:
+                    let res = addProcess2(process.pid(), processHandler)
+                    if res.isErr():
+                      raiseAssert osErrorMsg(res.error())
+                    res.get()
+                await handlerFut.wait(5.seconds)
+            finally:
+              await process.closeWait()
+          waitFor(driver())
+          check seenBinding == 789
 
   test "race() resolver fires with the awaiter's binding":
     proc child(value: int, delayMs: int): Future[int] {.async: (raises: [CancelledError]).} =
