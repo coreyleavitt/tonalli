@@ -235,8 +235,8 @@ proc extractStringField(line, key: string): string
       "unterminated field \"" & key & "\" in: " & line)
   line[valueStart ..< valueEnd]
 
-proc extractIntField(line, key: string): int64
-                     {.raises: [SimTraceReadError].} =
+proc extractNumericText(line, key: string): string
+                        {.raises: [SimTraceReadError].} =
   let marker = "\"" & key & "\":"
   let start = line.find(marker)
   if start < 0:
@@ -250,8 +250,24 @@ proc extractIntField(line, key: string): int64
   if text.len == 0:
     raise newException(SimTraceReadError,
       "empty numeric field \"" & key & "\" in: " & line)
+  text
+
+proc extractIntField(line, key: string): int64
+                     {.raises: [SimTraceReadError].} =
+  let text = extractNumericText(line, key)
   try:
     parseBiggestInt(text)
+  except ValueError:
+    raise newException(SimTraceReadError,
+      "malformed numeric field \"" & key & "\" in: " & line)
+
+proc extractUIntField(line, key: string): uint64
+                      {.raises: [SimTraceReadError].} =
+  ## `"seed"` is a full-range `uint64`: parse unsigned so every seed
+  ## the writer can record reads back, and a negative is refused.
+  let text = extractNumericText(line, key)
+  try:
+    parseBiggestUInt(text)
   except ValueError:
     raise newException(SimTraceReadError,
       "malformed numeric field \"" & key & "\" in: " & line)
@@ -327,7 +343,7 @@ proc parseSimTraceHeader*(line: string): SimTraceHeader
     raise newException(SimTraceReadError,
       "trace version mismatch: expected " & $simTraceVersion & ", got " &
       $version)
-  SimTraceHeader(seed: uint64(extractIntField(line, "seed")),
+  SimTraceHeader(seed: extractUIntField(line, "seed"),
                  commit: extractStringField(line, "commit"),
                  config: extractStringField(line, "config"))
 

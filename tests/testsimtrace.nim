@@ -299,6 +299,17 @@ suite "sim trace reader":
       discard readSimTrace(path)
     removeFile(path)
 
+  test "a full-range uint64 seed round-trips through the header":
+    let header = parseSimTraceHeader(
+      renderHeaderLine(high(uint64), "abc", "cfg"))
+    check header.seed == high(uint64)
+
+  test "a negative seed is refused":
+    expect SimTraceReadError:
+      discard parseSimTraceHeader(
+        "{\"trace\":\"chronos-sim\",\"v\":1,\"seed\":-5,\"commit\":\"\"," &
+        "\"config\":\"\"}")
+
   test "an unrecognized decision kind is refused":
     let path = getTempDir() / "chronos-simtrace-read-badkind.ndjson"
     writeFile(path, validHeaderLine &
