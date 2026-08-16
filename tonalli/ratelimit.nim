@@ -9,7 +9,7 @@
 {.push raises: [].}
 
 import std/math
-import ../chronos
+import ../tonalli
 import ./timer
 
 export timer

@@ -8,9 +8,9 @@
 #              MIT license (LICENSE-MIT)
 import std/tables
 import unittest2
-import ../../chronos
+import ../../tonalli
 
-export unittest2, chronos
+export unittest2, tonalli
 
 template asyncTest*(name: string, body: untyped): untyped =
   test name:

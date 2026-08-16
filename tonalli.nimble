@@ -1,7 +1,7 @@
 mode = ScriptMode.Verbose
 
-packageName   = "chronos"
-# keep in sync: chronos/apps/http/httpagent.nim
+packageName   = "tonalli"
+# keep in sync: tonalli/apps/http/httpagent.nim
 version       = "4.4.0"
 author        = "Status Research & Development GmbH"
 description   = "Networking framework with async/await support"
@@ -166,13 +166,13 @@ task check_windows, "Windows parity: semantic-check the library surface (fork is
 
   # (a) define-off: the real (non-simulation) Windows build must stay
   # unaffected by the sim substrate (RFC 0003 principle 2).
-  exec nimc & " check " & winCfg & " chronos.nim"
+  exec nimc & " check " & winCfg & " tonalli.nim"
 
   # (b) define-on: the sim substrate's public surface, with the
   # dispatcher construction fork and provenance guards this slice
   # mirrors onto the Windows (IOCP) branch.
   exec nimc & " check " & winCfg &
-    " -d:chronosSimulation -d:chronosFutureTracking --threads:on chronos/simulation.nim"
+    " -d:chronosSimulation -d:chronosFutureTracking --threads:on tonalli/simulation.nim"
 
   # (c) sim test files. The RFC 0003 S3/S4 sim poll loop (fork issue
   # #20 gap 2) is now ported onto the Windows (IOCP) branch: the
@@ -223,11 +223,11 @@ task test_libbacktrace, "test with libbacktrace":
 task docs, "Generate API documentation":
   exec "mdbook build docs"
   tryExec nimc & " doc " &
-    "--git.url:https://github.com/status-im/nim-chronos --git.commit:master --outdir:docs/book/api --project chronos"
+    "--git.url:https://github.com/coreyleavitt/tonalli --git.commit:master --outdir:docs/book/api --project tonalli"
 
   # Build the docs for modules that aren't part of the main module.
-  for item in walkDir("chronos/apps/http"):
+  for item in walkDir("tonalli/apps/http"):
     if item.kind == pcFile and item.path.splitFile().ext == ".nim":
       tryExec nimc & " doc " &
-        "--git.url:https://github.com/status-im/nim-chronos --git.commit:master --outdir:docs/book/api/chronos/apps/http " &
+        "--git.url:https://github.com/coreyleavitt/tonalli --git.commit:master --outdir:docs/book/api/tonalli/apps/http " &
         item.path

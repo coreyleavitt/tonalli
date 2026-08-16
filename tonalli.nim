@@ -10,5 +10,5 @@
 ##
 ## See https://status-im.github.io/nim-chronos/ for documentation
 
-import chronos/[asyncloop, asyncsync, handles, transport, timer, debugutils]
+import tonalli/[asyncloop, asyncsync, handles, transport, timer, debugutils]
 export asyncloop, asyncsync, handles, transport, timer, debugutils

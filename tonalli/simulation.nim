@@ -29,7 +29,7 @@
 
 import std/[deques, options, os, strutils, tables]
 import unittest2
-import ../chronos
+import ../tonalli
 import ./internal/simengine
 import ./internal/simclock
 
