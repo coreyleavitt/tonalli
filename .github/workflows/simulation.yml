@@ -89,7 +89,7 @@ jobs:
           path-type: inherit
 
       - name: Run the fixed-seed identity fixture
-        shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+        shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
         run: |
           nim c -d:debug -d:chronosDebug -d:useSysAssert -d:useGcAssert \
             -d:chronosSimulation -d:chronosFutureTracking --threads:on --mm:refc \
