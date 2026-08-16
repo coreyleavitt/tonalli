@@ -4,7 +4,7 @@ Tonalli is a hard fork of [nim-chronos](https://github.com/status-im/nim-chronos
 
 ## Relationship to chronos
 
-Tonalli is a friendly fork -- chronos remains the upstream merge source, and targeted fixes flow back upstream when they apply there too (status-im/nim-chronos#703 merged; status-im/nim-chronos#702 open). Module names are still `chronos*` for now; renames to `tonalli*` are staged for later and have not happened yet, so the usage examples below are accurate as written.
+Tonalli is a friendly fork -- chronos remains the upstream merge source, and targeted fixes flow back upstream when they apply there too. Module names are still `chronos*` for now; renames to `tonalli*` are staged for later and have not happened yet, so the usage examples below are accurate as written.
 
 ## Introduction
 
