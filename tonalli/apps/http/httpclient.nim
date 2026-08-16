@@ -1185,8 +1185,8 @@ proc prepareRequest(request: HttpClientRequestRef): string =
   template hasChunkedEncoding(request: HttpClientRequestRef): bool =
     toLowerAscii(request.headers.getString(TransferEncodingHeader)).endsWith("chunked")
 
-  # We use ChronosIdent as `User-Agent` string if its not set.
-  discard request.headers.hasKeyOrPut(UserAgentHeader, ChronosIdent)
+  # We use TonalliIdent as `User-Agent` string if its not set.
+  discard request.headers.hasKeyOrPut(UserAgentHeader, TonalliIdent)
   if request.meth == MethodConnect:
     # For CONNECT we must use authority form
     discard request.headers.hasKeyOrPut(HostHeader, request.address.id)

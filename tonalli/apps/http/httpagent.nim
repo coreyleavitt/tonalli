@@ -12,16 +12,16 @@
 import strutils
 
 const
-  ChronosName* = "nim-chronos"
+  TonalliName* = "tonalli"
     ## Project name string
-  ChronosMajor* {.intdefine.}: int = 4
-    ## Major number of Chronos' version.
-  ChronosMinor* {.intdefine.}: int = 4
-    ## Minor number of Chronos' version.
-  ChronosPatch* {.intdefine.}: int = 0
-    ## Patch number of Chronos' version.
-  ChronosVersion* = $ChronosMajor & "." & $ChronosMinor & "." & $ChronosPatch
-    ## Version of Chronos as a string.
-  ChronosIdent* = "$1/$2 ($3/$4)" % [ChronosName, ChronosVersion, hostCPU,
+  TonalliMajor* {.intdefine.}: int = 4
+    ## Major number of Tonalli's version.
+  TonalliMinor* {.intdefine.}: int = 4
+    ## Minor number of Tonalli's version.
+  TonalliPatch* {.intdefine.}: int = 0
+    ## Patch number of Tonalli's version.
+  TonalliVersion* = $TonalliMajor & "." & $TonalliMinor & "." & $TonalliPatch
+    ## Version of Tonalli as a string.
+  TonalliIdent* = "$1/$2 ($3/$4)" % [TonalliName, TonalliVersion, hostCPU,
                                      hostOS]
     ## Project ident name for networking services
