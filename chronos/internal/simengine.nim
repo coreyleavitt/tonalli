@@ -136,7 +136,8 @@ type
   SimFault* {.pure.} = enum
     ## `IoOutcomePoint.faults`'s full membership, finalized across S11b/
     ## S12b's fault-injection RED phases (RFC 0003 3.3's slice table).
-    ## `Reset` is a recv-side choice (S11b/S12b): the local read fails,
+    ## `Reset` is legal on every stream read or write, the bare-fd
+    ## fallbacks, and a datagram read: the local operation fails with
     ## the same real `OSErrorCode` a real platform's ECONNRESET-after-
     ## ICMP-unreachable would surface (`simFaultToError`). `Drop`/
     ## `Duplicate`/`Reorder` (S12b, datagram-only so far) are write-side

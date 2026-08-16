@@ -412,12 +412,12 @@ type SimFault* {.pure.} = enum
 A scripted `decideIo` closure returns a fault instead of an `Ok`
 outcome to inject one of these into a live `SimNet` endpoint's I/O:
 
-- **`Reset`** is a recv-side fault, legal on both stream and datagram
-  reads: the local read fails with the same `OSErrorCode` a real
+- **`Reset`** is legal on stream reads and writes and on datagram
+  reads: the local operation fails with the same `OSErrorCode` a real
   platform's ECONNRESET-after-ICMP-unreachable would surface
   (`simFaultToError`), reached through the exact same
   `isConnResetError`/`setReadError`/`handleError` path a real error
-  takes.
+  takes (a stream write sees it as the real write-eof handling).
 - **`Drop`**, **`Duplicate`**, and **`Reorder`** are datagram-only,
   write-side faults: real UDP never fails a send over packet loss, so
   each is intercepted by name in `simDatagramIo`'s write branch before
@@ -430,10 +430,11 @@ outcome to inject one of these into a live `SimNet` endpoint's I/O:
   (a no-op back-of-queue delivery if nothing was pending yet).
 
 Every `IoOutcomePoint` carries the legal fault set for that specific
-operation (`{}` for a stream write, `{Reset}` for a datagram read,
-`{Drop, Duplicate, Reorder}` for a datagram write, and so on), so a
-scripted oracle only ever needs to handle the faults that operation can
-actually raise.
+operation (`{Reset}` for a stream read or write, `{Reset}` for a
+datagram read, `{Drop, Duplicate, Reorder}` for a datagram write), and
+`decideIo`'s answer is validated against that menu: a fault outside it
+is a `ProtocolViolation`, so a scripted oracle only ever needs to
+handle the faults that operation can actually raise.
 
 ## Ghost ledgers
 
@@ -598,14 +599,17 @@ reach its caller unchanged. Three things can happen to it:
   this boundary (a genuine unrecoverable condition, e.g. `raiseOsDefect`)
   is not this concern and re-raises unchanged.
 
-**Named in the RFC's design section, not yet wired in code as of this
-page:** `ThreadSignalPtr.fire`/`.wait` and `threadsync.waitSync` (RFC
-0003 section 3.2's typed-raises row) show no `chronosSimulation`
-awareness in `chronos/threadsync.nim` today. `asyncproc` spawning is
-covered indirectly, through `addProcess2`, which is barriered; direct
-`ThreadSignalPtr`/`waitSync` use under simulation is an open gap, not a
-documented guarantee -- recorded here so a test relying on it does not
-discover the gap by surprise.
+**Partially wired as of this page:** `ThreadSignalPtr.fire`/`.wait`/
+`.close` (RFC 0003 section 3.2's typed-raises row) are barriered
+indirectly -- each carries the sim-widened raises and reaches
+`register2`/`addReader2`/`addWriter2`, which refuse a real fd under a
+sim dispatcher -- though no sim test exercises them yet. The blocking
+variants `threadsync.waitSync`/`fireSync` show no `chronosSimulation`
+awareness at all (their raw `select()` path never touches the
+dispatcher). `asyncproc` spawning is covered indirectly, through
+`addProcess2`, which is barriered; `waitSync`/`fireSync` use under
+simulation is an open gap, not a documented guarantee -- recorded here
+so a test relying on it does not discover the gap by surprise.
 
 ## Performance
 
