@@ -142,7 +142,7 @@ task test_simulation, "Run the deterministic simulation suites":
       "tests/testsimclock", "tests/testsimengine", "tests/testsimloop",
       "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
       "tests/testsimstream", "tests/testsimnet", "tests/testsimdatagram",
-      "tests/testsimproducer", "tests/testsimledger",
+      "tests/testsimproducer", "tests/testsimledger", "tests/testsimhttp",
     ]
 
     run simArgs & " --mm:refc", "tests/testall"
@@ -194,7 +194,7 @@ task check_windows, "Windows parity: semantic-check the library surface (fork is
     "tests/testsimclock", "tests/testsimengine", "tests/testsimloop",
     "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
     "tests/testsimstream", "tests/testsimnet", "tests/testsimdatagram",
-    "tests/testsimproducer", "tests/testsimledger",
+    "tests/testsimproducer", "tests/testsimledger", "tests/testsimhttp",
   ]
   for t in simLeafTests:
     exec nimc & " check " & winCfg &

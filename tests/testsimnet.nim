@@ -32,6 +32,7 @@ when defined(chronosSimulation) and compileOption("threads") and
   import results
   import ../chronos
   import ../chronos/simulation
+  import ../chronos/streams/asyncstream
 
   type
     ProbeOutcome = object
@@ -318,6 +319,152 @@ when defined(chronosSimulation) and compileOption("threads") and
       outcome = ProbeOutcome(ok: false, msg: "unexpected raise: " & exc.msg)
     probeChan.send(outcome)
 
+  proc probeAsyncStreamRoundTripsOverSimTransport() {.thread.} =
+    ## Finding 7a's first leg (RFC 0003 fork issue #19 workstream 2's
+    ## coverage review): `chronos/streams/asyncstream.nim`'s 8 read-side
+    ## and 1 write-side `SimBarrierError`/`SimEngineError` absorption
+    ## clauses are compiled under `-d:chronosSimulation` but no existing
+    ## test ever wraps an `AsyncStreamReader`/`AsyncStreamWriter` around a
+    ## `SimNet` transport - this proves the wrap itself works under sim,
+    ## ahead of the next probe driving one absorption clause for real.
+    var outcome = ProbeOutcome(ok: true)
+    setThreadDispatcher(newSimDispatcher())
+    const payload = "hello-sim-stream"
+
+    proc body() {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError, AsyncStreamError]).} =
+      let net = simNet()
+      let address = initTAddress("127.0.0.1:0")
+      let server = net.listenStream(address)
+      let acceptFut = server.accept()
+      let client = await net.connectStream(address)
+      let serverTransp = await acceptFut
+      let wstream = newAsyncStreamWriter(client)
+      let rstream = newAsyncStreamReader(serverTransp)
+      let writeFut = wstream.write(payload)
+      var buf = newSeq[byte](len(payload))
+      await rstream.readExactly(addr buf[0], len(buf))
+      await writeFut
+      if toStr(buf) != payload:
+        outcome = ProbeOutcome(ok: false,
+          msg: "round trip mismatch: got " & toStr(buf))
+      await wstream.finish()
+      await wstream.closeWait()
+      await rstream.closeWait()
+      await client.closeWait()
+      await serverTransp.closeWait()
+
+    try:
+      waitFor body()
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false, msg: "unexpected raise: " & exc.msg)
+    probeChan.send(outcome)
+
+  proc illegalReadIoOracle(): SimOracle =
+    ## Legal on `Write` (passes the whole request through, `defaultDecideIo`'s
+    ## own answer), always out-of-range on `Read` (`maxBytes + 1`, `simDecideIo`'s
+    ## own validated range is `1..maxBytes` - RFC 0003 3.5) - so a write lands
+    ## real bytes in the peer's inbound queue (arming the read's `decideIo`
+    ## call at all - `simStreamIo`'s "nothing queued, nothing to decide"
+    ## short-circuit otherwise skips it entirely) and the read that then
+    ## drains it hits the illegal answer deterministically.
+    proc decideIo(cp: IoOutcomePoint): Result[IoDecision, SimOracleError]
+        {.gcsafe, raises: [].} =
+      case cp.op
+      of SimIoOp.Write:
+        ok(IoDecision(outcome: SimIoOutcome.Ok, bytes: cp.maxBytes))
+      of SimIoOp.Read:
+        ok(IoDecision(outcome: SimIoOutcome.Ok, bytes: cp.maxBytes + 1))
+    newSimOracle(defaultDecideBatch, decideIo, defaultDecideTime)
+
+  proc probeAsyncStreamAbsorbsIllegalReadDecisionAsReadError() {.thread.} =
+    ## Finding 7a's second leg: an oracle that hands `simDecideIo` an
+    ## out-of-range `Read` answer raises `SimEngineError` (`ProtocolViolation`)
+    ## directly out of the transport's `readExactly` - one of the 8 read-side
+    ## absorption clauses this drives for real, converting it to
+    ## `AsyncStreamReadError` with the original `SimEngineError` chained as
+    ## `.parent`, never propagated as-is (`readExactlyImpl`,
+    ## `chronos/streams/asyncstream.nim` ~line 704).
+    var outcome = ProbeOutcome(ok: true)
+    setThreadDispatcher(newSimDispatcher(oracle = illegalReadIoOracle()))
+
+    proc body() {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError, AsyncStreamError]).} =
+      let net = simNet()
+      let address = initTAddress("127.0.0.1:0")
+      let server = net.listenStream(address)
+      let acceptFut = server.accept()
+      let client = await net.connectStream(address)
+      let serverTransp = await acceptFut
+      let wstream = newAsyncStreamWriter(client)
+      let rstream = newAsyncStreamReader(serverTransp)
+      await wstream.write("data")
+      var buf = newSeq[byte](4)
+      try:
+        await rstream.readExactly(addr buf[0], 4)
+        outcome = ProbeOutcome(ok: false,
+          msg: "readExactly() did not surface the illegal decideIo answer")
+      except AsyncStreamReadError as exc:
+        if exc.parent.isNil or not (exc.parent of SimEngineError):
+          outcome = ProbeOutcome(ok: false,
+            msg: "AsyncStreamReadError.parent was not a SimEngineError")
+      await wstream.finish()
+      await wstream.closeWait()
+      await rstream.closeWait()
+      await client.closeWait()
+      await serverTransp.closeWait()
+
+    try:
+      waitFor body()
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false, msg: "unexpected raise: " & exc.msg)
+    probeChan.send(outcome)
+
+  proc illegalWriteIoOracle(): SimOracle =
+    ## The write-side twin of `illegalReadIoOracle`: legal on `Read`, always
+    ## out-of-range on `Write`, so the write-side's single absorption clause
+    ## (`writeImpl`, `chronos/streams/asyncstream.nim` ~line 1083) is
+    ## reachable on the very first write, with no peer-side read needed to
+    ## arm it first.
+    proc decideIo(cp: IoOutcomePoint): Result[IoDecision, SimOracleError]
+        {.gcsafe, raises: [].} =
+      case cp.op
+      of SimIoOp.Write:
+        ok(IoDecision(outcome: SimIoOutcome.Ok, bytes: cp.maxBytes + 1))
+      of SimIoOp.Read:
+        ok(IoDecision(outcome: SimIoOutcome.Ok, bytes: cp.maxBytes))
+    newSimOracle(defaultDecideBatch, decideIo, defaultDecideTime)
+
+  proc probeAsyncStreamAbsorbsIllegalWriteDecisionAsWriteError() {.thread.} =
+    ## Finding 7a's write-side leg: the single write-side absorption clause,
+    ## a distinct call site from the 8 read-side ones above.
+    var outcome = ProbeOutcome(ok: true)
+    setThreadDispatcher(newSimDispatcher(oracle = illegalWriteIoOracle()))
+
+    proc body() {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError, AsyncStreamError]).} =
+      let net = simNet()
+      let address = initTAddress("127.0.0.1:0")
+      let server = net.listenStream(address)
+      let acceptFut = server.accept()
+      let client = await net.connectStream(address)
+      let serverTransp = await acceptFut
+      let wstream = newAsyncStreamWriter(client)
+      try:
+        await wstream.write("data")
+        outcome = ProbeOutcome(ok: false,
+          msg: "write() did not surface the illegal decideIo answer")
+      except AsyncStreamWriteError as exc:
+        if exc.parent.isNil or not (exc.parent of SimEngineError):
+          outcome = ProbeOutcome(ok: false,
+            msg: "AsyncStreamWriteError.parent was not a SimEngineError")
+      await wstream.closeWait()
+      await client.closeWait()
+      await serverTransp.closeWait()
+
+    try:
+      waitFor body()
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false, msg: "unexpected raise: " & exc.msg)
+    probeChan.send(outcome)
+
   suite "SimNet stream endpoints":
     test "listenStream/connectStream mint a connected pair; pipelined echo passes under sim":
       let outcome = runProbe(probeSimPipelinedEcho)
@@ -350,5 +497,21 @@ when defined(chronosSimulation) and compileOption("threads") and
 
     test "pipelined echo passes under RandomOracle sweeps, partial completions included":
       let outcome = runProbe(probeSweepPipelinedEchoUnderPartialCompletions)
+      checkpoint outcome.msg
+      check outcome.ok
+
+  suite "AsyncStream over SimNet transports":
+    test "AsyncStreamReader/Writer round-trip over a sim transport pair":
+      let outcome = runProbe(probeAsyncStreamRoundTripsOverSimTransport)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "an illegal read decideIo answer is absorbed into AsyncStreamReadError":
+      let outcome = runProbe(probeAsyncStreamAbsorbsIllegalReadDecisionAsReadError)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "an illegal write decideIo answer is absorbed into AsyncStreamWriteError":
+      let outcome = runProbe(probeAsyncStreamAbsorbsIllegalWriteDecisionAsWriteError)
       checkpoint outcome.msg
       check outcome.ok

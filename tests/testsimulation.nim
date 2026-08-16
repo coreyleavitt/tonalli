@@ -507,6 +507,94 @@ when defined(chronosSimulation) and compileOption("threads"):
         msg: "unexpected " & $exc.name & ": " & exc.msg)
     probeChan.send(outcome)
 
+  proc probeDefectEnvelopedEngineErrorRecoversItsKind() {.thread.} =
+    ## Findings 17/18: the Defect-envelope recovery path is already
+    ## pinned for `SimBarrierError` (`probeDefectEnvelopedBarrierHitClassifiedAsBarrierHit`
+    ## above) and for a planted `SimLedgerError`
+    ## (`tests/testsimledger.nim`) - this is the remaining corner, a
+    ## genuine `SimEngineError` crossing the same `raises: []`-typed
+    ## boundary and being recovered to its own carried `SimFailureKind`
+    ## (never folded into `BarrierHit` or `BodyError`), the same
+    ## `raiseAsDefect` idiom, mirroring a production `SimEngineError`
+    ## boundary rather than the barrier one.
+    var outcome = ProbeOutcome(ok: true)
+    try:
+      simulate(seed = 13'u64):
+        let disp = getThreadDispatcher()
+        let fd = disp.mintSimFd()
+        discard addReader2(fd, proc(arg: pointer) {.gcsafe, raises: [].} =
+          try:
+            raiseSimEngineError(SimFailureKind.ProtocolViolation,
+              "test callback touch site")
+          except SimEngineError as exc:
+            raiseAsDefect(exc, "test: callback hit a sim engine error"))
+        discard disp.simMarkReady(fd, SimReadyDirection.Read)
+        await sleepAsync(0.milliseconds)
+      outcome = ProbeOutcome(ok: false,
+        msg: "simulate() did not propagate the defect-enveloped engine error")
+    except SimulationError as exc:
+      if exc.kind != SimFailureKind.ProtocolViolation:
+        outcome = ProbeOutcome(ok: false, msg: "wrong kind: " & $exc.kind)
+      elif exc.parent.isNil or not (exc.parent of SimEngineError):
+        outcome = ProbeOutcome(ok: false,
+          msg: "parent was not a SimEngineError")
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "wrong exception type escaped simulate(): " & exc.msg)
+    probeChan.send(outcome)
+
+  proc probePlainDefectWithNilParentReraisesUnchanged() {.thread.} =
+    ## Findings 17/18's other corner: `runSimulation`'s `except Defect`
+    ## handler only recovers a Defect whose `.parent` is one of the three
+    ## typed sim exceptions - a plain library Defect (`raiseAssert`,
+    ## `.parent` nil) must fall through its `elif` chain unchanged and
+    ## escape `simulate()` as itself, never reclassified as a
+    ## `SimulationError`.
+    var outcome = ProbeOutcome(ok: true)
+    try:
+      simulate(seed = 14'u64):
+        raiseAssert "plain defect from body, not sim-related"
+      outcome = ProbeOutcome(ok: false,
+        msg: "simulate() did not run the body")
+    except AssertionDefect:
+      discard
+    except SimulationError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "a nil-parent Defect was reclassified as SimulationError " &
+             "kind " & $exc.kind)
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "wrong exception type escaped simulate(): " & exc.msg)
+    probeChan.send(outcome)
+
+  proc probeDefectWithNonSimParentReraisesUnchanged() {.thread.} =
+    ## The same fall-through branch's other half: a Defect whose
+    ## `.parent` is non-nil but not one of `SimLedgerError`/
+    ## `SimEngineError`/`SimBarrierError` - an ordinary `raiseAsDefect`
+    ## envelope around an unrelated `CatchableError`, the shape a real
+    ## non-sim `raiseAsDefect` call site (`chronos/internal/
+    ## asyncengine.nim`'s own production uses) would produce even under
+    ## simulation. Must also fall through unchanged.
+    var outcome = ProbeOutcome(ok: true)
+    try:
+      simulate(seed = 15'u64):
+        let parentExc = newException(ValueError, "not a sim exception")
+        raiseAsDefect(parentExc, "test: unrelated Defect envelope")
+      outcome = ProbeOutcome(ok: false,
+        msg: "simulate() did not run the body")
+    except Defect as exc:
+      if exc.parent.isNil or not (exc.parent of ValueError):
+        outcome = ProbeOutcome(ok: false,
+          msg: "the wrong parent survived the re-raise")
+    except SimulationError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "a non-sim-parent Defect was reclassified as SimulationError " &
+             "kind " & $exc.kind)
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "wrong exception type escaped simulate(): " & exc.msg)
+    probeChan.send(outcome)
+
   suite "simulate() harness core":
     test "an empty body round-trips the real dispatcher":
       let outcome = runProbe(probeEmptyBodyRoundTrips)
@@ -590,5 +678,21 @@ when defined(chronosSimulation) and compileOption("threads"):
 
     test "simulateWithBudgetAndLedger compiles and runs":
       let outcome = runProbe(probeBudgetAndLedgerCombinationCompilesAndRuns)
+      checkpoint outcome.msg
+      check outcome.ok
+
+  suite "Defect envelope recovery":
+    test "a Defect-enveloped SimEngineError recovers its own SimFailureKind":
+      let outcome = runProbe(probeDefectEnvelopedEngineErrorRecoversItsKind)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "a plain Defect with a nil parent escapes simulate() unchanged":
+      let outcome = runProbe(probePlainDefectWithNilParentReraisesUnchanged)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "a Defect with a non-sim parent escapes simulate() unchanged":
+      let outcome = runProbe(probeDefectWithNonSimParentReraisesUnchanged)
       checkpoint outcome.msg
       check outcome.ok
