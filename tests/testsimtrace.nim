@@ -235,3 +235,93 @@ suite "sim trace reader":
     expect SimTraceReadError:
       discard readSimTrace(path)
     removeFile(path)
+
+  const validHeaderLine =
+    "{\"trace\":\"chronos-sim\",\"v\":1,\"seed\":1,\"commit\":\"\"," &
+    "\"config\":\"\"}\n"
+
+  test "an empty trace file is refused":
+    let path = getTempDir() / "chronos-simtrace-read-empty.ndjson"
+    writeFile(path, "")
+    expect SimTraceReadError:
+      discard readSimTrace(path)
+    removeFile(path)
+
+  test "a record missing a required field is refused":
+    let path = getTempDir() / "chronos-simtrace-read-missingfield.ndjson"
+    writeFile(path, validHeaderLine &
+      "{\"i\":0,\"kind\":\"time\",\"decision\":{\"advanceTo\":100}}\n")
+    expect SimTraceReadError:
+      discard readSimTrace(path)
+    removeFile(path)
+
+  test "an unterminated string field in the header is refused":
+    let path = getTempDir() / "chronos-simtrace-read-unterminated.ndjson"
+    writeFile(path,
+      "{\"trace\":\"chronos-sim\",\"v\":1,\"seed\":1,\"commit\":\"abc\n")
+    expect SimTraceReadError:
+      discard readSimTrace(path)
+    removeFile(path)
+
+  test "a digest of the wrong length is refused":
+    let path = getTempDir() / "chronos-simtrace-read-digestlen.ndjson"
+    writeFile(path, validHeaderLine &
+      "{\"i\":0,\"kind\":\"time\",\"digest\":\"deadbeef\"," &
+      "\"decision\":{\"advanceTo\":100}}\n")
+    expect SimTraceReadError:
+      discard readSimTrace(path)
+    removeFile(path)
+
+  test "a digest with non-hex characters is refused":
+    let path = getTempDir() / "chronos-simtrace-read-digesthex.ndjson"
+    writeFile(path, validHeaderLine &
+      "{\"i\":0,\"kind\":\"time\",\"digest\":\"deadbeefdeadbeeg\"," &
+      "\"decision\":{\"advanceTo\":100}}\n")
+    expect SimTraceReadError:
+      discard readSimTrace(path)
+    removeFile(path)
+
+  test "a non-numeric event id is refused":
+    let path = getTempDir() / "chronos-simtrace-read-badeventid.ndjson"
+    writeFile(path, validHeaderLine &
+      "{\"i\":0,\"kind\":\"batch\",\"digest\":\"0000000000000000\"," &
+      "\"decision\":{\"order\":[\"exyz\"]}}\n")
+    expect SimTraceReadError:
+      discard readSimTrace(path)
+    removeFile(path)
+
+  test "a negative event id is refused":
+    let path = getTempDir() / "chronos-simtrace-read-negeventid.ndjson"
+    writeFile(path, validHeaderLine &
+      "{\"i\":0,\"kind\":\"batch\",\"digest\":\"0000000000000000\"," &
+      "\"decision\":{\"order\":[\"e-5\"]}}\n")
+    expect SimTraceReadError:
+      discard readSimTrace(path)
+    removeFile(path)
+
+  test "an unrecognized decision kind is refused":
+    let path = getTempDir() / "chronos-simtrace-read-badkind.ndjson"
+    writeFile(path, validHeaderLine &
+      "{\"i\":0,\"kind\":\"bogus\",\"digest\":\"0000000000000000\"," &
+      "\"decision\":{}}\n")
+    expect SimTraceReadError:
+      discard readSimTrace(path)
+    removeFile(path)
+
+  test "an out-of-range decision index is refused":
+    let path = getTempDir() / "chronos-simtrace-read-bigindex.ndjson"
+    writeFile(path, validHeaderLine &
+      "{\"i\":99999999999,\"kind\":\"time\",\"digest\":\"0000000000000000\"," &
+      "\"decision\":{\"advanceTo\":100}}\n")
+    expect SimTraceReadError:
+      discard readSimTrace(path)
+    removeFile(path)
+
+  test "an out-of-range io byte count is refused":
+    let path = getTempDir() / "chronos-simtrace-read-bigbytes.ndjson"
+    writeFile(path, validHeaderLine &
+      "{\"i\":0,\"kind\":\"io\",\"digest\":\"0000000000000000\"," &
+      "\"decision\":{\"outcome\":\"ok\",\"bytes\":99999999999}}\n")
+    expect SimTraceReadError:
+      discard readSimTrace(path)
+    removeFile(path)

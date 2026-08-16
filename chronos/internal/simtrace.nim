@@ -256,13 +256,31 @@ proc extractIntField(line, key: string): int64
     raise newException(SimTraceReadError,
       "malformed numeric field \"" & key & "\" in: " & line)
 
+proc extractBoundedIntField(line, key: string): int
+                            {.raises: [SimTraceReadError].} =
+  ## `"i"` (a decision index) and `"bytes"` (a byte count) are never
+  ## negative and never legitimately astronomical - reject a value
+  ## outside `0 .. int32.high` before narrowing to `int`, so a
+  ## malformed trace surfaces as `SimTraceReadError` on every target
+  ## width instead of an uncatchable `RangeDefect` on a 32-bit one
+  ## (this fork runs i386 CI legs).
+  let value = extractIntField(line, key)
+  if value < 0 or value > int64(int32.high):
+    raise newException(SimTraceReadError,
+      "field \"" & key & "\" out of range: " & $value & " in: " & line)
+  int(value)
+
 proc parseEventId(text: string): SimEventId {.raises: [SimTraceReadError].} =
   if text.len < 2 or text[0] != 'e':
     raise newException(SimTraceReadError, "malformed event id: " & text)
-  try:
-    SimEventId(uint64(parseBiggestInt(text[1 .. ^1])))
-  except ValueError:
+  let value =
+    try:
+      parseBiggestInt(text[1 .. ^1])
+    except ValueError:
+      raise newException(SimTraceReadError, "malformed event id: " & text)
+  if value < 0:
     raise newException(SimTraceReadError, "malformed event id: " & text)
+  SimEventId(uint64(value))
 
 proc extractEventIdList(line: string): seq[SimEventId]
                         {.raises: [SimTraceReadError].} =
@@ -315,7 +333,7 @@ proc parseSimTraceHeader*(line: string): SimTraceHeader
 
 proc parseSimTraceRecord*(line: string): SimTraceRecord
                           {.raises: [SimTraceReadError].} =
-  let index = int(extractIntField(line, "i"))
+  let index = extractBoundedIntField(line, "i")
   let digest = parseHexDigest(extractStringField(line, "digest"))
   case extractStringField(line, "kind")
   of "time":
@@ -331,7 +349,7 @@ proc parseSimTraceRecord*(line: string): SimTraceRecord
     if outcome == "ok":
       SimTraceRecord(index: index, digest: digest,
                       kind: SimTraceRecordKind.Io, outcome: outcome,
-                      bytes: int(extractIntField(line, "bytes")), fault: "")
+                      bytes: extractBoundedIntField(line, "bytes"), fault: "")
     else:
       SimTraceRecord(index: index, digest: digest,
                       kind: SimTraceRecordKind.Io, outcome: outcome,
