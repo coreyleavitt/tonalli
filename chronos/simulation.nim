@@ -698,8 +698,8 @@ type
     ## `Engine` arm of `failureKind`'s own case, rather than sitting
     ## beside it with a prose-only "meaningful only when Engine" caveat:
     ## a `Ledger` failure has no `SimFailureKind` of its own to report,
-    ## and the compiler, not a docstring, now enforces that a caller
-    ## checks `failureKind` before ever reaching for `kind`.
+    ## and a wrong-branch access now raises `FieldDefect` at the read
+    ## instead of returning a stale zero value guarded only by prose.
     seed*: uint64
     tracePath*: string
     case passed*: bool

@@ -246,18 +246,25 @@ type
     seed*: uint64
     tracePath*: string
     case passed*: bool
-    of true: discard
+    of true:
+      discard
     of false:
-      failureKind*: SimSeedFailureKind
-      kind*: SimFailureKind
       msg*: string
+      case failureKind*: SimSeedFailureKind
+      of SimSeedFailureKind.Engine:
+        kind*: SimFailureKind
+      of SimSeedFailureKind.Ledger:
+        discard
 ```
 
 `failureKind` distinguishes the two by type, the same way a raised
 `SimulationError`/`SimLedgerError` already is: `Engine` names a
-`SimulationError`-shaped failure (`kind` is meaningful, as before);
-`Ledger` names a `SimLedgerError` (`kind` holds its zero value,
-`SimFailureKind.BodyError`, and is not meaningful).
+`SimulationError`-shaped failure and carries `kind`; `Ledger` names a
+`SimLedgerError` and carries no `kind` at all -- the field exists only
+under the `Engine` arm, so reading it on a `Ledger` outcome raises
+`FieldDefect` at the access instead of returning a stale zero value
+guarded by nothing but prose. Check `failureKind` first, the way
+`reportSweep` does.
 
 `collectSweepSeeds` is the aggregation loop on its own, with no
 `unittest2` dependency, for a caller that wants the raw outcomes without
