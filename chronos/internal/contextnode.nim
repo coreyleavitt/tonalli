@@ -1,12 +1,10 @@
 #
-#                     Chronos
+#                     Tonalli
 #
-#  (c) Copyright 2015 Dominik Picheta
-#  (c) Copyright 2018-2025 Status Research & Development GmbH
+#        (c) Copyright 2026-Present Corey Leavitt
 #
-#                Licensed under either of
-#    Apache License, version 2.0, (LICENSE-APACHEv2)
-#                MIT license (LICENSE-MIT)
+#    Licensed under the Apache License, Version 2.0
+#               (LICENSE-APACHEv2)
 
 ## Base type of the continuation-local binding chain — split into its own
 ## dependency-free leaf module so `chronos/futures.nim` can import it (for

@@ -1,10 +1,8 @@
-#                Chronos Test Suite
-#            (c) Copyright 2018-Present
-#         Status Research & Development GmbH
+#                Tonalli Test Suite
+#        (c) Copyright 2026-Present Corey Leavitt
 #
-#              Licensed under either of
-#  Apache License, version 2.0, (LICENSE-APACHEv2)
-#              MIT license (LICENSE-MIT)
+#    Licensed under the Apache License, Version 2.0
+#               (LICENSE-APACHEv2)
 
 ## This file pins chronos's chronosDebug context-corruption detection net
 ## layer by layer: `withRestoredContext`'s identity-arm postcondition
