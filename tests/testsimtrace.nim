@@ -1,10 +1,9 @@
-#                Chronos Test Suite
-#            (c) Copyright 2026-Present
-#         Status Research & Development GmbH
+#                  Tonalli Test Suite
 #
-#              Licensed under either of
-#  Apache License, version 2.0, (LICENSE-APACHEv2)
-#              MIT license (LICENSE-MIT)
+#        (c) Copyright 2026-Present Corey Leavitt
+#
+#    Licensed under the Apache License, Version 2.0
+#               (LICENSE-APACHEv2)
 
 ## Tests for `chronos/internal/simtrace.nim`: the canonical id/digest
 ## stringifications (RFC 0003 3.3.1), the pinned FNV-1a `digestOf` grammar

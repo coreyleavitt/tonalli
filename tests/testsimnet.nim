@@ -1,10 +1,9 @@
-#                Chronos Test Suite
-#            (c) Copyright 2026-Present
-#         Status Research & Development GmbH
+#                  Tonalli Test Suite
 #
-#              Licensed under either of
-#  Apache License, version 2.0, (LICENSE-APACHEv2)
-#              MIT license (LICENSE-MIT)
+#        (c) Copyright 2026-Present Corey Leavitt
+#
+#    Licensed under the Apache License, Version 2.0
+#               (LICENSE-APACHEv2)
 
 ## Tests for `chronos/simulation.nim`'s `SimNet` (RFC 0003 3.2/3.8,
 ## slice S11a): `simNet()`, `listenStream`/`connectStream` minting an

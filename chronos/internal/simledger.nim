@@ -1,11 +1,10 @@
 #
-#                     Chronos
+#                     Tonalli
 #
-#  (c) Copyright 2026-Present Status Research & Development GmbH
+#        (c) Copyright 2026-Present Corey Leavitt
 #
-#                Licensed under either of
-#    Apache License, version 2.0, (LICENSE-APACHEv2)
-#                MIT license (LICENSE-MIT)
+#    Licensed under the Apache License, Version 2.0
+#               (LICENSE-APACHEv2)
 
 ## The D8 ghost-ledger laws (RFC 0003 3.9, slices S14/S15): callback
 ## conservation, future lifecycle, contextvar accounting, timer

@@ -1,11 +1,10 @@
 #
-#                     Chronos
+#                     Tonalli
 #
-#  (c) Copyright 2026-Present Status Research & Development GmbH
+#        (c) Copyright 2026-Present Corey Leavitt
 #
-#                Licensed under either of
-#    Apache License, version 2.0, (LICENSE-APACHEv2)
-#                MIT license (LICENSE-MIT)
+#    Licensed under the Apache License, Version 2.0
+#               (LICENSE-APACHEv2)
 
 ## Private mechanism backing the deterministic simulation substrate's
 ## dispatcher fork: the fd provenance table and its minting counter,

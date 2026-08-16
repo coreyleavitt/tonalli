@@ -1,10 +1,10 @@
-#                Chronos Benchmark Suite
-#            (c) Copyright 2021-Present
-#         Status Research & Development GmbH
 #
-#              Licensed under either of
-#  Apache License, version 2.0, (LICENSE-APACHEv2)
-#              MIT license (LICENSE-MIT)
+#                     Tonalli
+#
+#        (c) Copyright 2026-Present Corey Leavitt
+#
+#    Licensed under the Apache License, Version 2.0
+#               (LICENSE-APACHEv2)
 
 ## Cross-commit comparison harness.
 ##
