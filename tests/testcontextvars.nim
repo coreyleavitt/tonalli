@@ -8,7 +8,7 @@
 ## the `ContextVar[T]` key runtime. See chronos/contextvars.nim and
 ## docs/src/contextvars.md.
 ##
-## The one-way `chronosDebug` construction-lock suite lives in its own
+## The one-way `tonalliDebug` construction-lock suite lives in its own
 ## file, tests/testcontextvarslock.nim, precisely so that a permanent,
 ## process-lifetime lock on `newContextVar` doesn't impose an import
 ## order on this file relative to the other contextvars test files.
@@ -346,14 +346,14 @@ suite "contextvars (raw key): ambient value and withValue":
 # --- Binder contract + chain-state invariants --------------------------------
 # Verifies every `withValue` binder pushes exactly one chain node and
 # pops it on every exit path, via chainLen() and the chainBalance
-# counter. Both are debug-only (when defined(chronosDebug)); the test
+# counter. Both are debug-only (when defined(tonalliDebug)); the test
 # build defines it.
 
 let probeInt = newContextVar("probeInt", 0)
 
 suite "contextvars: binder contract":
 
-  when defined(chronosDebug):
+  when defined(tonalliDebug):
 
     test "binder pushes exactly one node and pops on normal exit":
       let baseline = chainLen()
@@ -632,8 +632,8 @@ type NoDollarPtr = ptr int
 
 static:
   doAssert not compiles((block:
-    var chronosProbeVal: NoDollarPtr
-    $chronosProbeVal)),
+    var probeVal: NoDollarPtr
+    $probeVal)),
     "control: NoDollarPtr must genuinely have no `$`, or the " &
     "placeholder-path test below is vacuous"
 

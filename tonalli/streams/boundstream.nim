@@ -47,7 +47,7 @@ type
   BoundedStreamRW* = BoundedStreamReader | BoundedStreamWriter
 
 const
-  BoundedBufferSize* = chronosStreamDefaultBufferSize
+  BoundedBufferSize* = tonalliStreamDefaultBufferSize
   BoundarySizeDefectMessage = "Boundary must not be empty array"
 
 template newBoundedStreamIncompleteError(): ref BoundedStreamError =

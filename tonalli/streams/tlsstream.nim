@@ -31,7 +31,7 @@ import ./asyncstream, ../transports/[stream, common]
 export asyncloop, asyncsync, asyncstream
 
 const
-  TLSSessionCacheBufferSize* = chronosTLSSessionCacheBufferSize
+  TLSSessionCacheBufferSize* = tonalliTLSSessionCacheBufferSize
 
 type
   TLSStreamKind {.pure.} = enum

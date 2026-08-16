@@ -174,5 +174,5 @@ suite "Asynchronous issues test suite":
         unregister2(AsyncFD(sockets[0])).isOk()
 
       discard osdefs.close(sockets[0])
-      when chronosEventEngine != "poll":
+      when tonalliEventEngine != "poll":
         discard osdefs.close(sockets[1])

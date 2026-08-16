@@ -12,7 +12,7 @@ import ../tonalli, ../tonalli/config
 
 suite "Asynchronous utilities test suite":
 
-  when chronosFutureTracking:
+  when tonalliFutureTracking:
     proc getCount(): uint =
       # This procedure counts number of Future[T] in double-linked list via list
       # iteration.
@@ -22,7 +22,7 @@ suite "Asynchronous utilities test suite":
       res
 
   test "Future clean and leaks test":
-    when chronosFutureTracking:
+    when tonalliFutureTracking:
       if pendingFuturesCount(WithoutCompleted) == 0'u:
         if pendingFuturesCount(OnlyCompleted) > 0'u:
           poll()
@@ -34,7 +34,7 @@ suite "Asynchronous utilities test suite":
       skip()
 
   test "FutureList basics test":
-    when chronosFutureTracking:
+    when tonalliFutureTracking:
       var fut1 = newFuture[void]()
       check:
         getCount() == 1'u
@@ -66,7 +66,7 @@ suite "Asynchronous utilities test suite":
       skip()
 
   test "FutureList async procedure test":
-    when chronosFutureTracking:
+    when tonalliFutureTracking:
       proc simpleProc() {.async.} =
         await sleepAsync(10.milliseconds)
 

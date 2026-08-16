@@ -16,7 +16,7 @@
 ## One deliberate addition beyond the real interface: `popFirstRejected`,
 ## a second dequeue template implementing a REJECTED shape (`copyMem` into
 ## a stack local, then `zeroMem` the vacated slot -- never routing the
-## vacate through `chronosMoveSink`). The shipped module never uses this;
+## vacate through `tonalliMoveSink`). The shipped module never uses this;
 ## it exists here only so the bmcCheck ghost-ownership model in
 ## `bmc_ghost.nim` has a second, structurally real (not hand-waved)
 ## implementation to falsify against the adopted `popFirst`. Both
@@ -36,7 +36,7 @@ type
     ## layer 4's job -- see `bmc_ghost.nim`'s module doc). `id` is the
     ## ghost model's only handle: a unique tag identifying which captured
     ## item currently occupies a slot, letting the ledger track ownership
-    ## per-id through `copyMem`/`zeroMem`/`chronosMoveSink` exactly as they
+    ## per-id through `copyMem`/`zeroMem`/`tonalliMoveSink` exactly as they
     ## operate on the real backing store.
     id*: int
 
@@ -94,14 +94,14 @@ proc grow[T](q: var CallbackQueue[T]) =
   q.head = 0'u
   q.tail = uint(n)
 
-proc addLast*[T](q: var CallbackQueue[T], item: chronosSink T) =
+proc addLast*[T](q: var CallbackQueue[T], item: tonalliSink T) =
   if isFullV(q.head, q.tail, q.data.len):
     grow(q)
   let idx = slotIndexV(q.tail, q.data.len)
   q.data[idx] = item
   inc q.tail
 
-proc addFirst*[T](q: var CallbackQueue[T], item: chronosSink T) =
+proc addFirst*[T](q: var CallbackQueue[T], item: tonalliSink T) =
   ## Sole caller: sentinel re-insertion at the front of an already-fully-
   ## drained batch -- never a general push-front, so no growth path here.
   doAssert not isFullV(q.head, q.tail, q.data.len),
@@ -113,22 +113,22 @@ proc addFirst*[T](q: var CallbackQueue[T], item: chronosSink T) =
 template popFirst*[T](q: var CallbackQueue[T]): T =
   ## The adopted shape. Fused dequeue: the moved-out value lands
   ## straight in the caller-frame local; the vacated slot is cleared by
-  ## `chronosMoveSink`'s own `wasMoved` semantics -- one transfer, same
+  ## `tonalliMoveSink`'s own `wasMoved` semantics -- one transfer, same
   ## step, no intermediate uncounted hop.
   doAssert q.tail != q.head, "CallbackQueue.popFirst(): queue is empty"
-  let chronosQueueIdx = slotIndexV(q.head, q.data.len)
+  let queueIdx = slotIndexV(q.head, q.data.len)
   inc q.head
-  chronosMoveSink(q.data[chronosQueueIdx])
+  tonalliMoveSink(q.data[queueIdx])
 
 template popFirstRejected*[T](q: var CallbackQueue[T]): T =
   ## The rejected shape: `copyMem` the slot's raw bytes into a fresh
   ## caller-frame local, then `zeroMem` the slot -- NEVER routed through
-  ## `chronosMoveSink`. Structurally real (not a hand-waved stand-in), so
+  ## `tonalliMoveSink`. Structurally real (not a hand-waved stand-in), so
   ## `bmc_ghost.nim` can falsify it mechanically rather than by prose alone.
   doAssert q.tail != q.head, "CallbackQueue.popFirst(): queue is empty"
-  let chronosQueueIdx = slotIndexV(q.head, q.data.len)
+  let queueIdx = slotIndexV(q.head, q.data.len)
   inc q.head
-  var chronosRejectedLocal: T
-  copyMem(addr chronosRejectedLocal, addr q.data[chronosQueueIdx], sizeof(T))
-  zeroMem(addr q.data[chronosQueueIdx], sizeof(T))
-  chronosRejectedLocal
+  var rejectedLocal: T
+  copyMem(addr rejectedLocal, addr q.data[queueIdx], sizeof(T))
+  zeroMem(addr q.data[queueIdx], sizeof(T))
+  rejectedLocal

@@ -13,7 +13,7 @@
 ## real write-barrier/move/raw-memory-op WOULD do to a refcount:
 ##
 ##   * A tracked transfer (`addLast`/`addFirst`'s slot commit; `popFirst`'s
-##     `chronosMoveSink` vacate) moves the SAME ledger entry to a new
+##     `tonalliMoveSink` vacate) moves the SAME ledger entry to a new
 ##     location -- the count never changes, only where it is attributed.
 ##   * `popFirstRejected`'s `copyMem` creates a usable alias WITHOUT
 ##     incrementing the ledger (raw memory, no barrier), and its `zeroMem`
@@ -61,7 +61,7 @@ type
     tlCallerLocal ## a properly tracked (moved-into) caller-frame local claims it
 
   DequeueShape = enum
-    dsFused          ## the adopted shape: chronosMoveSink-fused vacate
+    dsFused          ## the adopted shape: tonalliMoveSink-fused vacate
     dsRejectedCopyMem ## the rejected shape: copyMem + zeroMem vacate
 
   Ledger = object
@@ -99,9 +99,9 @@ template guardAsserts(where: string, body: untyped): untyped =
   ## "no assert fires" a genuine, BMC-falsifiable claim.
   try:
     body
-  except Defect as chronosVerifyDefect:
+  except Defect as verifyDefect:
     raise newException(ValueError,
-      where & ": assertion fired -- " & chronosVerifyDefect.msg)
+      where & ": assertion fired -- " & verifyDefect.msg)
 
 proc captureAndSlot(s: var GhostState, id: int) =
   s.ledger.trueRefCount[id] = 1

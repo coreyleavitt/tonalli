@@ -27,19 +27,19 @@ let testSuccessMarker = getEnv("NIM_TEST_SUCCESS_MARKER", "")
 let testArguments =
   when defined(windows):
     [
-      "-d:debug -d:chronosDebug -d:useSysAssert -d:useGcAssert",
+      "-d:debug -d:tonalliDebug -d:useSysAssert -d:useGcAssert",
       "-d:release",
     ]
   else:
     [
-      "-d:debug -d:chronosDebug -d:useSysAssert -d:useGcAssert",
-      "-d:debug -d:chronosDebug -d:chronosEventEngine=poll -d:useSysAssert -d:useGcAssert",
-      "-d:debug -d:chronosDebug -d:chronosPreviewV5 -d:useSysAssert -d:useGcAssert",
-      "-d:release -d:chronosPreviewV5",
-      # Pins the vacated-slot canary's no-sink branch (chronosUseSink
-      # gates `chronosMoveSink`'s identity-passthrough fallback) on
-      # every toolchain, not just whichever default chronosUseSink picks.
-      "-d:debug -d:chronosDebug -d:chronosUseSink=false -d:useSysAssert -d:useGcAssert",
+      "-d:debug -d:tonalliDebug -d:useSysAssert -d:useGcAssert",
+      "-d:debug -d:tonalliDebug -d:tonalliEventEngine=poll -d:useSysAssert -d:useGcAssert",
+      "-d:debug -d:tonalliDebug -d:tonalliPreviewV5 -d:useSysAssert -d:useGcAssert",
+      "-d:release -d:tonalliPreviewV5",
+      # Pins the vacated-slot canary's no-sink branch (tonalliUseSink
+      # gates `tonalliMoveSink`'s identity-passthrough fallback) on
+      # every toolchain, not just whichever default tonalliUseSink picks.
+      "-d:debug -d:tonalliDebug -d:tonalliUseSink=false -d:useSysAssert -d:useGcAssert",
     ]
 
 let cfg =
@@ -107,7 +107,7 @@ task test, "Run all tests":
     # testcontextvarsstandalone is its own step, not part of testall: it
     # covers the contextvars suites that cannot share testall's binary
     # (testcontextvarsleakguard deliberately lets an AssertionDefect
-    # escape poll() under chronosDebug; testcontextvarslock's chronosDebug
+    # escape poll() under tonalliDebug; testcontextvarslock's tonalliDebug
     # construction lock is one-way for the process's lifetime). The
     # `orchestrate` argument runs each suite in its own subprocess, so
     # isolation holds by construction rather than by import order.
@@ -133,22 +133,22 @@ task test_v3_compat, "Run all tests in v3 compatibility mode":
   for args in testArguments:
     if (NimMajor, NimMinor) >= (2, 2):
       # First run tests with `refc` memory manager.
-      run args & " --mm:refc -d:chronosHandleException", "tests/testall"
+      run args & " --mm:refc -d:tonalliHandleException", "tests/testall"
 
-    run args & " -d:chronosHandleException", "tests/testall"
+    run args & " -d:tonalliHandleException", "tests/testall"
 
 task test_simulation, "Run the deterministic simulation suites":
   # The sim substrate is fork-only test infrastructure and pins Nim 2.x
   # (RFC 0003 3.8): buying back the 1.6 design constraints the
   # contextvars series had to fight is the whole point of not shipping
-  # it upstream. `chronosEventEngine` is left at its platform default
+  # it upstream. `tonalliEventEngine` is left at its platform default
   # throughout: the selector backend still compiles as dead code under
   # `chronosSimulation`, and sim behavior is engine-independent by
   # construction.
   if (NimMajor, NimMinor) >= (2, 0):
     let simArgs =
-      "-d:debug -d:chronosDebug -d:useSysAssert -d:useGcAssert " &
-      "-d:chronosSimulation -d:chronosFutureTracking --threads:on"
+      "-d:debug -d:tonalliDebug -d:useSysAssert -d:useGcAssert " &
+      "-d:chronosSimulation -d:tonalliFutureTracking --threads:on"
     let simLeafTests = [
       "tests/testsimclock", "tests/testsimengine", "tests/testsimloop",
       "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
@@ -183,7 +183,7 @@ task check_windows, "Windows parity: semantic-check the library surface (fork is
   # dispatcher construction fork and provenance guards this slice
   # mirrors onto the Windows (IOCP) branch.
   exec nimc & " check " & winCfg &
-    " -d:chronosSimulation -d:chronosFutureTracking --threads:on tonalli/simulation.nim"
+    " -d:chronosSimulation -d:tonalliFutureTracking --threads:on tonalli/simulation.nim"
 
   # (c) sim test files. The RFC 0003 S3/S4 sim poll loop (fork issue
   # #20 gap 2) is now ported onto the Windows (IOCP) branch: the
@@ -209,7 +209,7 @@ task check_windows, "Windows parity: semantic-check the library surface (fork is
   ]
   for t in simLeafTests:
     exec nimc & " check " & winCfg &
-      " -d:chronosSimulation -d:chronosFutureTracking --threads:on " & t & ".nim"
+      " -d:chronosSimulation -d:tonalliFutureTracking --threads:on " & t & ".nim"
 
   # (d) testall, define-on: exercises the sim leaf suites together with
   # the rest of the library in one binary. The S10 stream I/O seam is
@@ -217,12 +217,12 @@ task check_windows, "Windows parity: semantic-check the library surface (fork is
   # untouched - see `testsimstream`'s comment above), so this checks
   # clean as of this slice.
   exec nimc & " check " & winCfg &
-    " -d:chronosSimulation -d:chronosFutureTracking --threads:on tests/testall.nim"
+    " -d:chronosSimulation -d:tonalliFutureTracking --threads:on tests/testall.nim"
 
 task test_libbacktrace, "test with libbacktrace":
   if platform != "x86":
     let allArgs = @[
-      "-d:release --debugger:native -d:chronosStackTrace -d:nimStackTraceOverride --import:libbacktrace",
+      "-d:release --debugger:native -d:tonalliStackTrace -d:nimStackTraceOverride --import:libbacktrace",
     ]
 
     for args in allArgs:

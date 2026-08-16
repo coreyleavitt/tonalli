@@ -694,7 +694,7 @@ pointer comparison per node) and, on a match, reads the value out via
 `cast[ContextNode[T]](node)`. `.value` is not a second read path: it's
 `template value(cv) = currentContext()[cv]`, so the ambient spelling and
 the snapshot spelling (`ctx[cv]`) are two spellings of this one walk.
-Under a `chronosDebug` build, the cast is preceded by `doAssert node of
+Under a `tonalliDebug` build, the cast is preceded by `doAssert node of
 ContextNode[T]`, a checked downcast verifying the construction invariant
 above, the same debug-only discipline `chainBalance` and the construction
 lock below already use elsewhere in this module; release builds pay
@@ -741,7 +741,7 @@ heap), and while the guard keeps refusing every other thread's
 construction from that point on, nothing makes the process itself sound
 again.
 
-The second is `lockContextVarConstruction()`, a stricter, `chronosDebug`-
+The second is `lockContextVarConstruction()`, a stricter, `tonalliDebug`-
 only opt-in boundary: chronos does not wrap or intercept thread creation,
 so nothing flips this lock automatically. Call it yourself at your
 program's own construction/thread-creation boundary (the test suite is
@@ -752,10 +752,10 @@ automatic check catches the cross-thread case with no setup but tolerates
 further same-thread construction after other threads already exist, while
 the lock catches that too, but only once an application opts in. No lock
 is paid on any path in a release build, and the lock itself runs only
-under `chronosDebug`.
+under `tonalliDebug`.
 
 Applications are encouraged to call `lockContextVarConstruction()` at
-their own thread-creation boundary in `chronosDebug` builds and in CI,
+their own thread-creation boundary in `tonalliDebug` builds and in CI,
 rather than relying on the automatic check alone: a construction-
 discipline violation is far cheaper to catch there than to chase down as
 an intermittent failure in production.

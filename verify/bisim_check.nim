@@ -75,9 +75,9 @@ template guardAsserts(where: string, body: untyped): untyped =
   ## hard process abort.
   try:
     body
-  except Defect as chronosVerifyDefect:
+  except Defect as verifyDefect:
     raise newException(ValueError,
-      where & ": assertion fired -- " & chronosVerifyDefect.msg)
+      where & ": assertion fired -- " & verifyDefect.msg)
 
 proc growTargetCapShadow(cap: int): int =
   ## Mirrors the real module's private `growTargetCap` exactly (same

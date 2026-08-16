@@ -12,7 +12,7 @@
 import "."/[asyncloop, config]
 export asyncloop
 
-when chronosFutureTracking:
+when tonalliFutureTracking:
   import stew/base10
 
 const
@@ -31,7 +31,7 @@ proc dumpPendingFutures*(filter = AllFutureStates): string =
   ##    not yet finished).
   ## 2. Future[T] objects with ``FutureState.Finished/Cancelled/Failed`` state
   ##    which callbacks are scheduled, but not yet fully processed.
-  when chronosFutureTracking:
+  when tonalliFutureTracking:
     var count = 0'u
     var res = ""
     for item in pendingFutures():
@@ -59,7 +59,7 @@ proc pendingFuturesCount*(filter: set[FutureState]): uint =
   ##
   ## If ``filter`` is equal to ``AllFutureStates`` Operation's complexity is
   ## O(1), otherwise operation's complexity is O(n).
-  when chronosFutureTracking:
+  when tonalliFutureTracking:
     if filter == AllFutureStates:
       pendingFuturesCount()
     else:

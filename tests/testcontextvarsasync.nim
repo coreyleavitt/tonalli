@@ -20,7 +20,7 @@ import ../tonalli/futures
 
 when not defined(windows):
   import std/posix
-  when chronosEventEngine in ["epoll", "kqueue"]:
+  when tonalliEventEngine in ["epoll", "kqueue"]:
     # Signal/process registration exists on the epoll/kqueue engines
     # only - same gate testall.nim applies to testsignal/testproc.
     when chronosSimulation:
@@ -343,7 +343,7 @@ suite "contextvars: scheduling-site capture coverage":
       waitFor(driver())
       check seenBinding == 655
 
-    when chronosEventEngine in ["epoll", "kqueue"]:
+    when tonalliEventEngine in ["epoll", "kqueue"]:
       # Signal/process registration exists on the epoll/kqueue engines
       # only - same gate testall.nim applies to testsignal/testproc.
       test "addSignal2 handler fires with the registrant's binding":
@@ -915,7 +915,7 @@ suite "contextvars: scheduling scenario pins":
     # outer's binding is exactly restored after the nested waitFor returns;
     # and a callback queued behind outerCb in the same batch sees an empty
     # context either way.
-    when chronosStrictReentrancy:
+    when tonalliStrictReentrancy:
       skip()
     else:
       var innerObserved = -1
@@ -965,11 +965,11 @@ suite "contextvars: scheduling scenario pins":
       check laterFired
       check laterSeenBinding == 0
 
-  test "nested waitFor inside a running callback raises under chronosStrictReentrancy, leaving the outer callback's context intact":
+  test "nested waitFor inside a running callback raises under tonalliStrictReentrancy, leaving the outer callback's context intact":
     # Strict-mode counterpart above: preparePoll asserts before draining, so
     # the nested waitFor raises instead. The assert fires before any context
     # is touched, so the outer callback's binding must survive untouched.
-    when chronosStrictReentrancy:
+    when tonalliStrictReentrancy:
       var outerAfterRaise = -1
       var outerFired = false
 

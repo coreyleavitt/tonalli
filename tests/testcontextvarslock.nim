@@ -4,7 +4,7 @@
 #    Licensed under the Apache License, Version 2.0
 #               (LICENSE-APACHEv2)
 
-## The one-way `chronosDebug` construction lock for `newContextVar`
+## The one-way `tonalliDebug` construction lock for `newContextVar`
 ## (chronos/contextvars.nim, `lockContextVarConstruction()`), split into
 ## its own file so that its permanent, process-lifetime lock doesn't
 ## impose an import order on the other contextvars test files: every
@@ -17,9 +17,9 @@
 ## affect another suite; import order only matters for the driver's
 ## no-args single-process mode, where this file must still run last.
 ##
-## `when defined(chronosDebug)` guards the lock itself, mirroring
+## `when defined(tonalliDebug)` guards the lock itself, mirroring
 ## tests/testcontextvarsbalance.nim: this file compiles on every leg but
-## is only meaningful on the `chronosDebug` ones.
+## is only meaningful on the `tonalliDebug` ones.
 
 import unittest2
 import ../tonalli/contextvars
@@ -27,12 +27,12 @@ import ../tonalli/contextvars
 {.used.}
 
 const contextVarsLockSuiteName* =
-  "contextvars (raw key): chronosDebug construction lock"
+  "contextvars (raw key): tonalliDebug construction lock"
 
 suite contextVarsLockSuiteName:
 
   test "newContextVar after lockContextVarConstruction() asserts":
-    when defined(chronosDebug):
+    when defined(tonalliDebug):
       lockContextVarConstruction()
       expect AssertionDefect:
         discard newContextVar("afterLock", 1)

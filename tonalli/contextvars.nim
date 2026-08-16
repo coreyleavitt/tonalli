@@ -191,7 +191,7 @@ func renderGeneric[T](cv: ContextVarBase, node: ContextNodeBase): string
 
 # --- Construction guards and the raw constructors ---------------------------
 
-when defined(chronosDebug):
+when defined(tonalliDebug):
   var contextVarConstructionLocked = false
     ## Guard flag for the write-once-then-read-only registry discipline
     ## documented in docs/src/contextvars.md, "Registry and key
@@ -240,7 +240,7 @@ var contextVarConstructionThreadGen: Atomic[uint]
   ## lock to stay race-free.
 
 proc checkContextVarConstructionThread() {.inline.} =
-  ## Unconditional in every build, not just `-d:chronosDebug`: the
+  ## Unconditional in every build, not just `-d:tonalliDebug`: the
   ## hazard this guards is `--mm:refc` GC-heap corruption from a chain
   ## node's untraced raw `key` pointer (see docs/src/contextvars.md,
   ## "Registry and key lifetime"), and the construction path it runs on
@@ -258,11 +258,11 @@ proc checkContextVarConstructionThread() {.inline.} =
 
 proc checkContextVarConstruction() {.inline.} =
   ## Called unconditionally from both constructors below, so callers
-  ## don't need their own `when defined(chronosDebug):` wrapper: the
+  ## don't need their own `when defined(tonalliDebug):` wrapper: the
   ## lock check (`checkContextVarConstructionAllowed`) is allowed only
-  ## under `-d:chronosDebug`, opt-in as above; the thread check
+  ## under `-d:tonalliDebug`, opt-in as above; the thread check
   ## (`checkContextVarConstructionThread`) always runs.
-  when defined(chronosDebug):
+  when defined(tonalliDebug):
     checkContextVarConstructionAllowed()
   checkContextVarConstructionThread()
 
@@ -270,7 +270,7 @@ proc registerVar(base: ContextVarBase) =
   base.nextRegistered = registryHead
   registryHead = base
 
-proc newContextVar*[T](name: chronosSink string, default: T,
+proc newContextVar*[T](name: tonalliSink string, default: T,
                         private = true): ContextVar[T] {.raises: [].} =
   ## Defaulted-arm constructor. Registers unconditionally, regardless of
   ## `private` — see "Registry and key lifetime" in
@@ -278,26 +278,26 @@ proc newContextVar*[T](name: chronosSink string, default: T,
   ## lifetime guarantee. `private` governs `dumpContext` visibility only,
   ## and defaults to `true` — see "Privacy and the raw constructors".
   ##
-  ## `default` stays a plain `T`, not `chronosSink T`: `T` must be
+  ## `default` stays a plain `T`, not `tonalliSink T`: `T` must be
   ## inferred from this very argument at ordinary call sites (there is
   ## no other `T`-typed parameter to pin it, unlike this codebase's
-  ## other `chronosSink T` sites — `asyncfutures.nim`'s `complete`,
+  ## other `tonalliSink T` sites — `asyncfutures.nim`'s `complete`,
   ## `callbackqueue.nim`'s `addLast`/`prependNoGrow` — where a
   ## `Future[T]`/`CallbackQueue[T]` parameter already fixes `T` before
   ## the sink parameter is even considered). Under `--mm:refc`'s
-  ## chronosUseSink branch (Nim >= 2.0.6), `chronosSink` lowers to
+  ## tonalliUseSink branch (Nim >= 2.0.6), `tonalliSink` lowers to
   ## `sink`, and routing generic-parameter inference through the
   ## template that produces it — rather than a bare `sink T` — defeats
   ## Nim's sigmatch: `newContextVar("x", 0)` stops compiling with a type
   ## mismatch, reproduced in isolation down to a two-line template.
-  ## `name`, which carries no inference burden, keeps `chronosSink`.
+  ## `name`, which carries no inference burden, keeps `tonalliSink`.
   checkContextVarConstruction()
   result = ContextVar[T](name: name, hasDefault: true, private: private,
                           default: default)
   result.render = renderGeneric[T]
   registerVar(result)
 
-proc newRequiredContextVar*[T](name: chronosSink string,
+proc newRequiredContextVar*[T](name: tonalliSink string,
                                 private = true): ContextVar[T] {.raises: [].} =
   ## Must-bind constructor — no default supplied. See
   ## docs/src/contextvars.md, "Required variables". Same unconditional
@@ -357,12 +357,12 @@ template withContext*(ctx: AsyncContext, body: untyped) =
   ## Run `body` with `ctx` as the current async context; restore the
   ## prior context on every exit path (normal, exception, including
   ## `CancelledError`).
-  let chronosCtxPrev = currentAsyncContext
+  let ctxPrev = currentAsyncContext
   currentAsyncContext = ctx.node
   try:
     body
   finally:
-    currentAsyncContext = chronosCtxPrev
+    currentAsyncContext = ctxPrev
 
 type
   UnboundContextVarDefect* = object of Defect
@@ -380,7 +380,7 @@ func findNode(chain: ContextNodeBase, cv: ContextVarBase): ContextNodeBase =
 func `[]`*[T](ctx: AsyncContext, cv: ContextVar[T]): T {.raises: [].} =
   let node = findNode(ctx.node, cv)
   if node != nil:
-    when defined(chronosDebug):
+    when defined(tonalliDebug):
       doAssert node of ContextNode[T],
         "contextvars internal error: a chain node whose key matched " &
         "cv is not a ContextNode[T] — see the construction invariant " &
@@ -406,7 +406,7 @@ template value*[T](cv: ContextVar[T]): T =
   {.cast(gcsafe).}:
     currentContext()[cv]
 
-when defined(chronosDebug):
+when defined(tonalliDebug):
   var chainBalance* {.threadvar.}: int
     ## Debug-only bind/unbind balance counter for `withValue`:
     ## increments at push, decrements at pop. A nonzero value at
@@ -431,19 +431,19 @@ template withValue*[T](cv: ContextVar[T], v: T, body: untyped): untyped =
   ##
   ## `{.cast(gcsafe).}`: same global-access rationale as `value` above —
   ## `cv` inlines straight into the caller here too.
-  let chronosCtxPrev = currentAsyncContext
-  var chronosCtxNode: ContextNode[T]
+  let ctxPrev = currentAsyncContext
+  var ctxNode: ContextNode[T]
   {.cast(gcsafe).}:
-    chronosCtxNode = ContextNode[T](key: cast[pointer](cv), value: v)
-  linkNode(chronosCtxNode, chronosCtxPrev)
-  currentAsyncContext = chronosCtxNode
-  when defined(chronosDebug):
+    ctxNode = ContextNode[T](key: cast[pointer](cv), value: v)
+  linkNode(ctxNode, ctxPrev)
+  currentAsyncContext = ctxNode
+  when defined(tonalliDebug):
     inc chainBalance
   try:
     body
   finally:
-    currentAsyncContext = chronosCtxPrev
-    when defined(chronosDebug):
+    currentAsyncContext = ctxPrev
+    when defined(tonalliDebug):
       dec chainBalance
 
 # --- Introspection ------------------------------------------------------------

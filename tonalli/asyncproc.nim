@@ -410,7 +410,7 @@ when defined(windows):
     let
       commandLine =
         if AsyncProcessOption.EvalCommand in options:
-          chronosProcShell & " /C " & command
+          tonalliProcShell & " /C " & command
         else:
           buildCommandLine(command, arguments)
       workingDirectory =
@@ -846,8 +846,8 @@ else:
     let
       (commandLine, commandArguments) =
         if AsyncProcessOption.EvalCommand in options:
-          let args = @[chronosProcShell, "-c", command]
-          (chronosProcShell, allocCStringArray(args))
+          let args = @[tonalliProcShell, "-c", command]
+          (tonalliProcShell, allocCStringArray(args))
         else:
           var res = @[command]
           for arg in arguments.items():
@@ -1046,7 +1046,7 @@ else:
                AsyncProcessError, AsyncProcessTimeoutError, CancelledError]),
        mayBarrier.} =
     var
-      retFuture = newFuture[int]("chronos.waitForExit()")
+      retFuture = newFuture[int]("tonalli.waitForExit()")
       processHandle: ProcessHandle
       timer: TimerCallback = nil
 
@@ -1318,7 +1318,7 @@ when chronosSimulation:
         SimBarrierError]).} =
     let timerFut =
       if timeout == InfiniteDuration:
-        newFuture[void]("chronos.killAndwaitForExit")
+        newFuture[void]("tonalli.killAndwaitForExit")
       else:
         sleepAsync(timeout)
 
@@ -1362,7 +1362,7 @@ else:
         AsyncProcessError, AsyncProcessTimeoutError, CancelledError]).} =
     let timerFut =
       if timeout == InfiniteDuration:
-        newFuture[void]("chronos.killAndwaitForExit")
+        newFuture[void]("tonalli.killAndwaitForExit")
       else:
         sleepAsync(timeout)
 

@@ -83,9 +83,9 @@ template guardAsserts(where: string, body: untyped): untyped =
   ## with `where` context added for a more useful crash report.
   try:
     body
-  except Defect as chronosVerifyDefect:
+  except Defect as verifyDefect:
     raise newException(ValueError,
-      where & ": assertion fired -- " & chronosVerifyDefect.msg)
+      where & ": assertion fired -- " & verifyDefect.msg)
 
 proc growTargetCapShadow(cap: int): int =
   ## See `bisim_check.nim`'s module doc: mirrors the real private

@@ -15,7 +15,7 @@ import ./internal/contextnode
 
 export srcloc
 
-when chronosStackTrace:
+when tonalliStackTrace:
   type StackTrace = string
 
 type
@@ -93,14 +93,14 @@ type
     internalError*: ref CatchableError ## Stored exception
     internalClosure*: iterator(f: FutureBase): FutureBase {.raises: [], gcsafe.}
 
-    when chronosFutureId:
+    when tonalliFutureId:
       internalId*: uint
 
-    when chronosStackTrace:
+    when tonalliStackTrace:
       internalErrorStackTrace*: StackTrace
       internalStackTrace*: StackTrace ## For debugging purposes only.
 
-    when chronosFutureTracking:
+    when tonalliFutureTracking:
       internalNext*: FutureBase
       internalPrev*: FutureBase
 
@@ -227,33 +227,33 @@ template withRestoredContext*(newCtx: ContextNodeBase, body: untyped) =
   ## Context switch with identity fast path. Sound only when `body`
   ## cannot dangle the binder chain across a suspend — i.e. body is not
   ## a continuation pump, or the pump's entry re-pins (`pinContext`).
-  let chronosCtxPrev = currentAsyncContext        # one TLS read
-  if newCtx == chronosCtxPrev:                    # identity - no writes,
+  let ctxPrev = currentAsyncContext        # one TLS read
+  if newCtx == ctxPrev:                    # identity - no writes,
     body                                          # no try/finally
-    when defined(chronosDebug):
+    when defined(tonalliDebug):
       doAssert currentAsyncContext == newCtx,
         "identity arm violated: a pump body went through " &
         "withRestoredContext without its own pinContext"
   else:
     currentAsyncContext = newCtx
     try: body
-    finally: currentAsyncContext = chronosCtxPrev
+    finally: currentAsyncContext = ctxPrev
 
 template pinContext*(body: untyped) =
   ## Unconditional entry/exit guard ("the pin"), no fast path ever — for
   ## bodies that may suspend mid-binder (continuation pumps).
-  let chronosCtxPrev = currentAsyncContext
+  let ctxPrev = currentAsyncContext
   try: body
-  finally: currentAsyncContext = chronosCtxPrev
+  finally: currentAsyncContext = ctxPrev
 
-when chronosFutureId:
+when tonalliFutureId:
   var currentID* {.threadvar.}: uint
   template id*(fut: FutureBase): uint = fut.internalId
 else:
   template id*(fut: FutureBase): uint =
     cast[uint](addr fut[])
 
-when chronosFutureTracking:
+when tonalliFutureTracking:
   type
     FutureList* = object
       head*: FutureBase
@@ -264,8 +264,8 @@ when chronosFutureTracking:
 
 when chronosSimulation:
   static:
-    doAssert chronosFutureTracking,
-      "chronosSimulation requires chronosFutureTracking (RFC 0003 3.9): " &
+    doAssert tonalliFutureTracking,
+      "chronosSimulation requires tonalliFutureTracking (RFC 0003 3.9): " &
       "the ghost ledger's future-lifecycle law integrates the existing " &
       "pending-future tracking rather than reinventing it"
 
@@ -310,7 +310,7 @@ proc internalInitFutureBase*(fut: FutureBase, loc: ptr SrcLoc,
     # `chronosSimulation` is on; whether anything ever reads it is the
     # opt-in half, in `chronos/simulation.nim`). A future born already
     # terminal (`Future.completed()`/`Future.failed()`, below - never
-    # linked into `futureList` at all, see the `chronosFutureTracking`
+    # linked into `futureList` at all, see the `tonalliFutureTracking`
     # block's `if state == FutureState.Pending` guard) is the one
     # transition `internal/asyncfutures.nim`'s `finish()` never sees,
     # since such a future never passes through `finish()` - counted
@@ -322,14 +322,14 @@ proc internalInitFutureBase*(fut: FutureBase, loc: ptr SrcLoc,
     of FutureState.Failed: inc simLedgerFuturesFailed
     of FutureState.Pending: discard
 
-  when chronosFutureId:
+  when tonalliFutureId:
     currentID.inc()
     fut.internalId = currentID
 
-  when chronosStackTrace:
+  when tonalliStackTrace:
     fut.internalStackTrace = getStackTrace()
 
-  when chronosFutureTracking:
+  when tonalliFutureTracking:
     if state == FutureState.Pending:
       fut.internalNext = nil
       fut.internalPrev = futureList.tail
@@ -383,7 +383,7 @@ template failed*[T](
   ## Create a new failed future
   let res = Future[T](internalError: errorParam)
   internalInitFutureBase(res, getSrcLocation(fromProc), FutureState.Failed, {})
-  when chronosStackTrace:
+  when tonalliStackTrace:
     res.internalErrorStackTrace =
       if getStackTrace(res.error) == "":
         getStackTrace()
@@ -424,7 +424,7 @@ func value*[T: not void](future: Future[T]): lent T =
   ##
   ## See `read` for a version that raises a catchable error when future
   ## has not completed.
-  when chronosStrictFutureAccess:
+  when tonalliStrictFutureAccess:
     if not future.completed():
       raiseFutureDefect("Future not completed while accessing value", future)
 
@@ -436,7 +436,7 @@ func value*(future: Future[void]) =
   ##
   ## See `read` for a version that raises a catchable error when future
   ## has not completed.
-  when chronosStrictFutureAccess:
+  when tonalliStrictFutureAccess:
     if not future.completed():
       raiseFutureDefect("Future not completed while accessing value", future)
 
@@ -445,17 +445,17 @@ func error*(future: FutureBase): ref CatchableError =
   ##
   ## See `readError` for a version that raises a catchable error when the
   ## future has not failed.
-  when chronosStrictFutureAccess:
+  when tonalliStrictFutureAccess:
     if not future.failed() and not future.cancelled():
       raiseFutureDefect(
         "Future not failed/cancelled while accessing error", future)
 
   future.internalError
 
-when chronosFutureTracking:
+when tonalliFutureTracking:
   func next*(fut: FutureBase): FutureBase = fut.internalNext
   func prev*(fut: FutureBase): FutureBase = fut.internalPrev
 
-when chronosStackTrace:
+when tonalliStackTrace:
   func errorStackTrace*(fut: FutureBase): StackTrace = fut.internalErrorStackTrace
   func stackTrace*(fut: FutureBase): StackTrace = fut.internalStackTrace

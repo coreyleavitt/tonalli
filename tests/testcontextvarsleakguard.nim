@@ -4,7 +4,7 @@
 #    Licensed under the Apache License, Version 2.0
 #               (LICENSE-APACHEv2)
 
-## This file pins chronos's chronosDebug context-corruption detection net
+## This file pins chronos's tonalliDebug context-corruption detection net
 ## layer by layer: `withRestoredContext`'s identity-arm postcondition
 ## assert (chronos/futures.nim, ~231-236), the restore arm's unconditional
 ## `finally` self-heal (same file, ~237-240), and the cross-batch guard in
@@ -34,7 +34,7 @@
 ## tests/testcontextvarsstandalone.nim's orchestrate mode; sharing a
 ## binary with another suite is only possible in that driver's no-args
 ## single-process mode, where this file must still run first for the
-## same reason. The net itself only exists under `chronosDebug`, so
+## same reason. The net itself only exists under `tonalliDebug`, so
 ## every test here skips cleanly without it.
 
 import std/strutils
@@ -74,12 +74,12 @@ proc leakGuardVar(): ContextVar[int] {.gcsafe.} =
     leakGuardVarKey
 
 const contextVarsLeakGuardSuiteName* =
-  "contextvars: chronosDebug context-corruption detection net"
+  "contextvars: tonalliDebug context-corruption detection net"
 
 suite contextVarsLeakGuardSuiteName:
 
   test "control: a callback that binds and unwinds through withValue trips nothing":
-    when defined(chronosDebug):
+    when defined(tonalliDebug):
       var ran = false
       proc goodCb(udata: pointer) {.gcsafe, raises: [].} =
         leakGuardVar().withValue(1):
@@ -93,9 +93,9 @@ suite contextVarsLeakGuardSuiteName:
       skip()
 
   test "identity-arm layer: withRestoredContext's postcondition assert fires when its body corrupts currentAsyncContext":
-    when defined(chronosDebug):
+    when defined(tonalliDebug):
       # Called directly rather than through callSoon+poll(): processCallbacks'
-      # own chronosDebug batch guard wraps every dispatch in a try/finally
+      # own tonalliDebug batch guard wraps every dispatch in a try/finally
       # whose doAssert, given this same corruption, also fails - and when a
       # second doAssert fails while the first is still unwinding, Nim's
       # finally semantics let the second's Defect replace the first. Routed
@@ -117,7 +117,7 @@ suite contextVarsLeakGuardSuiteName:
       skip()
 
   test "restore-arm layer: a captured-context callback that corrupts currentAsyncContext is healed by the finally, no Defect escapes":
-    when defined(chronosDebug):
+    when defined(tonalliDebug):
       let preAmbient = currentAsyncContext
       var ran = false
       proc corruptingRestoreCb(udata: pointer) {.gcsafe, raises: [].} =
@@ -137,7 +137,7 @@ suite contextVarsLeakGuardSuiteName:
       skip()
 
   test "cross-batch guard layer: a callback captured at nil ambient context that corrupts currentAsyncContext surfaces the batch guard's message via finally-replacement":
-    when defined(chronosDebug):
+    when defined(tonalliDebug):
       # Ordered last and restores currentAsyncContext itself: this case
       # leaves the ambient corrupted for the duration of the escaping
       # Defect (neither failed assert writes anything), so it must not run

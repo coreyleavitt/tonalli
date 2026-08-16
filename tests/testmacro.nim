@@ -594,7 +594,7 @@ suite "Exception/effect tracking":
     waitFor(callCatchAll())
 
   test "Global handleException does not override local annotations":
-    when chronosHandleException:
+    when tonalliHandleException:
       proc unnanotated() {.async.} = raise (ref CatchableError)()
 
       checkNotCompiles:
@@ -697,7 +697,7 @@ suite "Exception/effect tracking":
       skip()
 
   test "detect poll reentrance at runtime for other cases":
-    when chronosStrictReentrancy:
+    when tonalliStrictReentrancy:
       callSoon(proc(_: pointer) =
         poll())
 

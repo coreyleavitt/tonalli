@@ -6,7 +6,7 @@
 
 ## Suite-final contextvars binder-balance check, split out of
 ## testutils.nim so it runs on every engine — testutils.nim itself is
-## only imported when `chronosEventEngine` is epoll/kqueue/windows
+## only imported when `tonalliEventEngine` is epoll/kqueue/windows
 ## (see testall.nim), which skips the `poll` engine entirely. Imported
 ## unconditionally, last, in testall.nim.
 
@@ -18,7 +18,7 @@ import ../tonalli/contextvars
 suite "contextvars: suite-final binder balance":
 
   test "contextvars binder balance (no leaked bindings)":
-    when defined(chronosDebug):
+    when defined(tonalliDebug):
       # `withValue` increments `chainBalance` at push, decrements at
       # pop. A nonzero count at suite end means some `withValue` pushed
       # a chain node without popping.

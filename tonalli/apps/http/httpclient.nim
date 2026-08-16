@@ -1118,7 +1118,7 @@ proc new*(t: typedesc[HttpClientRequestRef], session: HttpSessionRef,
     session, address, meth, version, flags, maxResponseHeadersSize, headers,
     body)
 
-when chronosUseSink:
+when tonalliUseSink:
   proc new*(t: typedesc[HttpClientRequestRef], session: HttpSessionRef,
             ha: HttpAddress, meth: HttpMethod = MethodGet,
             version: HttpVersion = HttpVersion11,

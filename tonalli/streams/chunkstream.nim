@@ -17,7 +17,7 @@ import results
 export asyncloop, asyncstream, stream, timer, common, results
 
 const
-  ChunkBufferSize = chronosStreamDefaultBufferSize
+  ChunkBufferSize = tonalliStreamDefaultBufferSize
   MaxChunkHeaderSize = 64
   ChunkHeaderValueSize = 8
     # This is limit for chunk size to 8 hexadecimal digits, so maximum

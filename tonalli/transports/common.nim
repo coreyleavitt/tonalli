@@ -22,7 +22,7 @@ export Domain, `==`, IpAddress, IpAddressFamily, parseIpAddress, SockType,
        Protocol, Port, toInt, `$`, results
 
 const
-  DefaultStreamBufferSize* = chronosTransportDefaultBufferSize
+  DefaultStreamBufferSize* = tonalliTransportDefaultBufferSize
     ## Default buffer size for stream transports
   DefaultDatagramBufferSize* = 65536
     ## Default buffer size for datagram transports

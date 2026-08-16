@@ -17,7 +17,7 @@
 ## recycled id could falsely satisfy — the recording thread has
 ## already exited — which is exactly where a generation identity must
 ## keep refusing and an OS-TID identity could wrongly accept a new
-## thread. Runs in every build, not only under `chronosDebug`: the
+## thread. Runs in every build, not only under `tonalliDebug`: the
 ## guard it tests is unconditional (see chronos/contextvars.nim).
 ##
 ## Adaptive because the recording slot is process-global and other

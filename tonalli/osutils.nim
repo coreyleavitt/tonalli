@@ -16,8 +16,8 @@ export results
 when defined(windows) or defined(nimdoc):
   import stew/base10
   const
-    PipeHeaderName* = r"\\.\pipe\LOCAL\chronos\"
-    SignalPrefixName* = cstring(r"Local\chronos-events-")
+    PipeHeaderName* = r"\\.\pipe\LOCAL\tonalli\"
+    SignalPrefixName* = cstring(r"Local\tonalli-events-")
     MaxSignalEventLength* = 64
     MaxSignalSuffixLength* = MaxSignalEventLength -
       (len(SignalPrefixName) + Base10.maxLen(uint64) + 2)

@@ -20,7 +20,7 @@
 ## a genuine `--mm:refc` GC hazard (see docs/src/contextvars.md,
 ## "Registry and key lifetime") — the guard this file tests is what
 ## turns that hazard into a caught `AssertionDefect` instead, and it now
-## runs in every build, not only under `chronosDebug`.
+## runs in every build, not only under `tonalliDebug`.
 
 import unittest2
 import ../tonalli/contextvars

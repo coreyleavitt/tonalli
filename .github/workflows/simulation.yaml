@@ -96,8 +96,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          nim c -d:debug -d:chronosDebug -d:useSysAssert -d:useGcAssert \
-            -d:chronosSimulation -d:chronosFutureTracking --threads:on --mm:refc \
+          nim c -d:debug -d:tonalliDebug -d:useSysAssert -d:useGcAssert \
+            -d:chronosSimulation -d:tonalliFutureTracking --threads:on --mm:refc \
             --skipParentCfg --skipUserCfg --outdir:build \
             --nimcache:build/nimcache/simidentity -r tests/simidentity.nim \
             | tee identity-run.log
@@ -108,8 +108,8 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          nim c -d:debug -d:chronosDebug -d:useSysAssert -d:useGcAssert \
-            -d:chronosSimulation -d:chronosFutureTracking --threads:on --mm:refc \
+          nim c -d:debug -d:tonalliDebug -d:useSysAssert -d:useGcAssert \
+            -d:chronosSimulation -d:tonalliFutureTracking --threads:on --mm:refc \
             --skipParentCfg --skipUserCfg --outdir:build \
             --nimcache:build/nimcache/simidentity -r tests/simidentity.nim \
             | tee identity-run.log

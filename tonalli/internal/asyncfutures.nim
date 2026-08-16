@@ -35,7 +35,7 @@ export
   raisesfutures.Raising, raisesfutures.InternalRaisesFuture,
   raisesfutures.init, raisesfutures.error, raisesfutures.readError
 
-when chronosStackTrace:
+when tonalliStackTrace:
   import std/strutils
   when defined(nimHasStacktracesModule):
     import system/stacktraces
@@ -148,7 +148,7 @@ proc done*(future: FutureBase): bool {.deprecated: "Use `completed` instead".} =
   ## This is an alias for ``completed(future)`` procedure.
   completed(future)
 
-when chronosFutureTracking:
+when tonalliFutureTracking:
   proc futureDestructor(udata: pointer) =
     ## This procedure will be called when Future[T] got completed, cancelled or
     ## failed and all Future[T].callbacks are already scheduled and processed.
@@ -176,7 +176,7 @@ proc checkFinished(future: FutureBase, loc: ptr SrcLoc) =
     msg.add("\n    " & $future.location[LocationKind.Finish])
     msg.add("\n  Second completion location:")
     msg.add("\n    " & $loc)
-    when chronosStackTrace:
+    when tonalliStackTrace:
       msg.add("\n  Stack trace to moment of creation:")
       msg.add("\n" & indent(future.stackTrace.strip(), 4))
       msg.add("\n  Stack trace to moment of secondary completion:")
@@ -261,15 +261,15 @@ proc finish(fut: FutureBase, state: FutureState, loc: ptr SrcLoc) =
     else:
       item.reset() # release memory as early as possible
 
-  when chronosFutureTracking:
+  when tonalliFutureTracking:
     scheduleDestructor(fut)
 
-proc complete[T: not void](future: Future[T], val: chronosSink T, loc: ptr SrcLoc) =
+proc complete[T: not void](future: Future[T], val: tonalliSink T, loc: ptr SrcLoc) =
   if not(future.cancelled()):
-    future.internalValue = chronosMoveSink(val)
+    future.internalValue = tonalliMoveSink(val)
     future.finish(FutureState.Completed, loc)
 
-template complete*[T: not void](future: Future[T], val: chronosSink T) =
+template complete*[T: not void](future: Future[T], val: tonalliSink T) =
   ## Completes ``future`` with value ``val``.
   complete(future, val, getSrcLocation())
 
@@ -285,7 +285,7 @@ proc failImpl(
     future: FutureBase, error: ref CatchableError, loc: ptr SrcLoc) =
   if not(future.cancelled()):
     future.internalError = error
-    when chronosStackTrace:
+    when tonalliStackTrace:
       future.internalErrorStackTrace = if getStackTrace(error) == "":
                                  getStackTrace()
                                else:
@@ -318,7 +318,7 @@ template newCancelledError(): ref CancelledError =
 proc cancelAndSchedule(future: FutureBase, loc: ptr SrcLoc) =
   if not(future.finished()):
     future.internalError = newCancelledError()
-    when chronosStackTrace:
+    when tonalliStackTrace:
       future.internalErrorStackTrace = getStackTrace()
     future.finish(FutureState.Cancelled, loc)
 
@@ -354,7 +354,7 @@ proc tryCancel(future: FutureBase, loc: ptr SrcLoc): bool =
   if not(isNil(future.internalChild)):
     # If you hit this assertion, you should have used the `CancelledError`
     # mechanism and/or use a regular `addCallback`
-    when chronosStrictFutureAccess:
+    when tonalliStrictFutureAccess:
       doAssert isNil(future.internalCancelcb.function),
         "futures returned from `{.async.}` functions must not use " &
         "`cancelCallback`"
@@ -443,7 +443,7 @@ proc `cancelCallback=`*(future: FutureBase, cb: CallbackFunc) =
   ## This callback will be called immediately as ``future.cancel()`` invoked and
   ## must be set before future is finished.
 
-  when chronosStrictFutureAccess:
+  when tonalliStrictFutureAccess:
     doAssert not future.finished(),
       "cancellation callback must be set before finishing the future"
   # `capturingCancelCallback` captures the current contextVar bindings at
@@ -509,7 +509,7 @@ proc futureContinue*(fut: FutureBase) {.raises: [], gcsafe.} =
 
 {.pop.}
 
-when chronosStackTrace:
+when tonalliStackTrace:
   template getFilenameProcname(entry: StackTraceEntry): (string, string) =
     when compiles(entry.filenameStr) and compiles(entry.procnameStr):
       # We can't rely on "entry.filename" and "entry.procname" still being valid
@@ -599,7 +599,7 @@ macro internalRaiseIfError*(fut: FutureBase, info: typed) =
     info = info.lineInfoObj()
     res = quote do:
       if not(isNil(`fut`.internalError)):
-        when chronosStackTrace:
+        when tonalliStackTrace:
           injectStacktrace(`fut`.internalError)
         raise `fut`.internalError
   res.deepLineInfo(info)
@@ -872,7 +872,7 @@ proc `or`*[T, Y](fut1: Future[T], fut2: Future[Y]): Future[void] =
   ## completed, the result future will also be completed.
   ##
   ## If cancelled, ``fut1`` and ``fut2`` futures WILL NOT BE cancelled.
-  var retFuture = newFuture[void]("chronos.or()")
+  var retFuture = newFuture[void]("tonalli.or()")
   orImpl(fut1, fut2)
 
 proc scheduleCancelRetry(future: FutureBase, loc: ptr SrcLoc) {.raises: [].} =
@@ -966,7 +966,7 @@ proc cancelAndWait(
   let
     retFuture =
       Future[void].Raising([]).init(
-        "chronos.cancelAndWait(varargs[FutureBase])",
+        "tonalli.cancelAndWait(varargs[FutureBase])",
         {FutureFlag.OwnCancelSchedule})
   var count = 0
 
@@ -1054,7 +1054,7 @@ proc noCancel*[F: SomeFuture](future: F): auto = # async: (raw: true, raises: as
       E = F.E
       InternalRaisesFutureRaises = E.remove(CancelledError)
 
-  let retFuture = newFuture[F.T]("chronos.noCancel(T)",
+  let retFuture = newFuture[F.T]("tonalli.noCancel(T)",
                                 {FutureFlag.OwnCancelSchedule})
   template completeFuture() =
     const canFail = when declared(InternalRaisesFutureRaises):
@@ -1094,7 +1094,7 @@ proc allFutures*(futs: varargs[FutureBase]): Future[void] {.
   ## If the argument is empty, the returned future COMPLETES immediately.
   ##
   ## On cancel all the awaited futures ``futs`` WILL NOT BE cancelled.
-  let retFuture = newFuture[void]("chronos.allFutures()")
+  let retFuture = newFuture[void]("tonalli.allFutures()")
 
   var pending = futs.filterIt(not it.finished())
 
@@ -1157,7 +1157,7 @@ proc allFinished*[F: SomeFuture](futs: varargs[F]): Future[seq[F]] {.
   ## If the argument is empty, the returned future COMPLETES immediately.
   ##
   ## On cancel all the awaited futures ``futs`` WILL NOT BE cancelled.
-  var retFuture = newFuture[seq[F]]("chronos.allFinished()")
+  var retFuture = newFuture[seq[F]]("tonalli.allFinished()")
   let totalFutures = len(futs)
   var finishedFutures = 0
 
@@ -1250,7 +1250,7 @@ proc one*(fut0: SomeFuture, futs: varargs[SomeFuture]): Future[SomeFuture] {.
   ## On cancel futures in ``futs`` WILL NOT BE cancelled.
   ##
   ## This function is a synonym for `race`.
-  let retFuture = newFuture[SomeFuture]("chronos.one()")
+  let retFuture = newFuture[SomeFuture]("tonalli.one()")
 
   oneImpl
 
@@ -1267,7 +1267,7 @@ proc one*(futs: openArray[SomeFuture]): Future[SomeFuture] {.
   ## On cancel futures in ``futs`` WILL NOT BE cancelled.
   ##
   ## This function is a synonym for `race`.
-  let retFuture = newFuture[SomeFuture]("chronos.one()")
+  let retFuture = newFuture[SomeFuture]("tonalli.one()")
 
   if len(futs) == 0:
     retFuture.fail(newException(ValueError, "Empty Future[T] list"))
@@ -1284,7 +1284,7 @@ proc race*(fut0: FutureBase, futs: varargs[FutureBase]): Future[FutureBase] {.
   ## On success returned Future will hold the finished FutureBase.
   ##
   ## On cancel futures in ``futs`` WILL NOT BE cancelled.
-  let retFuture = newFuture[FutureBase]("chronos.race()")
+  let retFuture = newFuture[FutureBase]("tonalli.race()")
 
   oneImpl
 
@@ -1301,7 +1301,7 @@ proc race*(futs: openArray[FutureBase]): Future[FutureBase] {.
   ## On success returned Future will hold the finished FutureBase.
   ##
   ## On cancel futures in ``futs`` WILL NOT BE cancelled.
-  let retFuture = newFuture[FutureBase]("chronos.race()")
+  let retFuture = newFuture[FutureBase]("tonalli.race()")
 
   if len(futs) == 0:
     retFuture.fail(newException(ValueError, "Empty Future[T] list"))
@@ -1318,7 +1318,7 @@ proc race*(fut0: SomeFuture, futs: openArray[SomeFuture]): Future[SomeFuture] {.
   ## On success returned Future will hold the finished Future[T].
   ##
   ## On cancel futures in ``futs`` WILL NOT BE cancelled.
-  let retFuture = newFuture[SomeFuture]("chronos.race()")
+  let retFuture = newFuture[SomeFuture]("tonalli.race()")
 
   oneImpl
 
@@ -1333,7 +1333,7 @@ proc race*(futs: openArray[SomeFuture]): Future[SomeFuture] {.
   ## On success returned Future will hold the finished Future[T].
   ##
   ## On cancel futures in ``futs`` WILL NOT BE cancelled.
-  let retFuture = newFuture[SomeFuture]("chronos.race()")
+  let retFuture = newFuture[SomeFuture]("tonalli.race()")
 
   if len(futs) == 0:
     retFuture.fail(newException(ValueError, "Empty Future[T] list"))
@@ -1343,12 +1343,12 @@ proc race*(futs: openArray[SomeFuture]): Future[SomeFuture] {.
 
 proc race*(_: typeof([])) {.error: "`race` requires at least one future".}
 
-when (chronosEventEngine in ["epoll", "kqueue"]) or defined(windows):
+when (tonalliEventEngine in ["epoll", "kqueue"]) or defined(windows):
   import std/os
 
   proc waitSignal*(signal: int): Future[void] {.
       async: (raw: true, raises: [AsyncError, CancelledError]), mayBarrier.} =
-    var retFuture = newFuture[void]("chronos.waitSignal()")
+    var retFuture = newFuture[void]("tonalli.waitSignal()")
     var signalHandle: Opt[SignalHandle]
 
     template getSignalException(e: OSErrorCode): untyped =
@@ -1408,7 +1408,7 @@ proc sleepAsync*(duration: Duration): Future[void] {.
     async: (raw: true, raises: [CancelledError]).} =
   ## Suspends the execution of the current async procedure for the next
   ## ``duration`` time.
-  var retFuture = newFuture[void]("chronos.sleepAsync(Duration)")
+  var retFuture = newFuture[void]("tonalli.sleepAsync(Duration)")
   let moment = Moment.fromNow(duration)
   var timer: TimerCallback
 
@@ -1440,7 +1440,7 @@ proc stepsAsync*(number: int): Future[void] {.
   ## tests and cases.
   doAssert(number > 0, "Number should be positive integer")
   var
-    retFuture = newFuture[void]("chronos.stepsAsync(int)")
+    retFuture = newFuture[void]("tonalli.stepsAsync(int)")
     counter = 0
     continuation: proc(data: pointer) {.gcsafe, raises: [].}
 
@@ -1465,7 +1465,7 @@ proc idleAsync*(): Future[void] {.
   ##
   ## "idle" time its moment of time, when no network events were processed by
   ## ``poll()`` call.
-  var retFuture = newFuture[void]("chronos.idleAsync()")
+  var retFuture = newFuture[void]("tonalli.idleAsync()")
 
   proc continuation(data: pointer) {.gcsafe.} =
     if not(retFuture.finished()):
@@ -1490,7 +1490,7 @@ proc withTimeout*[T](fut: Future[T], timeout: Duration): Future[bool] {.
   ## otherwise, if ``timeout`` milliseconds has elapsed first, the returned
   ## future will hold false.
   var
-    retFuture = newFuture[bool]("chronos.withTimeout",
+    retFuture = newFuture[bool]("tonalli.withTimeout",
                                 {FutureFlag.OwnCancelSchedule})
       # We set `OwnCancelSchedule` flag, because we going to cancel `retFuture`
       # manually at proper time.
@@ -1692,7 +1692,7 @@ proc wait*[T](fut: Future[T], timeout = InfiniteDuration): Future[T] =
   ## TODO: In case when ``fut`` got cancelled, what result Future[T]
   ## should return, because it can't be cancelled too.
   var
-    retFuture = newFuture[T]("chronos.wait(duration)",
+    retFuture = newFuture[T]("tonalli.wait(duration)",
                              {FutureFlag.OwnCancelSchedule})
       # We set `OwnCancelSchedule` flag, because we going to cancel `retFuture`
       # manually at proper time.
@@ -1724,7 +1724,7 @@ proc wait*[T](fut: Future[T], deadline: SomeFuture): Future[T] =
   ##
   ## If you need to cancel `future` - cancel `waitUntil(future)` instead.
   var
-    retFuture = newFuture[T]("chronos.wait(future)",
+    retFuture = newFuture[T]("tonalli.wait(future)",
                              {FutureFlag.OwnCancelSchedule})
       # We set `OwnCancelSchedule` flag, because we going to cancel `retFuture`
       # manually at proper time.
@@ -1739,7 +1739,7 @@ proc join*(future: FutureBase): Future[void] {.
   ##
   ## If ``future`` is already completed - ``join`` will return completed
   ## future immediately.
-  let retFuture = newFuture[void]("chronos.join()")
+  let retFuture = newFuture[void]("tonalli.join()")
 
   proc continuation(udata: pointer) {.gcsafe.} =
     retFuture.complete()
@@ -1774,7 +1774,7 @@ when defined(windows):
     let flags = WT_EXECUTEONLYONCE
 
     var
-      retFuture = newFuture[WaitableResult]("chronos.waitForSingleObject()")
+      retFuture = newFuture[WaitableResult]("tonalli.waitForSingleObject()")
       waitHandle: WaitableHandle = nil
 
     proc continuation(udata: pointer) {.gcsafe.} =
@@ -1882,7 +1882,7 @@ proc `or`*[T, Y, E1, E2](
   type
     InternalRaisesFutureRaises = union(E1, E2).union((CancelledError,))
 
-  let retFuture = newFuture[void]("chronos.or()", {})
+  let retFuture = newFuture[void]("tonalli.or()", {})
   orImpl(fut1, fut2)
 
 proc wait*(fut: InternalRaisesFuture, timeout = InfiniteDuration): auto =
@@ -1892,7 +1892,7 @@ proc wait*(fut: InternalRaisesFuture, timeout = InfiniteDuration): auto =
     InternalRaisesFutureRaises = E.prepend(CancelledError, AsyncTimeoutError)
 
   let
-    retFuture = newFuture[T]("chronos.wait(duration)", {OwnCancelSchedule})
+    retFuture = newFuture[T]("tonalli.wait(duration)", {OwnCancelSchedule})
       # We set `OwnCancelSchedule` flag, because we going to cancel `retFuture`
       # manually at proper time.
 
@@ -1905,7 +1905,7 @@ proc wait*(fut: InternalRaisesFuture, deadline: SomeFuture): auto =
     InternalRaisesFutureRaises = E.prepend(CancelledError, AsyncTimeoutError)
 
   let
-    retFuture = newFuture[T]("chronos.wait(future)", {OwnCancelSchedule})
+    retFuture = newFuture[T]("tonalli.wait(future)", {OwnCancelSchedule})
       # We set `OwnCancelSchedule` flag, because we going to cancel `retFuture`
       # manually at proper time.
 

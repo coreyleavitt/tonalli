@@ -8,7 +8,7 @@
 ## tests/testall.nim, or with each other:
 ##
 ## - tests/testcontextvarsleakguard.nim lets an AssertionDefect escape
-##   poll() under chronosDebug, leaving the dispatcher unsound for any
+##   poll() under tonalliDebug, leaving the dispatcher unsound for any
 ##   suite sharing that binary afterward.
 ## - tests/testcontextvarscrossthread.nim constructs a key from a second
 ##   thread and must not run after the lock is engaged, since the lock
@@ -22,7 +22,7 @@
 ##   has already claimed the recorder in this mode, exercising its
 ##   degraded branch instead — which orchestrate mode's per-suite
 ##   process avoids, giving it the full scenario there.
-## - tests/testcontextvarslock.nim's chronosDebug construction lock is
+## - tests/testcontextvarslock.nim's tonalliDebug construction lock is
 ##   one-way for the process's lifetime: once engaged, every later
 ##   `newContextVar`/`newRequiredContextVar` call in the process asserts.
 ##

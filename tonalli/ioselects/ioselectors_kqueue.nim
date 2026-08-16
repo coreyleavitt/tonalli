@@ -115,10 +115,10 @@ proc new*(t: typedesc[Selector], T: typedesc): SelectResult[Selector[T]] =
 
   let selector = Selector[T](
     kqFd: kqFd,
-    fds: initTable[int32, SelectorKey[T]](chronosInitialSize),
+    fds: initTable[int32, SelectorKey[T]](tonalliInitialSize),
     virtualId: -1'i32,  # Should start with -1, because `InvalidIdent` == -1
     virtualHoles: initDeque[int32](),
-    queueEvents: newSeq[KEvent](chronosInitialSize)
+    queueEvents: newSeq[KEvent](tonalliInitialSize)
   )
   ok(selector)
 
@@ -604,7 +604,7 @@ proc selectInto2*[T](s: Selector[T], timeout: int,
 
 proc select2*[T](s: Selector[T],
                  timeout: int): Result[seq[ReadyKey], OSErrorCode] =
-  var res = newSeq[ReadyKey](chronosEventsCount)
+  var res = newSeq[ReadyKey](tonalliEventsCount)
   let count = ? selectInto2(s, timeout, res)
   res.setLen(count)
   ok(res)

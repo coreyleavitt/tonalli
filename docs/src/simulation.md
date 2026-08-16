@@ -478,7 +478,7 @@ only happened to avoid the bug this run.
 | law | conserved quantity | checked |
 |---|---|---|
 | callback conservation | enqueued = fired + explicitly dropped at teardown + nil-function pops, per queue (`Callbacks`/`Idlers`/`Ticks`) | every step boundary, and teardown |
-| future lifecycle | no future completes twice (identity-based, via `chronosFutureTracking`) | every terminal transition |
+| future lifecycle | no future completes twice (identity-based, via `tonalliFutureTracking`) | every terminal transition |
 | contextvar accounting | captured = restored + still-queued-with-context | `simulate()` teardown |
 | timer accounting | armed = fired + cancelled + pending (against the timer heap's own contents) | every step boundary, and teardown |
 | waiter conservation | every tracked primitive's live waiter count is zero | `simulate()` teardown |

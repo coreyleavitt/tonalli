@@ -23,11 +23,11 @@ import
   ./[testcontextvarsasync, testcontextvarsguardrails,
      testcontextvarssurface, testcontextvarsexport, testcontextvars]
   # Import order among these five is not load-bearing: the one-way
-  # chronosDebug construction lock lives in its own file
+  # tonalliDebug construction lock lives in its own file
   # (tests/testcontextvarslock.nim, its own step in chronos.nimble's
   # test task), never imported here.
 
-when (chronosEventEngine in ["epoll", "kqueue"]) or defined(windows):
+when (tonalliEventEngine in ["epoll", "kqueue"]) or defined(windows):
   # `poll` engine does not support signals and processes.
   import testsignal
 

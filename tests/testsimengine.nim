@@ -172,7 +172,7 @@ when defined(chronosSimulation) and compileOption("threads"):
       discard
     probeChan.send(outcome)
 
-  when chronosEventEngine in ["epoll", "kqueue"]:
+  when tonalliEventEngine in ["epoll", "kqueue"]:
     proc probeSignalBarrier() {.thread.} =
       var outcome = ProbeOutcome(ok: true)
       setThreadDispatcher(newSimDispatcher())
@@ -220,7 +220,7 @@ when defined(chronosSimulation) and compileOption("threads"):
       checkpoint outcome.msg
       check outcome.ok
 
-    when chronosEventEngine in ["epoll", "kqueue"]:
+    when tonalliEventEngine in ["epoll", "kqueue"]:
       test "addSignal2 barriers unconditionally under simulation":
         let outcome = runProbe(probeSignalBarrier)
         checkpoint outcome.msg

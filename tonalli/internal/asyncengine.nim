@@ -154,7 +154,7 @@ template preparePoll(loop: PDispatcherBase) =
   # to control stack depth and event ordering
   # If you're using `waitFor`, switch to `await` and / or propagate the
   # up the call stack.
-  when chronosStrictReentrancy:
+  when tonalliStrictReentrancy:
     doAssert not loop.inEventLoop,
       "poll, runForever and waitFor calls must not reenter / nest"
 
@@ -212,7 +212,7 @@ when chronosSimulation:
     ## breaking pop (asyncengine.nim's `poll()`) - so the adjustment is
     ## the constant `1`, never a dynamically tracked count. Strict-
     ## reentrancy mode never uses a sentinel at all.
-    when chronosStrictReentrancy:
+    when tonalliStrictReentrancy:
       len(loop.callbacks)
     else:
       len(loop.callbacks) - 1
@@ -401,7 +401,7 @@ template simLedgerNilPopOne(loop: untyped) =
         simLedgerCallbacksResidentLen(loop))
 
 template processCallbacksBody(loop: untyped) =
-  when chronosStrictReentrancy:
+  when tonalliStrictReentrancy:
     # Process existing callbacks but not those that follow, to allow the network
     # to regain control regularly
     for _ in 0 ..< len(loop.callbacks):
@@ -426,12 +426,12 @@ template processCallbacks(loop: untyped) =
   # local, not a module global, because a nested `waitFor` inside a
   # running callback can legally re-enter this template with a
   # different ambient context.
-  when defined(chronosDebug):
-    let chronosDebugPreBatch = currentAsyncContext
+  when defined(tonalliDebug):
+    let debugPreBatch = currentAsyncContext
     try:
       processCallbacksBody(loop)
     finally:
-      doAssert currentAsyncContext == chronosDebugPreBatch,
+      doAssert currentAsyncContext == debugPreBatch,
         "context leaked across a callback batch"
   else:
     processCallbacksBody(loop)
@@ -696,7 +696,7 @@ elif defined(windows):
       trackers: initTable[string, TrackerBase](),
       counters: initTable[string, TrackerCounter](),
     )
-    when not chronosStrictReentrancy:
+    when not tonalliStrictReentrancy:
       res.callbacks.addLast(SentinelCallback)
 
     when hasThreadSupport:
@@ -737,7 +737,7 @@ elif defined(windows):
           enableLedger = enableLedger),
       )
 
-      when not chronosStrictReentrancy:
+      when not tonalliStrictReentrancy:
         res.callbacks.addLast(SentinelCallback)
 
       when hasThreadSupport:
@@ -1358,7 +1358,7 @@ elif defined(windows):
     var curTime = Moment.now()
     var curTimeout = DWORD(0)
 
-    when not chronosStrictReentrancy:
+    when not tonalliStrictReentrancy:
       # On reentrant `poll` calls from `processCallbacks`, e.g., `waitFor`,
       # complete pending work of the outer `processCallbacks` call.
       # On non-reentrant `poll` calls, this only removes sentinel element.
@@ -1389,12 +1389,12 @@ elif defined(windows):
 
     # Process the callbacks currently scheduled - new callbacks scheduled during
     # callback execution will run in the next poll iteration
-    when not chronosStrictReentrancy:
+    when not tonalliStrictReentrancy:
       loop.callbacks.addLast(SentinelCallback)
 
     loop.processCallbacks()
 
-    when not chronosStrictReentrancy:
+    when not tonalliStrictReentrancy:
       # All callbacks done, skip `processCallbacks` at start.
       loop.callbacks.prependNoGrow(SentinelCallback)
 
@@ -1520,16 +1520,16 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     var res = PDispatcher(
       selector: selector,
       timers: initHeapQueue[TimerCallback](),
-      callbacks: initCallbackQueue[AsyncCallback](chronosInitialSize),
+      callbacks: initCallbackQueue[AsyncCallback](tonalliInitialSize),
       idlers: initCallbackQueue[AsyncCallback](),
       # `ticks` is deliberately left at its zero value - `CallbackQueue`'s
       # zero value is already a valid, empty queue that grows lazily.
-      keys: newSeq[ReadyKey](chronosInitialSize),
+      keys: newSeq[ReadyKey](tonalliInitialSize),
       trackers: initTable[string, TrackerBase](),
       counters: initTable[string, TrackerCounter](),
     )
 
-    when not chronosStrictReentrancy:
+    when not tonalliStrictReentrancy:
       res.callbacks.addLast(SentinelCallback)
 
     when hasThreadSupport:
@@ -1585,9 +1585,9 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
       ## laws (RFC 0003 3.9, slice S14).
       var res = PDispatcher(
         timers: initHeapQueue[TimerCallback](),
-        callbacks: initCallbackQueue[AsyncCallback](chronosInitialSize),
+        callbacks: initCallbackQueue[AsyncCallback](tonalliInitialSize),
         idlers: initCallbackQueue[AsyncCallback](),
-        keys: newSeq[ReadyKey](chronosInitialSize),
+        keys: newSeq[ReadyKey](tonalliInitialSize),
         trackers: initTable[string, TrackerBase](),
         counters: initTable[string, TrackerCounter](),
         simState: newSimEngineState(oracle = oracle,
@@ -1597,7 +1597,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
           enableLedger = enableLedger),
       )
 
-      when not chronosStrictReentrancy:
+      when not tonalliStrictReentrancy:
         res.callbacks.addLast(SentinelCallback)
 
       when hasThreadSupport:
@@ -2059,7 +2059,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     ## You can execute ``aftercb`` before actual socket close operation.
     closeSocket(fd, aftercb)
 
-  when chronosEventEngine in ["epoll", "kqueue"]:
+  when tonalliEventEngine in ["epoll", "kqueue"]:
     type
       ProcessHandle* = distinct int
       SignalHandle* = distinct int
@@ -2233,19 +2233,19 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
           if not isNil(adata.reader.function):
             loop.callbacks.addLast(adata.reader)
 
-        when chronosEventEngine in ["epoll", "kqueue"]:
+        when tonalliEventEngine in ["epoll", "kqueue"]:
           let customSet = {Event.Timer, Event.Signal, Event.Process,
                            Event.Vnode}
           if customSet * events != {}:
             if not isNil(adata.reader.function):
               loop.callbacks.addLast(adata.reader)
 
-    if count == loop.keys.len() and loop.keys.len() < chronosEventsCount:
+    if count == loop.keys.len() and loop.keys.len() < tonalliEventsCount:
       # If we filled the event seq, it's likely that we could have fetched
       # more events in a single call - fetching more events means less work
       # since we don't have to poll as often under load and we can
       # batch more work in a single event loop iteration.
-      loop.keys.setLen(min(loop.keys.len * 2, chronosEventsCount))
+      loop.keys.setLen(min(loop.keys.len * 2, tonalliEventsCount))
 
   template pollSelectTouchpoint(loop: PDispatcher, curTimeout,
                                  count, hasWakeup: untyped) =
@@ -2278,7 +2278,7 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     var curTime = Moment.now()
     var curTimeout = 0
 
-    when not chronosStrictReentrancy:
+    when not tonalliStrictReentrancy:
       # On reentrant `poll` calls from `processCallbacks`, e.g., `waitFor`,
       # complete pending work of the outer `processCallbacks` call.
       # On non-reentrant `poll` calls, this only removes sentinel element.
@@ -2310,12 +2310,12 @@ elif defined(macosx) or defined(freebsd) or defined(netbsd) or
     # Process the callbacks currently scheduled - new callbacks scheduled during
     # callback execution will run in the next poll iteration
 
-    when not chronosStrictReentrancy:
+    when not tonalliStrictReentrancy:
       loop.callbacks.addLast(SentinelCallback)
 
     loop.processCallbacks()
 
-    when not chronosStrictReentrancy:
+    when not tonalliStrictReentrancy:
       # All callbacks done, skip `processCallbacks` at start.
       loop.callbacks.prependNoGrow(SentinelCallback)
 
@@ -2692,7 +2692,7 @@ iterator trackerCounterKeys*(loop: PDispatcher): string =
   for key in loop.counters.keys():
     yield key
 
-when chronosFutureTracking:
+when tonalliFutureTracking:
   iterator pendingFutures*(): FutureBase =
     ## Iterates over the list of pending Futures (Future[T] objects which not
     ## yet completed, cancelled or failed).

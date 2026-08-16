@@ -1658,7 +1658,7 @@ suite "HTTP client testing suite":
     await req.get().closeWait()
     await session.closeWait()
 
-  when chronosUseSink:
+  when tonalliUseSink:
     asyncTest "HttpClientRequestRef.new from URL string with sink body":
       var session = HttpSessionRef.new()
       var body = newSeq[byte]()

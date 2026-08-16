@@ -257,7 +257,7 @@ else:
     var err = newException(IOSelectorsException, msg)
     raise err
 
-  when chronosEventEngine in ["epoll", "kqueue"]:
+  when tonalliEventEngine in ["epoll", "kqueue"]:
     const hasThreadSupport = compileOption("threads")
 
     proc blockSignals(newmask: Sigset,
@@ -302,11 +302,11 @@ else:
     doAssert((timeout >= min) and (timeout <= max),
              "Cannot select with incorrect timeout value, got " & $timeout)
 
-  when chronosEventEngine == "epoll":
+  when tonalliEventEngine == "epoll":
     include ./ioselects/ioselectors_epoll
-  elif chronosEventEngine == "kqueue":
+  elif tonalliEventEngine == "kqueue":
     include ./ioselects/ioselectors_kqueue
-  elif chronosEventEngine == "poll":
+  elif tonalliEventEngine == "poll":
     include ./ioselects/ioselectors_poll
   else:
-    {.fatal: "Event engine `" & chronosEventEngine & "` is not supported!".}
+    {.fatal: "Event engine `" & tonalliEventEngine & "` is not supported!".}

@@ -50,7 +50,7 @@ proc freeKey[T](s: Selector[T], key: int32) =
 
 proc new*(t: typedesc[Selector], T: typedesc): SelectResult[Selector[T]] =
   let selector = Selector[T](
-    fds: initTable[int32, SelectorKey[T]](chronosInitialSize)
+    fds: initTable[int32, SelectorKey[T]](tonalliInitialSize)
   )
   ok(selector)
 
@@ -250,7 +250,7 @@ proc selectInto2*[T](s: Selector[T], timeout: int,
   ok(k)
 
 proc select2*[T](s: Selector[T], timeout: int): SelectResult[seq[ReadyKey]] =
-  var res = newSeq[ReadyKey](chronosEventsCount)
+  var res = newSeq[ReadyKey](tonalliEventsCount)
   let count = ? selectInto2(s, timeout, res)
   res.setLen(count)
   ok(res)

@@ -131,18 +131,18 @@ proc grow[T](q: var CallbackQueue[T]) =
   q.head = 0'u
   q.tail = uint(n)
 
-proc addLast*[T](q: var CallbackQueue[T], item: chronosSink T) =
+proc addLast*[T](q: var CallbackQueue[T], item: tonalliSink T) =
   if isFull(q.head, q.tail, q.data.len):
     grow(q)
   let idx = slotIndex(q.tail, q.data.len)
   # `item` is a spent `sink` parameter used exactly once, here — assign
   # directly so Nim's own move analysis applies. Do not wrap this in
-  # `chronosMoveSink`, which is for lvalue reads (see `popFirst` below),
+  # `tonalliMoveSink`, which is for lvalue reads (see `popFirst` below),
   # not already-sink parameters.
   q.data[idx] = item
   inc q.tail
 
-proc prependNoGrow*[T](q: var CallbackQueue[T], item: chronosSink T) =
+proc prependNoGrow*[T](q: var CallbackQueue[T], item: tonalliSink T) =
   ## Push onto the front. Precondition: `q` must not be full — unlike
   ## `addLast`, there is no growth path here, so the caller must never
   ## invoke this on a full queue. Not a general push-front primitive;
@@ -155,18 +155,18 @@ proc prependNoGrow*[T](q: var CallbackQueue[T], item: chronosSink T) =
   let idx = slotIndex(q.head, q.data.len)
   q.data[idx] = item
 
-when defined(chronosDebug) and chronosUseSink:
-  # Gated on chronosUseSink, not just chronosDebug: on the no-sink
-  # codepath `chronosMoveSink` is an identity passthrough, so no move
+when defined(tonalliDebug) and tonalliUseSink:
+  # Gated on tonalliUseSink, not just tonalliDebug: on the no-sink
+  # codepath `tonalliMoveSink` is an identity passthrough, so no move
   # ever clears the slot and this check would fail unconditionally.
-  proc chronosCheckVacatedSlot[T](item: T) {.inline.} =
+  proc checkVacatedSlot[T](item: T) {.inline.} =
     ## Debug-only guardrail: every slot `popFirst` vacates must end up
     ## default-valued, catching a path that bypasses the fused-move
     ## discipline below. A standalone proc, not inlined into `popFirst`'s
     ## `when` body: Nim 1.6 fails to resolve `default(T)`'s `T` when the
     ## call sits inside a `when` nested in a generic `template`.
     doAssert item == default(T),
-      "CallbackQueue.chronosCheckVacatedSlot(): a vacated slot retained a " &
+      "CallbackQueue.checkVacatedSlot(): a vacated slot retained a " &
       "non-nil ghost value after popFirst() — a slot-vacating path " &
       "bypassed the fused-move discipline"
 
@@ -177,15 +177,15 @@ template popFirst*[T](q: var CallbackQueue[T]): T =
   ## in a `let` binding at the call site so the moved-out value lands in
   ## a fresh caller-frame local rather than through an intermediate hop.
   ##
-  ## The vacated slot is cleared via `chronosMoveSink`, an lvalue read of
+  ## The vacated slot is cleared via `tonalliMoveSink`, an lvalue read of
   ## a live queue slot — unlike `addLast`/`prependNoGrow` above, which assign
   ## already-spent `sink` parameters directly.
   doAssert q.tail != q.head, "CallbackQueue.popFirst(): queue is empty"
-  let chronosQueueIdx = slotIndex(q.head, q.data.len)
+  let queueIdx = slotIndex(q.head, q.data.len)
   inc q.head
-  when defined(chronosDebug) and chronosUseSink:
-    let chronosPopped = chronosMoveSink(q.data[chronosQueueIdx])
-    chronosCheckVacatedSlot(q.data[chronosQueueIdx])
-    chronosPopped
+  when defined(tonalliDebug) and tonalliUseSink:
+    let internalPopped = tonalliMoveSink(q.data[queueIdx])
+    checkVacatedSlot(q.data[queueIdx])
+    internalPopped
   else:
-    chronosMoveSink(q.data[chronosQueueIdx])
+    tonalliMoveSink(q.data[queueIdx])

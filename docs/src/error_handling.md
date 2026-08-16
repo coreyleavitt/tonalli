@@ -144,7 +144,7 @@ proc callRaiseException() {.async: (raises: []).} =
 ```
 
 **Global flag.**  This mode can be enabled globally with
-`-d:chronosHandleException` as a help when porting code to `chronos`. The
+`-d:tonalliHandleException` as a help when porting code to `chronos`. The
 behavior in this case will be that:
 
 1. old-style functions annotated with plain `async` will behave as if they had

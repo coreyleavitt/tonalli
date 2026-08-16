@@ -26,7 +26,7 @@ when chronosSimulation:
     # `raises: [CancelledError, AsyncStreamError]`.
 
 const
-  AsyncStreamDefaultBufferSize* = chronosStreamDefaultBufferSize
+  AsyncStreamDefaultBufferSize* = tonalliStreamDefaultBufferSize
     ## Default reading stream internal buffer size.
   AsyncStreamDefaultQueueSize* = 0
     ## Default writing stream internal queue size.
