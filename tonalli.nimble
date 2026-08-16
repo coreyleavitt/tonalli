@@ -2,7 +2,7 @@ mode = ScriptMode.Verbose
 
 packageName   = "tonalli"
 # keep in sync: tonalli/apps/http/httpagent.nim
-version       = "4.4.0"
+version       = "5.0.0"
 author        = "Status Research & Development GmbH"
 description   = "Networking framework with async/await support"
 license       = "MIT or Apache License 2.0"

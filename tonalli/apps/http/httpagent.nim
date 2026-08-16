@@ -14,9 +14,9 @@ import strutils
 const
   TonalliName* = "tonalli"
     ## Project name string
-  TonalliMajor* {.intdefine.}: int = 4
+  TonalliMajor* {.intdefine.}: int = 5
     ## Major number of Tonalli's version.
-  TonalliMinor* {.intdefine.}: int = 4
+  TonalliMinor* {.intdefine.}: int = 0
     ## Minor number of Tonalli's version.
   TonalliPatch* {.intdefine.}: int = 0
     ## Patch number of Tonalli's version.
