@@ -85,6 +85,7 @@ suite "sim decideTime advance":
       discard state.simDecideTimeAdvance(@[armed], curTime)
       check false
     except SimEngineError as exc:
+      check exc.kind == SimFailureKind.ProtocolViolation
       check "scripted failure" in exc.msg
 
 suite "sim decideBatch and the sim event set":
@@ -113,6 +114,7 @@ suite "sim decideBatch and the sim event set":
       discard state.simDecideBatch(@[ev])
       check false
     except SimEngineError as exc:
+      check exc.kind == SimFailureKind.ProtocolViolation
       check "not in deliverable" in exc.msg
 
   test "the same id named twice is a structured failure":
@@ -131,6 +133,7 @@ suite "sim decideBatch and the sim event set":
       discard state.simDecideBatch(@[ev])
       check false
     except SimEngineError as exc:
+      check exc.kind == SimFailureKind.ProtocolViolation
       check "more than once" in exc.msg
 
   test "deliverable is sorted by id across the readiness and arrival queues":
@@ -231,7 +234,9 @@ when defined(chronosSimulation) and compileOption("threads"):
         msg: "waitFor returned without the future completing")
     except SimEngineError as exc:
       let wallElapsedMs = (getMonoTime() - wallStart).inMilliseconds
-      if "deadlock: no runnable work" notin exc.msg:
+      if exc.kind != SimFailureKind.Deadlock:
+        outcome = ProbeOutcome(ok: false, msg: "wrong kind: " & $exc.kind)
+      elif "deadlock: no runnable work" notin exc.msg:
         outcome = ProbeOutcome(ok: false, msg: "wrong message: " & exc.msg)
       elif wallElapsedMs >= 2000:
         outcome = ProbeOutcome(ok: false,
@@ -305,7 +310,9 @@ when defined(chronosSimulation) and compileOption("threads"):
       poll()
       outcome = ProbeOutcome(ok: false, msg: "poll() did not fail")
     except SimEngineError as exc:
-      if "oracle deferred all deliverable work with no fallback" notin exc.msg:
+      if exc.kind != SimFailureKind.OracleDeferral:
+        outcome = ProbeOutcome(ok: false, msg: "wrong kind: " & $exc.kind)
+      elif "oracle deferred all deliverable work with no fallback" notin exc.msg:
         outcome = ProbeOutcome(ok: false, msg: "wrong message: " & exc.msg)
     except CatchableError as exc:
       outcome = ProbeOutcome(ok: false,

@@ -23,6 +23,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   ## same isolation `tests/testsimloop.nim` uses: a real dispatcher
   ## saved/restored here must never be this test binary's shared
   ## per-thread dispatcher.
+  import results
   import ../chronos
   import ../chronos/simulation
 
@@ -406,6 +407,46 @@ when defined(chronosSimulation) and compileOption("threads"):
         msg: "the real dispatcher was not restored after a scripted-oracle run")
     probeChan.send(outcome)
 
+  proc probeOracleDeferralThroughHarnessClassifiedAsOracleDeferral() {.thread.} =
+    ## Finding 8's full-run gap: `tests/testsimloop.nim`'s
+    ## `probeOracleDeferralNotDeadlock` pins `SimFailureKind.OracleDeferral`
+    ## against a bare dispatcher's `poll()` directly - nothing pinned the
+    ## same failure surfacing through the full `simulate()` harness as
+    ## `SimulationError.kind == OracleDeferral`, the shape a real caller
+    ## actually catches. A scripted oracle that defers all deliverable
+    ## work with no fallback (no armed timers, no queued callbacks)
+    ## against a body with one ready reader reproduces the same shape
+    ## through `simulateWithOracle` - awaiting a future the deferred
+    ## reader callback would otherwise complete, never a timer: an
+    ## armed timer is itself a legal fallback (3.5's deferral protocol),
+    ## so this probe must arm none, the same "no fallback" shape
+    ## `probeOracleDeferralNotDeadlock` reproduces directly against
+    ## `poll()`.
+    var outcome = ProbeOutcome(ok: true)
+    proc decideBatchDefer(cp: SelectBatchPoint):
+        Result[BatchDecision, SimOracleError] {.gcsafe, raises: [].} =
+      ok(BatchDecision(order: @[]))
+    let oracle = newSimOracle(decideBatchDefer, defaultDecideIo,
+                               defaultDecideTime)
+    try:
+      simulateWithOracle(seed = 14'u64, oracle = oracle):
+        let disp = getThreadDispatcher()
+        let fd = disp.mintSimFd()
+        let fut = newFuture[void]("oracleDeferral")
+        discard addReader2(fd, proc(arg: pointer) {.gcsafe, raises: [].} =
+          if not fut.finished(): fut.complete())
+        discard disp.simMarkReady(fd, SimReadyDirection.Read)
+        await fut
+      outcome = ProbeOutcome(ok: false,
+        msg: "simulateWithOracle did not report the oracle deferral")
+    except SimulationError as exc:
+      if exc.kind != SimFailureKind.OracleDeferral:
+        outcome = ProbeOutcome(ok: false, msg: "wrong kind: " & $exc.kind)
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "wrong exception type: " & exc.msg)
+    probeChan.send(outcome)
+
   proc replayFixtureBody(maxBytes: int): Future[void] {.async.} =
     ## Shared shape for the `simulateReplay` probe below: one `decideIo`
     ## choice point whose `maxBytes` is the knob that makes two calls
@@ -661,6 +702,11 @@ when defined(chronosSimulation) and compileOption("threads"):
   suite "simulateWithOracle":
     test "a scripted oracle driven through the harness keeps every guarantee":
       let outcome = runProbe(probeScriptedOracleThroughHarnessKeepsGuarantees)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "an oracle deferring all deliverable work with no fallback is classified OracleDeferral":
+      let outcome = runProbe(probeOracleDeferralThroughHarnessClassifiedAsOracleDeferral)
       checkpoint outcome.msg
       check outcome.ok
 

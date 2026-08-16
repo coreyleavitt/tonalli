@@ -140,6 +140,7 @@ suite "sim decideIo and IoOutcomePoint":
       discard state.simDecideIo(cp)
       check false
     except SimEngineError as exc:
+      check exc.kind == SimFailureKind.ProtocolViolation
       check "scripted io failure" in exc.msg
 
 # --- S11b: decideIo can now complete partially. The engine validates the
@@ -162,6 +163,7 @@ suite "sim decideIo partial-outcome validation":
       discard state.simDecideIo(cp)
       check false
     except SimEngineError as exc:
+      check exc.kind == SimFailureKind.ProtocolViolation
       check "17" in exc.msg and "16" in exc.msg
 
   test "a zero-byte Ok decision against a non-empty request is a protocol violation":
@@ -182,6 +184,7 @@ suite "sim decideIo partial-outcome validation":
       discard state.simDecideIo(cp)
       check false
     except SimEngineError as exc:
+      check exc.kind == SimFailureKind.ProtocolViolation
       check "0" in exc.msg and "8" in exc.msg
 
   test "a scripted oracle can complete an Ok decision partially":
@@ -425,6 +428,7 @@ suite "sim ReplayOracle":
       discard state.simDecideBatch(events)
       check false
     except SimEngineError as exc:
+      check exc.kind == SimFailureKind.ProtocolViolation
       check "replay divergence" in exc.msg
       check "index 0" in exc.msg
     removeFile(path)
@@ -446,6 +450,7 @@ suite "sim ReplayOracle":
       discard state.simDecideIo(cp)
       check false
     except SimEngineError as exc:
+      check exc.kind == SimFailureKind.ProtocolViolation
       check "replay divergence" in exc.msg
     removeFile(path)
 
@@ -462,6 +467,7 @@ suite "sim ReplayOracle":
       discard state.simDecideBatch(events)
       check false
     except SimEngineError as exc:
+      check exc.kind == SimFailureKind.ProtocolViolation
       check "exhausted" in exc.msg
     removeFile(path)
 
@@ -477,6 +483,7 @@ suite "sim ReplayOracle":
       discard state.simDecideBatch(events)
       check false
     except SimEngineError as exc:
+      check exc.kind == SimFailureKind.ProtocolViolation
       check "Time" in exc.msg
       check "Batch" in exc.msg
     removeFile(path)
