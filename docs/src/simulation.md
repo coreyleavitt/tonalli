@@ -299,8 +299,8 @@ the callback issuing this I/O, letting a decision log answer "which
 event caused this read or write" instead of only "what did it decide".
 `SimEventId(0)` is the honest "not triggered by a readiness delivery"
 value: I/O the body issues on its own, outside any delivered callback,
-carries it, and it can never collide with a real event id (`decideBatch`
-mints ids starting at 1). The correlation is per fd and per direction,
+carries it, and it can never collide with a real event id (the engine
+mints event ids starting at 1). The correlation is per fd and per direction,
 not per call stack: it names the last readiness delivery for that
 fd/direction, so an I/O call a callback makes for reasons other than the
 delivery that woke it (a retry loop, or code running outside the
