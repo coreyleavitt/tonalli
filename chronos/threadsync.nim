@@ -41,6 +41,11 @@ when chronosSimulation:
 else:
   {.pragma: mayBarrier, raises: [].}
 
+when chronosSimulation and not defined(windows):
+  {.pragma: mayBarrierPosix, raises: [SimBarrierError].}
+else:
+  {.pragma: mayBarrierPosix, raises: [].}
+
 type
   ThreadSignal* = object
     when defined(windows):
@@ -192,7 +197,7 @@ when not(defined(windows)):
                          {.raises: [].} =
     simBoundaryGuard(removeReader2(fd))
 
-proc close*(signal: ThreadSignalPtr): Result[void, string] {.mayBarrier.} =
+proc close*(signal: ThreadSignalPtr): Result[void, string] {.mayBarrierPosix.} =
   ## Close ThreadSignal object and free all the resources.
   defer: deallocShared(signal)
   when defined(windows):

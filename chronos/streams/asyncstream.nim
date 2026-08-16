@@ -255,21 +255,38 @@ template copyOut*(dest: pointer, item: WriteItem, length: int) =
   elif item.kind == String:
     copyMem(dest, unsafeAddr item.dataStr[item.offset], length)
 
-proc newAsyncStreamReadError(
-       p: ref CatchableError
-     ): ref AsyncStreamReadError {.noinline.} =
-  var w = newException(AsyncStreamReadError, "Read stream failed")
-  w.msg = w.msg & ", originated from [" & $p.name & "] " & p.msg
-  w.parent = p
-  w
+when chronosSimulation:
+  proc newAsyncStreamReadError(
+         p: ref CatchableError
+       ): ref AsyncStreamReadError {.noinline.} =
+    var w = newException(AsyncStreamReadError, "Read stream failed")
+    w.msg = w.msg & ", originated from [" & $p.name & "] " & p.msg
+    w.parent = p
+    w
 
-proc newAsyncStreamWriteError(
-       p: ref CatchableError
-     ): ref AsyncStreamWriteError {.noinline.} =
-  var w = newException(AsyncStreamWriteError, "Write stream failed")
-  w.msg = w.msg & ", originated from [" & $p.name & "] " & p.msg
-  w.parent = p
-  w
+  proc newAsyncStreamWriteError(
+         p: ref CatchableError
+       ): ref AsyncStreamWriteError {.noinline.} =
+    var w = newException(AsyncStreamWriteError, "Write stream failed")
+    w.msg = w.msg & ", originated from [" & $p.name & "] " & p.msg
+    w.parent = p
+    w
+else:
+  proc newAsyncStreamReadError(
+         p: ref TransportError
+       ): ref AsyncStreamReadError {.noinline.} =
+    var w = newException(AsyncStreamReadError, "Read stream failed")
+    w.msg = w.msg & ", originated from [" & $p.name & "] " & p.msg
+    w.parent = p
+    w
+
+  proc newAsyncStreamWriteError(
+         p: ref TransportError
+       ): ref AsyncStreamWriteError {.noinline.} =
+    var w = newException(AsyncStreamWriteError, "Write stream failed")
+    w.msg = w.msg & ", originated from [" & $p.name & "] " & p.msg
+    w.parent = p
+    w
 
 proc newAsyncStreamIncompleteError*(): ref AsyncStreamIncompleteError {.
      noinline.} =
