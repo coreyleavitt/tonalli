@@ -70,6 +70,12 @@ template simulate*(seed: uint64, body: untyped): untyped
 template simulateWithBudget*(seed: uint64, decisionBudget: int,
                               timeBudget: Duration, body: untyped): untyped
 template simulateWithLedger*(seed: uint64, body: untyped): untyped
+template simulateWithBudgetAndLedger*(seed: uint64, decisionBudget: int,
+                                       timeBudget: Duration,
+                                       body: untyped): untyped
+template simulateWithOracle*(seed: uint64, oracle: SimOracle,
+                              body: untyped): untyped
+template simulateReplay*(tracePath: string, body: untyped): untyped
 ```
 
 `simulate` runs `body` to completion on a fresh, hermetic simulated
@@ -89,7 +95,12 @@ awaiting a future nothing will ever complete). `simulateWithBudget`
 overrides both defaults for one run; it is a separate template rather
 than an overload of `simulate` because the two sharing a name
 miscompiles `await` inside `body` on the pinned Nim 2.2.10 toolchain (a
-standalone-reproduced compiler quirk, not a design choice).
+standalone-reproduced compiler quirk, not a design choice, and not
+specific to overloading either: a follow-up review round found any
+*defaulted* parameter ahead of `body` in the same template hits the
+same miscompile the moment a caller omits it, so every `simulate*`/
+`sweepSeeds*` template has its own fixed arity instead of sharing one
+name with optional parameters).
 
 A failing run raises `SimulationError`, carrying `kind: SimFailureKind`
 (`BodyError`, `Deadlock`, `OracleDeferral`, `ProtocolViolation`,
@@ -112,6 +123,27 @@ point, not a flag on `simulate`, because ledger checking depends on
 instrumentation coverage that is not exhaustive over every producer in
 the codebase (see [Ghost ledgers](#ghost-ledgers)); every pre-existing
 `simulate`/`sweepSeeds` caller is unaffected by construction.
+`simulateWithBudgetAndLedger` combines both: the budget-and-ledger
+corner of the matrix the three plain entry points alone leave
+uncovered.
+
+`simulateWithOracle` runs `body` under a caller-supplied `oracle`
+instead of `RandomOracle(seed)` -- the harness-level escape hatch for a
+scripted `SimOracle` ([Oracles](#oracles)), so a test that scripts a
+specific interleaving or fault still gets every harness guarantee
+(restore-on-any-outcome, decision/time budgets, trace recording, typed
+`SimulationError` classification) instead of hand-rolling a throwaway
+`newSimDispatcher`/`setThreadDispatcher` pair on its own thread and
+losing all of them.
+
+`simulateReplay` replays a previously recorded trace (see
+[Oracles](#oracles)'s `ReplayOracle` for what "replay" means): `body`
+must be the same code that produced the trace, and the run is
+attributed to the seed recorded in the trace's own header, not any
+seed the caller has to hand -- a replay has no seed of its own to
+offer, and the header's is the only honest answer. A divergent decision
+sequence surfaces the same way any other oracle error does: a
+`SimulationError` with `kind == SimFailureKind.ProtocolViolation`.
 
 ## `sweepSeeds`
 
@@ -120,9 +152,16 @@ template sweepSeeds*(seeds: Slice[uint64], body: untyped): seq[SimSeedOutcome]
 template sweepSeedsWithBudget*(seeds: Slice[uint64], decisionBudget: int,
                                 timeBudget: Duration,
                                 body: untyped): seq[SimSeedOutcome]
+template sweepSeedsWithLedger*(seeds: Slice[uint64],
+                                body: untyped): seq[SimSeedOutcome]
+template sweepSeedsWithBudgetAndLedger*(seeds: Slice[uint64],
+                                         decisionBudget: int,
+                                         timeBudget: Duration,
+                                         body: untyped): seq[SimSeedOutcome]
 proc collectSweepSeeds*(seeds: Slice[uint64], decisionBudget: int,
                          timeBudget: Duration,
-                         body: proc(): Future[void] {.gcsafe.}):
+                         body: proc(): Future[void] {.gcsafe.},
+                         enableLedger: bool = false):
     seq[SimSeedOutcome]
 ```
 
@@ -133,26 +172,46 @@ per failing seed (seed, kind, message, trace path), so a green sweep of
 a hundred seeds stays quiet, then one `check` at the end that fails the
 enclosing test once -- never once per seed -- if any seed did. Every
 seed in the range runs regardless of its siblings' outcomes, so a
-multi-seed bug never hides behind the first failure.
+multi-seed bug never hides behind the first failure. `sweepSeedsWithLedger`/
+`sweepSeedsWithBudgetAndLedger` check RFC 0003 3.9's ghost-ledger
+conservation laws over every seed in the sweep, the same laws
+`simulateWithLedger` checks for a single run: a violating seed's
+`SimSeedOutcome` is that seed's own failure, classified
+`SimSeedFailureKind.Ledger`, never a process-ending raise -- its
+non-violating siblings still pass alongside it.
 
 `SimSeedOutcome` is a plain value the sweep produces, never parsed back
 out of a message string:
 
 ```nim
 type
+  SimSeedFailureKind* {.pure.} = enum
+    Engine
+    Ledger
+
   SimSeedOutcome* = object
     seed*: uint64
     tracePath*: string
     case passed*: bool
     of true: discard
     of false:
+      failureKind*: SimSeedFailureKind
       kind*: SimFailureKind
       msg*: string
 ```
 
+`failureKind` distinguishes the two by type, the same way a raised
+`SimulationError`/`SimLedgerError` already is: `Engine` names a
+`SimulationError`-shaped failure (`kind` is meaningful, as before);
+`Ledger` names a `SimLedgerError` (`kind` holds its zero value,
+`SimFailureKind.BodyError`, and is not meaningful).
+
 `collectSweepSeeds` is the aggregation loop on its own, with no
 `unittest2` dependency, for a caller that wants the raw outcomes without
 `sweepSeeds`'s own reporting (or a different report entirely).
+`enableLedger` (default `false`, so every pre-existing caller is
+unaffected) turns on ghost-ledger checking for every seed, the same
+flag `runSimulation` threads through the single-run harness.
 
 ## Oracles
 
@@ -193,6 +252,12 @@ test suite exercises slices ahead of a live producer, and how a test
 targeting one specific bug (a reset at a specific point in a stream, an
 out-of-order datagram) scripts the exact conditions that reproduce it,
 without waiting on `RandomOracle` to find them by chance.
+`simulateWithOracle(seed, oracle): body` drives one through the full
+harness -- restore-on-any-outcome, decision/time budgets, trace
+recording, typed `SimulationError` classification -- instead of the
+scripted oracle's test having to hand-roll a throwaway
+`newSimDispatcher`/`setThreadDispatcher` pair on its own thread and
+lose all of them.
 
 **`ReplayOracle(path)`**, constructed from a recorded trace, verifies
 each live choice point's digest against the next recorded one (the
@@ -201,18 +266,20 @@ cannot mean two different things between the two) and returns the
 recorded decision. A version-mismatched trace is refused at
 construction; a live digest diverging from the recording surfaces as a
 structured `SimOracleError` carrying the expected and actual digest,
-never a silent wrong decision. **Current state, recorded honestly:**
-`ReplayOracle` is fully built and tested against `SimEngineState`
-directly (see `tests/testsimoracle.nim`'s "sim ReplayOracle" suite), but
-the convenience harness entry point sketched in RFC 0003 section 3.8
-(`simulateReplay(path): body`, wiring a `ReplayOracle` through
-`simulate`'s own save/restore machinery) does not exist yet as of this
-page: `chronos/simulation.nim`'s `runSimulation` always constructs
-`RandomOracle(seed)` internally, with no oracle parameter exposed.
-Replaying a recorded trace today means driving `ReplayOracle` against
-the lower-level engine the way the test suite does, not a one-line
-`simulate` call; closing that gap is unclaimed follow-on work, not part
-of this page's claims about what ships.
+never a silent wrong decision. `simulateReplay(tracePath): body` (RFC
+0003 section 3.8's sketch) wires one through the full harness the same
+way `simulateWithOracle` does, attributed to the seed recorded in the
+trace's own header rather than any seed the caller has to hand:
+
+```nim
+simulateReplay("build/simtraces/seed-0xC0FFEE.ndjson"):
+  ... # same body, driven by ReplayOracle over the recorded log instead
+      # of RandomOracle over a seed
+```
+
+A divergence surfaces through the harness the same way any other oracle
+error does: a `SimulationError` with `kind ==
+SimFailureKind.ProtocolViolation`, never a silent wrong decision.
 
 ## `SimNet` and datagram pairs
 

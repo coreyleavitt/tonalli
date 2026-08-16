@@ -14,7 +14,7 @@
 ## a hang.
 
 import unittest2
-import std/strutils
+import std/[os, strutils]
 
 {.used.}
 
@@ -288,6 +288,140 @@ when defined(chronosSimulation) and compileOption("threads"):
         msg: "wrong exception type: " & exc.msg)
     probeChan.send(outcome)
 
+  proc probeScriptedOracleThroughHarnessKeepsGuarantees() {.thread.} =
+    ## Finding 5's seam: a scripted oracle driven through the full
+    ## harness (`simulateWithOracle`), not a throwaway `newSimDispatcher`/
+    ## `setThreadDispatcher` pair on its own thread - proves the harness
+    ## guarantees (restore-on-any-outcome, typed `SimulationError`
+    ## classification, trace recording) hold around it exactly as they
+    ## do for `RandomOracle`.
+    var outcome = ProbeOutcome(ok: true)
+    let realDisp = getThreadDispatcher()
+    let oracle = newSimOracle(defaultDecideBatch, defaultDecideIo,
+                               defaultDecideTime)
+    try:
+      simulateWithOracle(seed = 9'u64, oracle = oracle):
+        raise newException(ValueError, "boom from scripted-oracle body")
+      outcome = ProbeOutcome(ok: false,
+        msg: "simulateWithOracle did not propagate the body's error")
+    except SimulationError as exc:
+      if exc.kind != SimFailureKind.BodyError:
+        outcome = ProbeOutcome(ok: false, msg: "wrong kind: " & $exc.kind)
+      elif "boom from scripted-oracle body" notin exc.msg:
+        outcome = ProbeOutcome(ok: false,
+          msg: "original message lost: " & exc.msg)
+      elif not fileExists(exc.tracePath):
+        outcome = ProbeOutcome(ok: false,
+          msg: "no trace file written: " & exc.tracePath)
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "wrong exception type escaped simulateWithOracle(): " & exc.msg)
+    if outcome.ok and getThreadDispatcherOrNil() != realDisp:
+      outcome = ProbeOutcome(ok: false,
+        msg: "the real dispatcher was not restored after a scripted-oracle run")
+    probeChan.send(outcome)
+
+  proc replayFixtureBody(maxBytes: int): Future[void] {.async.} =
+    ## Shared shape for the `simulateReplay` probe below: one `decideIo`
+    ## choice point whose `maxBytes` is the knob that makes two calls
+    ## either identical (same recorded/live digest) or divergent (same
+    ## ids, different payload - the exact "payload-changed io fixture"
+    ## shape `tests/testsimoracle.nim`'s engine-level suite already
+    ## proves `ReplayOracle` detects), now proven through the full
+    ## `simulateReplay` harness instead of a hand-built `SimEngineState`.
+    let disp = getThreadDispatcher()
+    let cp = IoOutcomePoint(trigger: SimEventId(0'u64),
+      endpoint: SimEndpointId(0'u32), op: SimIoOp.Read, maxBytes: maxBytes,
+      faults: {})
+    discard disp.simDecideIo(cp)
+
+  proc probeReplayReproducesRecordedRunAndDetectsDivergence() {.thread.} =
+    var outcome = ProbeOutcome(ok: true)
+    let seed = 0xFEED'u64
+    let tracePath = simTracePath(seed)
+    try:
+      simulate(seed = seed):
+        await replayFixtureBody(64)
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "recording run unexpectedly failed: " & exc.msg)
+
+    if outcome.ok:
+      try:
+        simulateReplay(tracePath):
+          await replayFixtureBody(64)
+      except CatchableError as exc:
+        outcome = ProbeOutcome(ok: false,
+          msg: "replay of the identical body raised: " & exc.msg)
+
+    if outcome.ok:
+      try:
+        simulateReplay(tracePath):
+          await replayFixtureBody(128)
+        outcome = ProbeOutcome(ok: false,
+          msg: "simulateReplay did not detect the divergent body")
+      except SimulationError as exc:
+        if exc.kind != SimFailureKind.ProtocolViolation:
+          outcome = ProbeOutcome(ok: false,
+            msg: "divergence raised the wrong kind: " & $exc.kind)
+        elif "replay divergence" notin exc.msg:
+          outcome = ProbeOutcome(ok: false,
+            msg: "divergence not named in message: " & exc.msg)
+      except CatchableError as exc:
+        outcome = ProbeOutcome(ok: false,
+          msg: "divergence raised the wrong exception type: " & exc.msg)
+    probeChan.send(outcome)
+
+  proc probeSweepWithLedgerClassifiesViolatingSeedsByKind() {.thread.} =
+    ## Finding 12's sweep gap: `sweepSeedsWithLedger` over a body that
+    ## plants a ledger violation only on the sweep's second seed (the
+    ## same planted-imbalance idiom `tests/testsimledger.nim` uses for a
+    ## single run) - the violating seed's outcome must be a
+    ## `SimSeedOutcome` failure classified `SimSeedFailureKind.Ledger`,
+    ## never a process-ending raise, and its non-violating siblings must
+    ## still pass alongside it.
+    var outcome = ProbeOutcome(ok: true)
+    var runIndex = 0
+    let outcomes = sweepSeedsWithLedger(100'u64 .. 102'u64):
+      await sleepAsync(0.milliseconds)
+      inc runIndex
+      if runIndex == 2:
+        simLedgerDebugPlantDroppedEnqueue(SimLedgerQueueKind.Callbacks)
+      await sleepAsync(0.milliseconds)
+    if outcomes.len != 3:
+      outcome = ProbeOutcome(ok: false,
+        msg: "expected 3 outcomes, got " & $outcomes.len)
+    else:
+      for i, o in outcomes:
+        if i == 1:
+          if o.passed:
+            outcome = ProbeOutcome(ok: false,
+              msg: "seed " & $o.seed & " unexpectedly passed")
+          elif o.failureKind != SimSeedFailureKind.Ledger:
+            outcome = ProbeOutcome(ok: false,
+              msg: "seed " & $o.seed & " wrong failureKind: " & $o.failureKind)
+          elif "callback conservation" notin o.msg:
+            outcome = ProbeOutcome(ok: false,
+              msg: "seed " & $o.seed & " lost the law name: " & o.msg)
+        elif not o.passed:
+          outcome = ProbeOutcome(ok: false,
+            msg: "seed " & $o.seed & " unexpectedly failed (" &
+                 $o.failureKind & "): " & o.msg)
+    probeChan.send(outcome)
+
+  proc probeBudgetAndLedgerCombinationCompilesAndRuns() {.thread.} =
+    ## Finding 12's other gap: no entry point covered budget override
+    ## and ledger checking together.
+    var outcome = ProbeOutcome(ok: true)
+    try:
+      simulateWithBudgetAndLedger(seed = 12'u64, decisionBudget = 500,
+                                   timeBudget = 10.seconds):
+        await sleepAsync(0.milliseconds)
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "unexpected " & $exc.name & ": " & exc.msg)
+    probeChan.send(outcome)
+
   suite "simulate() harness core":
     test "an empty body round-trips the real dispatcher":
       let outcome = runProbe(probeEmptyBodyRoundTrips)
@@ -332,5 +466,28 @@ when defined(chronosSimulation) and compileOption("threads"):
 
     test "a pre-#703-shape race is caught by the sweep, with its seed replaying":
       let outcome = runProbe(probePre703FixtureCaughtBySweepWithSeedReplaying)
+      checkpoint outcome.msg
+      check outcome.ok
+
+  suite "simulateWithOracle":
+    test "a scripted oracle driven through the harness keeps every guarantee":
+      let outcome = runProbe(probeScriptedOracleThroughHarnessKeepsGuarantees)
+      checkpoint outcome.msg
+      check outcome.ok
+
+  suite "simulateReplay":
+    test "an identical body replays clean, a divergent one is a typed SimulationError":
+      let outcome = runProbe(probeReplayReproducesRecordedRunAndDetectsDivergence)
+      checkpoint outcome.msg
+      check outcome.ok
+
+  suite "budget/ledger matrix":
+    test "sweepSeedsWithLedger classifies a planted violation by SimSeedFailureKind":
+      let outcome = runProbe(probeSweepWithLedgerClassifiesViolatingSeedsByKind)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "simulateWithBudgetAndLedger compiles and runs":
+      let outcome = runProbe(probeBudgetAndLedgerCombinationCompilesAndRuns)
       checkpoint outcome.msg
       check outcome.ok

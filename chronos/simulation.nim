@@ -10,7 +10,13 @@
 ## The deterministic simulation substrate's public surface (RFC 0003
 ## 3.10): `simulate`, the single-run harness primitive that runs an
 ## async body on a fresh hermetic sim dispatcher and restores the
-## thread's real dispatcher afterward, whatever the body's outcome.
+## thread's real dispatcher afterward, whatever the body's outcome, plus
+## its `simulateWithBudget`/`simulateWithLedger`/
+## `simulateWithBudgetAndLedger`/`simulateWithOracle`/`simulateReplay`
+## siblings and the matching `sweepSeeds*` family - every one a fixed-
+## arity template funneling into the same private `runSimulation` core,
+## never an overload or a defaulted parameter (`simulateCore`'s
+## docstring records why).
 ##
 ## Re-exports `chronos/internal/simengine` (which itself re-exports
 ## `chronos/internal/simtrace` and `chronos/internal/simledger`), so
@@ -233,29 +239,43 @@ proc newSimulationError(kind: SimFailureKind, seed: uint64, tracePath, msg: stri
   result.tracePath = tracePath
   result.parent = parent
 
-proc simTracePath(seed: uint64): string =
+proc simTracePath*(seed: uint64): string =
+  ## The formula this page documents (RFC 0003 3.8): `SimulationError.
+  ## tracePath` already carries this for a failing run, and a caller
+  ## needing a successful run's trace path too - `simulateReplay`'s own
+  ## tests, replaying what a preceding `simulate(seed)` just recorded -
+  ## has no other way to name it, since a clean `simulate` return
+  ## carries no trace path of its own.
   getTempDir() / "chronos-sim" / ("seed-" & $seed & ".ndjson")
 
 proc runSimulation(seed: uint64, decisionBudget: int, timeBudget: Duration,
-                    enableLedger: bool,
+                    enableLedger: bool, oracle: SimOracle,
                     body: proc(): Future[void] {.gcsafe.}) =
-  ## The harness core behind the `simulate` template (RFC 0003 3.8):
-  ## saves the thread's current dispatcher without side effects,
-  ## installs a fresh hermetic sim dispatcher seeded with `RandomOracle
-  ## (seed)` and the given budgets, prints and flushes the seed banner,
-  ## runs `body` to completion, and restores the saved dispatcher
-  ## through the force path - unconditionally, whether `body` completed,
-  ## the body raised, or the sim loop itself failed - so the original
-  ## failure always survives and the calling thread's real dispatcher
-  ## is always left intact. `enableLedger` turns on the D8 ghost-ledger
-  ## laws (RFC 0003 3.9, slice S14); see `simulateWithLedger`.
+  ## The harness core every `simulate*` template funnels through (RFC
+  ## 0003 3.8): saves the thread's current dispatcher without side
+  ## effects, installs a fresh hermetic sim dispatcher driven by `oracle`
+  ## and the given budgets, prints and flushes the seed banner, runs
+  ## `body` to completion, and restores the saved dispatcher through the
+  ## force path - unconditionally, whether `body` completed, the body
+  ## raised, or the sim loop itself failed - so the original failure
+  ## always survives and the calling thread's real dispatcher is always
+  ## left intact. `oracle` is a caller-supplied parameter, not hardcoded:
+  ## `simulate`/`simulateWithBudget`/`simulateWithLedger` pass
+  ## `RandomOracle(seed)`, `simulateWithOracle` passes its caller's
+  ## scripted oracle, `simulateReplay` passes a `ReplayOracle` - every
+  ## path through this proc gets the same restore/budget/trace/
+  ## `SimulationError` guarantees regardless of which oracle drives it.
+  ## `enableLedger` turns on the D8 ghost-ledger laws (RFC 0003 3.9,
+  ## slice S14); see `simulateWithLedger`. Stays private: every public
+  ## entry point is one of the fixed-arity `simulate*` templates below,
+  ## never a direct caller of this proc.
   let savedDisp = getThreadDispatcherOrNil()
   let tracePath = simTracePath(seed)
   createDir(tracePath.parentDir)
   var writer = openSimTraceWriter(tracePath, seed = seed)
   let timeBudgetCutoffNanoseconds =
     simClockAnchorNanoseconds + timeBudget.nanoseconds
-  let disp = newSimDispatcher(oracle = RandomOracle(seed),
+  let disp = newSimDispatcher(oracle = oracle,
     decisionBudget = decisionBudget, seed = seed, hasTimeBudget = true,
     timeBudgetCutoffNanoseconds = timeBudgetCutoffNanoseconds,
     enableLedger = enableLedger)
@@ -348,6 +368,23 @@ proc runSimulation(seed: uint64, decisionBudget: int, timeBudget: Duration,
   if failure != nil:
     raise failure
 
+template simulateCore(seed: uint64, decisionBudget: int, timeBudget: Duration,
+                       enableLedger: bool, oracle: SimOracle,
+                       body: untyped): untyped =
+  ## Every `simulate*` template's sole path into `runSimulation`. Fixed
+  ## arity, no defaulted parameter: a defaulted parameter here, relied
+  ## on by omission at a call site, reproduces the same `await`-
+  ## miscompiles-inside-`body` toolchain bug the module docstring
+  ## records for same-named overloads (standalone-reproduced against
+  ## the pinned Nim 2.2.10 toolchain: *any* omitted default ahead of a
+  ## trailing `untyped` body parameter triggers it, not only two
+  ## same-named templates) - which is why every public `simulate*`/
+  ## `sweepSeeds*` template below has its own fixed arity instead of
+  ## sharing one name with optional parameters.
+  runSimulation(seed, decisionBudget, timeBudget, enableLedger, oracle,
+    proc() {.async, gcsafe.} =
+      body)
+
 template simulate*(seed: uint64, body: untyped): untyped =
   ## Runs `body` (async code) to completion on a fresh, hermetic
   ## simulated dispatcher driven by `RandomOracle(seed)`, then restores
@@ -356,12 +393,13 @@ template simulate*(seed: uint64, body: untyped): untyped =
   ## decision/time budget (RFC 0003 3.8), deadlocks, or hits an oracle/
   ## protocol violation raises `SimulationError`, and so does a raising
   ## `body` (unwrapped as `.parent`). See `simulateWithBudget` to
-  ## override the budgets, and `simulateWithLedger` to additionally
-  ## check RFC 0003 3.9's ghost-ledger conservation laws.
-  runSimulation(seed, simulateDefaultDecisionBudget, simulateDefaultTimeBudget,
-    enableLedger = false,
-    proc() {.async, gcsafe.} =
-      body)
+  ## override the budgets, `simulateWithLedger`/`simulateWithBudgetAndLedger`
+  ## to additionally check RFC 0003 3.9's ghost-ledger conservation
+  ## laws, `simulateWithOracle` to drive the run with a scripted oracle
+  ## instead of `RandomOracle`, and `simulateReplay` to replay a
+  ## recorded trace.
+  simulateCore(seed, simulateDefaultDecisionBudget, simulateDefaultTimeBudget,
+    false, RandomOracle(seed), body)
 
 template simulateWithLedger*(seed: uint64, body: untyped): untyped =
   ## As `simulate`, additionally checking RFC 0003 3.9's ghost-ledger
@@ -374,11 +412,10 @@ template simulateWithLedger*(seed: uint64, body: untyped): untyped =
   ## pre-S14 caller of `simulate`/`sweepSeeds` is unaffected, since
   ## ledger checking depends on producer coverage this slice does not
   ## claim to be exhaustive over (see `tests/testsimledger.nim`'s
-  ## module docstring for the scoping judgment call).
-  runSimulation(seed, simulateDefaultDecisionBudget, simulateDefaultTimeBudget,
-    enableLedger = true,
-    proc() {.async, gcsafe.} =
-      body)
+  ## module docstring for the scoping judgment call). See
+  ## `simulateWithBudgetAndLedger` to also override the budgets.
+  simulateCore(seed, simulateDefaultDecisionBudget, simulateDefaultTimeBudget,
+    true, RandomOracle(seed), body)
 
 template simulateWithBudget*(seed: uint64, decisionBudget: int,
                               timeBudget: Duration, body: untyped): untyped =
@@ -387,10 +424,53 @@ template simulateWithBudget*(seed: uint64, decisionBudget: int,
   ## separate template rather than an overload of `simulate`: with both
   ## sharing a name, resolving a call to either miscompiles `await` in
   ## `body` (reproduced standalone against the Nim 2.2.10 toolchain;
-  ## not specific to this module).
-  runSimulation(seed, decisionBudget, timeBudget, enableLedger = false,
-    proc() {.async, gcsafe.} =
-      body)
+  ## not specific to this module - see `simulateCore`'s docstring).
+  simulateCore(seed, decisionBudget, timeBudget, false, RandomOracle(seed),
+    body)
+
+template simulateWithBudgetAndLedger*(seed: uint64, decisionBudget: int,
+                                       timeBudget: Duration,
+                                       body: untyped): untyped =
+  ## As `simulateWithLedger`, with `decisionBudget`/`timeBudget`
+  ## overriding the defaults - the budget-and-ledger corner of the
+  ## `{budget}x{ledger}` matrix `simulate`/`simulateWithBudget`/
+  ## `simulateWithLedger` alone left uncovered.
+  simulateCore(seed, decisionBudget, timeBudget, true, RandomOracle(seed),
+    body)
+
+template simulateWithOracle*(seed: uint64, oracle: SimOracle,
+                              body: untyped): untyped =
+  ## As `simulate`, driven by `oracle` instead of `RandomOracle(seed)` -
+  ## the harness-level escape hatch for a scripted `SimOracle`
+  ## (`newSimOracle`), so a test that scripts a specific interleaving or
+  ## fault still gets the full harness's guarantees (restore-on-any-
+  ## outcome, decision/time budgets, trace recording, typed
+  ## `SimulationError` classification) instead of hand-rolling a
+  ## throwaway `newSimDispatcher`/`setThreadDispatcher` pair on its own
+  ## thread and losing all of them.
+  simulateCore(seed, simulateDefaultDecisionBudget, simulateDefaultTimeBudget,
+    false, oracle, body)
+
+proc simulateReplaySeed(tracePath: string): uint64
+                        {.raises: [IOError, SimTraceReadError].} =
+  ## The seed `simulateReplay` attributes a replay run to: the one
+  ## recorded in `tracePath`'s own header, never the caller's - a
+  ## replay has no seed of its own to offer, and the header's is the
+  ## only honest answer (RFC 0003 3.7's header already carries it for
+  ## exactly this kind of attribution).
+  readSimTrace(tracePath).header.seed
+
+template simulateReplay*(tracePath: string, body: untyped): untyped =
+  ## Replays a previously recorded trace (RFC 0003 3.8's sketch): drives
+  ## the same harness `simulate` does, over a `ReplayOracle(tracePath)`
+  ## in place of `RandomOracle(seed)`, attributed to the seed recorded in
+  ## the trace's own header. `body` must be the same code that produced
+  ## the trace; a divergent decision sequence surfaces as a
+  ## `SimulationError` with `kind == SimFailureKind.ProtocolViolation`
+  ## (`ReplayOracle`'s structured digest mismatch, converted the same
+  ## way any other oracle error is - see `SimulationError`'s docstring).
+  simulateCore(simulateReplaySeed(tracePath), simulateDefaultDecisionBudget,
+    simulateDefaultTimeBudget, false, ReplayOracle(tracePath), body)
 
 proc simLedgerDebugPlantDroppedEnqueue*(kind: SimLedgerQueueKind) =
   ## TEST-ONLY escape hatch (RFC 0003 slice S14's RED phase): records
@@ -506,48 +586,81 @@ proc simLedgerTrackWaiters*(s: AsyncSemaphore) =
     proc(): int {.gcsafe, raises: [].} = s.waitersCount())
 
 type
+  SimSeedFailureKind* {.pure.} = enum
+    ## Distinguishes a failing `SimSeedOutcome` by type (RFC 0003 3.9's
+    ## "a test distinguishes a ledger violation ... by type, never by
+    ## string-matching the message", applied to this aggregated value
+    ## the same way a raised `SimulationError`/`SimLedgerError` already
+    ## is): `Engine` is a `SimulationError`-shaped failure - a livelock,
+    ## a deadlock, an oracle/protocol violation, or the body's own
+    ## exception, `kind` naming which; `Ledger` is a `SimLedgerError`,
+    ## kept a separate case rather than folded into `SimFailureKind`,
+    ## the same separation `SimLedgerError`'s own docstring requires of
+    ## a raised failure.
+    Engine
+    Ledger
+
   SimSeedOutcome* = object
     ## One seed's verdict from `sweepSeeds`/`collectSweepSeeds` (RFC 0003
     ## 3.8): every seed in the swept range gets exactly one of these, in
     ## seed order, whether it passed or failed - the sweep never stops
     ## at the first failure, so a multi-seed bug never hides its
     ## siblings. A value the aggregator produces, never parsed back out
-    ## of a message string.
+    ## of a message string. `kind` is meaningful only when
+    ## `failureKind == SimSeedFailureKind.Engine`; it holds the zero
+    ## value (`SimFailureKind.BodyError`) for a `Ledger` failure.
     seed*: uint64
     tracePath*: string
     case passed*: bool
     of true:
       discard
     of false:
+      failureKind*: SimSeedFailureKind
       kind*: SimFailureKind
       msg*: string
 
 proc runSweepSeed(seed: uint64, decisionBudget: int, timeBudget: Duration,
+                   enableLedger: bool,
                    body: proc(): Future[void] {.gcsafe.}): SimSeedOutcome =
   ## One seed of a sweep, `simulate`'s failure-to-outcome conversion
-  ## instead of a raised `SimulationError`: `collectSweepSeeds` is the
-  ## loop this drives, one call per seed.
+  ## instead of a raised `SimulationError`/`SimLedgerError`:
+  ## `collectSweepSeeds` is the loop this drives, one call per seed. A
+  ## planted ledger violation is this seed's `SimSeedOutcome` failure,
+  ## not a process-ending raise - the same "every seed runs regardless
+  ## of its siblings" guarantee `SimulationError` already gets, extended
+  ## to the ledger's distinct exception type.
   try:
-    runSimulation(seed, decisionBudget, timeBudget, enableLedger = false, body)
+    runSimulation(seed, decisionBudget, timeBudget, enableLedger,
+                  RandomOracle(seed), body)
     SimSeedOutcome(seed: seed, tracePath: simTracePath(seed), passed: true)
   except SimulationError as exc:
     SimSeedOutcome(seed: seed, tracePath: exc.tracePath, passed: false,
-                    kind: exc.kind, msg: exc.msg)
+                    failureKind: SimSeedFailureKind.Engine, kind: exc.kind,
+                    msg: exc.msg)
+  except SimLedgerError as exc:
+    SimSeedOutcome(seed: seed, tracePath: simTracePath(seed), passed: false,
+                    failureKind: SimSeedFailureKind.Ledger, msg: exc.msg)
 
 proc collectSweepSeeds*(seeds: Slice[uint64], decisionBudget: int,
                          timeBudget: Duration,
-                         body: proc(): Future[void] {.gcsafe.}):
+                         body: proc(): Future[void] {.gcsafe.},
+                         enableLedger: bool = false):
     seq[SimSeedOutcome] =
-  ## The aggregation loop behind `sweepSeeds`/`sweepSeedsWithBudget`,
-  ## exposed on its own (RFC 0003 3.8): runs `body` once per seed in
-  ## `seeds`, every seed regardless of its siblings' outcomes, and
-  ## returns every `SimSeedOutcome` in seed order. Unlike the
-  ## `sweepSeeds` templates, this never touches `unittest2` - the
+  ## The aggregation loop behind `sweepSeeds`/`sweepSeedsWithBudget`/
+  ## `sweepSeedsWithLedger`/`sweepSeedsWithBudgetAndLedger`, exposed on
+  ## its own (RFC 0003 3.8): runs `body` once per seed in `seeds`, every
+  ## seed regardless of its siblings' outcomes, and returns every
+  ## `SimSeedOutcome` in seed order. `enableLedger` (default `false`, so
+  ## every pre-existing caller is unaffected) turns on the D8 ghost-
+  ## ledger laws for every seed in the sweep, the same flag
+  ## `simulateWithLedger` threads through the single-run harness. Unlike
+  ## the `sweepSeeds` templates, this never touches `unittest2` - the
   ## aggregate verdict is the caller's to report however it chooses
   ## (`sweepSeeds` reports it the `checkLeaks` way; a caller wanting a
   ## different report, or none, calls this directly).
   for seed in seeds:
-    result.add runSweepSeed(seed, decisionBudget, timeBudget, body)
+    result.add runSweepSeed(seed, decisionBudget, timeBudget, enableLedger,
+                             body)
 
 proc reportSweep(outcomes: seq[SimSeedOutcome]) =
   ## The `checkLeaks` idiom (`chronos/unittest2/asynctests.nim`): a
@@ -558,10 +671,26 @@ proc reportSweep(outcomes: seq[SimSeedOutcome]) =
   for outcome in outcomes:
     if not outcome.passed:
       inc failedCount
+      let kindDesc = case outcome.failureKind
+        of SimSeedFailureKind.Engine: $outcome.kind
+        of SimSeedFailureKind.Ledger: "LedgerViolation"
       checkpoint "[chronos-sim] seed=0x" & toLowerAscii(toHex(outcome.seed)) &
-        " FAILED (" & $outcome.kind & "): " & outcome.msg &
+        " FAILED (" & kindDesc & "): " & outcome.msg &
         " trace=" & outcome.tracePath
   check failedCount == 0
+
+template sweepSeedsCore(seeds: Slice[uint64], decisionBudget: int,
+                         timeBudget: Duration, enableLedger: bool,
+                         body: untyped): seq[SimSeedOutcome] =
+  ## Every `sweepSeeds*` template's sole path into `collectSweepSeeds`/
+  ## `reportSweep` - fixed arity, no defaulted parameter, the same
+  ## reason `simulateCore` is (see its docstring).
+  let sweepOutcomes = collectSweepSeeds(seeds, decisionBudget, timeBudget,
+    proc(): Future[void] {.async, gcsafe.} =
+      body,
+    enableLedger)
+  reportSweep(sweepOutcomes)
+  sweepOutcomes
 
 template sweepSeeds*(seeds: Slice[uint64], body: untyped): seq[SimSeedOutcome] =
   ## Runs `body` (async code, as `simulate`'s) once per seed in `seeds`
@@ -570,10 +699,12 @@ template sweepSeeds*(seeds: Slice[uint64], body: untyped): seq[SimSeedOutcome] =
   ## (RFC 0003 3.8): every failing seed's seed, kind, message, and trace
   ## path via `checkpoint`, then one `check` failing the enclosing test
   ## if any seed failed. See `sweepSeedsWithBudget` to override the
-  ## per-seed budgets, and `collectSweepSeeds` to aggregate without the
-  ## `unittest2` reporting.
-  sweepSeedsWithBudget(seeds, simulateDefaultDecisionBudget,
-                        simulateDefaultTimeBudget, body)
+  ## per-seed budgets, `sweepSeedsWithLedger`/`sweepSeedsWithBudgetAndLedger`
+  ## to additionally check RFC 0003 3.9's ghost-ledger conservation laws
+  ## over every seed in the sweep, and `collectSweepSeeds` to aggregate
+  ## without the `unittest2` reporting.
+  sweepSeedsCore(seeds, simulateDefaultDecisionBudget,
+                 simulateDefaultTimeBudget, false, body)
 
 template sweepSeedsWithBudget*(seeds: Slice[uint64], decisionBudget: int,
                                 timeBudget: Duration,
@@ -582,8 +713,24 @@ template sweepSeedsWithBudget*(seeds: Slice[uint64], decisionBudget: int,
   ## defaults for every seed in the sweep. A separate template rather
   ## than an overload of `sweepSeeds`, the same `await`-miscompiles
   ## reason `simulateWithBudget` is separate from `simulate`.
-  let sweepOutcomes = collectSweepSeeds(seeds, decisionBudget, timeBudget,
-    proc(): Future[void] {.async, gcsafe.} =
-      body)
-  reportSweep(sweepOutcomes)
-  sweepOutcomes
+  sweepSeedsCore(seeds, decisionBudget, timeBudget, false, body)
+
+template sweepSeedsWithLedger*(seeds: Slice[uint64],
+                                body: untyped): seq[SimSeedOutcome] =
+  ## As `sweepSeeds`, additionally checking RFC 0003 3.9's ghost-ledger
+  ## conservation laws over every seed in the sweep (the same laws
+  ## `simulateWithLedger` checks for a single run). A violating seed's
+  ## `SimSeedOutcome` reports `failureKind == SimSeedFailureKind.Ledger`;
+  ## a non-violating seed passes exactly as it would under `sweepSeeds`.
+  sweepSeedsCore(seeds, simulateDefaultDecisionBudget,
+                 simulateDefaultTimeBudget, true, body)
+
+template sweepSeedsWithBudgetAndLedger*(seeds: Slice[uint64],
+                                         decisionBudget: int,
+                                         timeBudget: Duration,
+                                         body: untyped): seq[SimSeedOutcome] =
+  ## As `sweepSeedsWithLedger`, with `decisionBudget`/`timeBudget`
+  ## overriding the defaults - completing the sweep side of the
+  ## `{budget}x{ledger}` matrix `simulateWithBudgetAndLedger` completes
+  ## for a single run.
+  sweepSeedsCore(seeds, decisionBudget, timeBudget, true, body)
