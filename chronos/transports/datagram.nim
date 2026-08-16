@@ -959,12 +959,28 @@ proc newDatagramTransportCommon(cbproc: UnsafeDatagramCallback,
   ## ``ttl`` - TTL for UDP datagram packet (only usable when flags has
   ## ``Broadcast`` option).
 
-  proc wrap(transp: DatagramTransport,
-            remote: TransportAddress) {.async: (raises: []).} =
-    try:
-      await cbproc(transp, remote)
-    except CatchableError as exc:
-      raiseAssert "Unexpected exception from stream server cbproc: " & exc.msg
+  when chronosSimulation:
+    proc wrap(transp: DatagramTransport,
+              remote: TransportAddress) {.async: (raises: []).} =
+      try:
+        await cbproc(transp, remote)
+      except SimBarrierError as exc:
+        raiseAsDefect(exc,
+          "simulation barrier reached from newDatagramTransportCommon's " &
+          "deprecated callback wrap")
+      except SimEngineError as exc:
+        raiseAsDefect(exc,
+          "simulation engine violation reached from " &
+          "newDatagramTransportCommon's deprecated callback wrap")
+      except CatchableError as exc:
+        raiseAssert "Unexpected exception from stream server cbproc: " & exc.msg
+  else:
+    proc wrap(transp: DatagramTransport,
+              remote: TransportAddress) {.async: (raises: []).} =
+      try:
+        await cbproc(transp, remote)
+      except CatchableError as exc:
+        raiseAssert "Unexpected exception from stream server cbproc: " & exc.msg
 
   newDatagramTransportCommon(wrap, remote, local, sock, flags, udata, child,
                              bufferSize, ttl, dualstack)

@@ -140,6 +140,21 @@ proc createAsyncSocket2*(domain: Domain, sockType: SockType,
                          inherit = true): Result[AsyncFD, OSErrorCode]
                         {.mayBarrier.} =
   ## Creates new asynchronous socket.
+  when chronosSimulation:
+    template registerOrClose(fd: untyped): untyped =
+      try:
+        register2(AsyncFD(fd)).isOkOr:
+          discard closeFd(fd)
+          return err(error)
+      except SimBarrierError as exc:
+        discard closeFd(fd)
+        raise exc
+  else:
+    template registerOrClose(fd: untyped): untyped =
+      register2(AsyncFD(fd)).isOkOr:
+        discard closeFd(fd)
+        return err(error)
+
   when defined(windows):
     let flags =
       if inherit:
@@ -154,9 +169,7 @@ proc createAsyncSocket2*(domain: Domain, sockType: SockType,
     setDescriptorBlocking(fd, false).isOkOr:
       discard closeFd(fd)
       return err(error)
-    register2(AsyncFD(fd)).isOkOr:
-      discard closeFd(fd)
-      return err(error)
+    registerOrClose(fd)
 
     ok(AsyncFD(fd))
   else:
@@ -169,9 +182,7 @@ proc createAsyncSocket2*(domain: Domain, sockType: SockType,
       let fd = osdefs.socket(toInt(domain), socketType, toInt(protocol))
       if fd == -1:
         return err(osLastError())
-      register2(AsyncFD(fd)).isOkOr:
-        discard closeFd(fd)
-        return err(error)
+      registerOrClose(fd)
       ok(AsyncFD(fd))
     else:
       let fd = osdefs.socket(toInt(domain), toInt(sockType), toInt(protocol))
@@ -180,9 +191,7 @@ proc createAsyncSocket2*(domain: Domain, sockType: SockType,
       setDescriptorFlags(cint(fd), true, true).isOkOr:
         discard closeFd(fd)
         return err(error)
-      register2(AsyncFD(fd)).isOkOr:
-        discard closeFd(fd)
-        return err(error)
+      registerOrClose(fd)
       ok(AsyncFD(fd))
 
 proc wrapAsyncSocket2*(sock: cint|SocketHandle): Result[AsyncFD, OSErrorCode]
@@ -205,8 +214,7 @@ proc createAsyncSocket*(domain: Domain, sockType: SockType,
   createAsyncSocket2(domain, sockType, protocol, inherit).valueOr:
     return asyncInvalidSocket
 
-proc wrapAsyncSocket*(sock: cint|SocketHandle): AsyncFD {.
-    raises: [CatchableError].} =
+proc wrapAsyncSocket*(sock: cint|SocketHandle): AsyncFD {.mayBarrier.} =
   ## Wraps socket to asynchronous socket handle.
   ## Return ``asyncInvalidSocket`` on error.
   wrapAsyncSocket2(cint(sock)).valueOr:

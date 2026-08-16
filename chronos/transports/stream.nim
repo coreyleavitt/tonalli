@@ -2403,12 +2403,28 @@ proc createStreamServer*(host: TransportAddress,
                          dualstack = DualStackType.Auto): StreamServer {.
     mayBarrierOsErr,
     deprecated: "Callback must not raise exceptions, annotate with {.async: (raises: []).}".} =
-  proc wrap(server: StreamServer,
-            client: StreamTransport) {.async: (raises: []).} =
-    try:
-      await cbproc(server, client)
-    except CatchableError as exc:
-      raiseAssert "Unexpected exception from stream server cbproc: " & exc.msg
+  when chronosSimulation:
+    proc wrap(server: StreamServer,
+              client: StreamTransport) {.async: (raises: []).} =
+      try:
+        await cbproc(server, client)
+      except SimBarrierError as exc:
+        raiseAsDefect(exc,
+          "simulation barrier reached from createStreamServer's " &
+          "deprecated callback wrap")
+      except SimEngineError as exc:
+        raiseAsDefect(exc,
+          "simulation engine violation reached from createStreamServer's " &
+          "deprecated callback wrap")
+      except CatchableError as exc:
+        raiseAssert "Unexpected exception from stream server cbproc: " & exc.msg
+  else:
+    proc wrap(server: StreamServer,
+              client: StreamTransport) {.async: (raises: []).} =
+      try:
+        await cbproc(server, client)
+      except CatchableError as exc:
+        raiseAssert "Unexpected exception from stream server cbproc: " & exc.msg
 
   createStreamServer(
     host, wrap, flags, sock, backlog, bufferSize, child, init, udata,
@@ -2786,33 +2802,33 @@ template readExactlyBody(): untyped =
   doAssert(nbytes >= 0, "nbytes must be non-negative integer")
 
   if nbytes == 0:
-    return
-
-  when defined(windows):
-    # TODO On windows, two missing features prvent direct reads:
-    #      * Per-request cancellation - `readLoop` will initiate an overlapped
-    #        read that needs to be cancelled (using `CancelIoEx`) since the
-    #        `pbytes` buffer goes out of scope on cancellation
-    #      * Per-request OVERLAPPED instances - see `readStreamLoop`
-    var
-      data = cast[ptr byte](pbytes)
-      size = nbytes
+    discard
   else:
-    transp.direct.data = cast[ptr byte](pbytes)
-    transp.direct.size = nbytes
-    template data: untyped = transp.direct.data
-    template size: untyped = transp.direct.size
+    when defined(windows):
+      # TODO On windows, two missing features prvent direct reads:
+      #      * Per-request cancellation - `readLoop` will initiate an overlapped
+      #        read that needs to be cancelled (using `CancelIoEx`) since the
+      #        `pbytes` buffer goes out of scope on cancellation
+      #      * Per-request OVERLAPPED instances - see `readStreamLoop`
+      var
+        data = cast[ptr byte](pbytes)
+        size = nbytes
+    else:
+      transp.direct.data = cast[ptr byte](pbytes)
+      transp.direct.size = nbytes
+      template data: untyped = transp.direct.data
+      template size: untyped = transp.direct.size
 
-    defer:
-      transp.direct.reset()
+      defer:
+        transp.direct.reset()
 
-  readLoop("stream.transport.readExactly"):
-    if len(transp.buffer) == 0 and size > 0 and transp.atEof():
-      raise newException(TransportIncompleteError, "Data incomplete!")
-    let consumed = transp.buffer.copyInto(data.makeOpenArray(size))
-    data = data.offset(consumed)
-    size -= consumed
-    (consumed: consumed, done: size == 0)
+    readLoop("stream.transport.readExactly"):
+      if len(transp.buffer) == 0 and size > 0 and transp.atEof():
+        raise newException(TransportIncompleteError, "Data incomplete!")
+      let consumed = transp.buffer.copyInto(data.makeOpenArray(size))
+      data = data.offset(consumed)
+      size -= consumed
+      (consumed: consumed, done: size == 0)
 
 when chronosSimulation:
   proc readExactly*(transp: StreamTransport, pbytes: pointer,
