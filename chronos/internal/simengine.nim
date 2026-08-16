@@ -407,19 +407,18 @@ proc RandomOracle*(seed: uint64): SimOracle =
     ok(IoDecision(outcome: SimIoOutcome.Ok, bytes: bytes))
   newSimOracle(decideBatch, decideIo, defaultDecideTime)
 
-proc ReplayOracle*(path: string): SimOracle
-                   {.raises: [IOError, SimTraceReadError].} =
-  ## Constructed from a recorded trace (RFC 0003 3.3, 3.7): at each choice
-  ## point, verifies the live digest against the next recorded one - via
-  ## the same `digestOf` the writer uses, so "digest mismatch" cannot mean
-  ## two different things - and returns the recorded decision. A version-
-  ## mismatched trace is refused here, at construction (3.7's version
-  ## gate, enforced by `readSimTrace`); a live digest diverging from the
-  ## recording is reported through the `Result` error channel as a
-  ## structured `SimOracleError` carrying the expected and actual digest,
-  ## never a silent wrong decision and never a Defect raised from inside
-  ## the oracle itself.
-  let records = readSimTrace(path).records
+proc ReplayOracle*(records: seq[SimTraceRecord]): SimOracle =
+  ## As `ReplayOracle(path: string)`, from a trace already read and
+  ## parsed by the caller - `simulateReplay` uses this directly so a
+  ## trace read once for seed attribution is never re-parsed for the
+  ## oracle. At each choice point, verifies the live digest against the
+  ## next recorded one - via the same `digestOf` the writer uses, so
+  ## "digest mismatch" cannot mean two different things - and returns
+  ## the recorded decision. A live digest diverging from the recording
+  ## is reported through the `Result` error channel as a structured
+  ## `SimOracleError` carrying the expected and actual digest, never a
+  ## silent wrong decision and never a Defect raised from inside the
+  ## oracle itself.
   var cursor = 0
 
   proc nextRecord(kind: SimTraceRecordKind, liveDigest: SimDigest):
@@ -489,6 +488,18 @@ proc ReplayOracle*(path: string): SimOracle
       advanceTo: Moment.init(recorded.get().advanceToNanoseconds, Nanosecond)))
 
   newSimOracle(decideBatch, decideIo, decideTime)
+
+proc ReplayOracle*(path: string): SimOracle
+                   {.raises: [IOError, SimTraceReadError].} =
+  ## Constructed from a recorded trace (RFC 0003 3.3, 3.7). A version-
+  ## mismatched trace is refused here, at construction (3.7's version
+  ## gate, enforced by `readSimTrace`). See the `seq[SimTraceRecord]`
+  ## overload above for the oracle itself; a caller that also needs the
+  ## trace's header (`simulateReplay`'s seed attribution) should call
+  ## `readSimTrace` once and pass `.records` there directly instead of
+  ## going through this path-only convenience wrapper, which reads the
+  ## file itself.
+  ReplayOracle(readSimTrace(path).records)
 
 proc newSimEngineState*(startValue: int = 0,
                          oracle: SimOracle = defaultSimOracle(),

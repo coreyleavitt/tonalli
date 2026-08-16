@@ -35,6 +35,12 @@ when defined(chronosSimulation) and compileOption("threads"):
   var probeChan: Channel[ProbeOutcome]
   probeChan.open()
 
+  var argEvalCount = 0
+    ## R2-6 pin (see `probeSimulateEvaluatesSeedArgumentExactlyOnce`/
+    ## `probeSimulateReplayEvaluatesTracePathArgumentExactlyOnce` below):
+    ## reset by each probe before use, incremented by that probe's own
+    ## side-effecting `seed`/`tracePath` argument expression.
+
   template runProbe(threadProc: typed): ProbeOutcome =
     var probeThread: Thread[void]
     createThread(probeThread, threadProc)
@@ -636,6 +642,58 @@ when defined(chronosSimulation) and compileOption("threads"):
         msg: "wrong exception type escaped simulate(): " & exc.msg)
     probeChan.send(outcome)
 
+  proc nextArgEvalSeed(): uint64 =
+    inc argEvalCount
+    900'u64 + argEvalCount.uint64
+
+  proc probeSimulateEvaluatesSeedArgumentExactlyOnce() {.thread.} =
+    ## R2-6: `simulate`'s `seed` template parameter is substituted at
+    ## every occurrence in the expansion (attribution into
+    ## `simulateCore` plus `RandomOracle(seed)`); a non-idempotent seed
+    ## argument must still be evaluated exactly once.
+    var outcome = ProbeOutcome(ok: true)
+    argEvalCount = 0
+    simulate(seed = nextArgEvalSeed()):
+      discard
+    if argEvalCount != 1:
+      outcome = ProbeOutcome(ok: false,
+        msg: "seed argument evaluated " & $argEvalCount &
+             " times, expected 1")
+    probeChan.send(outcome)
+
+  proc nextArgEvalTracePath(path: string): string =
+    inc argEvalCount
+    path
+
+  proc probeSimulateReplayEvaluatesTracePathArgumentExactlyOnce() {.thread.} =
+    ## R2-6: `simulateReplay`'s `tracePath` template parameter is
+    ## substituted at every occurrence in the expansion (the seed-
+    ## attribution read plus `ReplayOracle(tracePath)`); a non-
+    ## idempotent `tracePath` argument must still be evaluated exactly
+    ## once, and the trace file itself read exactly once.
+    var outcome = ProbeOutcome(ok: true)
+    let seed = 950'u64
+    let tracePath = simTracePath(seed)
+    try:
+      simulate(seed = seed):
+        discard
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "recording run unexpectedly failed: " & exc.msg)
+    if outcome.ok:
+      argEvalCount = 0
+      try:
+        simulateReplay(nextArgEvalTracePath(tracePath)):
+          discard
+      except CatchableError as exc:
+        outcome = ProbeOutcome(ok: false,
+          msg: "replay unexpectedly failed: " & exc.msg)
+      if outcome.ok and argEvalCount != 1:
+        outcome = ProbeOutcome(ok: false,
+          msg: "tracePath argument evaluated " & $argEvalCount &
+               " times, expected 1")
+    probeChan.send(outcome)
+
   suite "simulate() harness core":
     test "an empty body round-trips the real dispatcher":
       let outcome = runProbe(probeEmptyBodyRoundTrips)
@@ -713,6 +771,17 @@ when defined(chronosSimulation) and compileOption("threads"):
   suite "simulateReplay":
     test "an identical body replays clean, a divergent one is a typed SimulationError":
       let outcome = runProbe(probeReplayReproducesRecordedRunAndDetectsDivergence)
+      checkpoint outcome.msg
+      check outcome.ok
+
+  suite "template argument evaluation (R2-6)":
+    test "simulate evaluates a non-idempotent seed argument exactly once":
+      let outcome = runProbe(probeSimulateEvaluatesSeedArgumentExactlyOnce)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "simulateReplay evaluates a non-idempotent tracePath argument exactly once":
+      let outcome = runProbe(probeSimulateReplayEvaluatesTracePathArgumentExactlyOnce)
       checkpoint outcome.msg
       check outcome.ok
 

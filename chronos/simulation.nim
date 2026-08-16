@@ -42,9 +42,12 @@ type
     ## `runSimulation` caught and converted. `kind` (`SimFailureKind`,
     ## `chronos/internal/simengine.nim`) classifies which by a type-safe
     ## field on that internal exception - never by parsing `msg` - with
-    ## one exception of its own: `BodyError` is set here, not carried on
-    ## any raised exception, since it names "the failure was not one of
-    ## the engine's own" rather than a specific engine-detected kind.
+    ## two exceptions of its own, set here rather than carried on any
+    ## raised exception: `BodyError` names "the failure was not one of
+    ## the engine's own", and `BarrierHit` names a propagated or Defect-
+    ## enveloped `SimBarrierError` - a hermeticity violation distinct
+    ## from an ordinary body bug even though both surface through the
+    ## body.
     kind*: SimFailureKind
     seed*: uint64
     tracePath*: string
@@ -404,8 +407,9 @@ template simulate*(seed: uint64, body: untyped): untyped =
   ## laws, `simulateWithOracle` to drive the run with a scripted oracle
   ## instead of `RandomOracle`, and `simulateReplay` to replay a
   ## recorded trace.
-  simulateCore(seed, simulateDefaultDecisionBudget, simulateDefaultTimeBudget,
-    false, RandomOracle(seed), body)
+  let seedOnce = seed
+  simulateCore(seedOnce, simulateDefaultDecisionBudget,
+    simulateDefaultTimeBudget, false, RandomOracle(seedOnce), body)
 
 template simulateWithLedger*(seed: uint64, body: untyped): untyped =
   ## As `simulate`, additionally checking RFC 0003 3.9's ghost-ledger
@@ -420,8 +424,9 @@ template simulateWithLedger*(seed: uint64, body: untyped): untyped =
   ## claim to be exhaustive over (see `tests/testsimledger.nim`'s
   ## module docstring for the scoping judgment call). See
   ## `simulateWithBudgetAndLedger` to also override the budgets.
-  simulateCore(seed, simulateDefaultDecisionBudget, simulateDefaultTimeBudget,
-    true, RandomOracle(seed), body)
+  let seedOnce = seed
+  simulateCore(seedOnce, simulateDefaultDecisionBudget,
+    simulateDefaultTimeBudget, true, RandomOracle(seedOnce), body)
 
 template simulateWithBudget*(seed: uint64, decisionBudget: int,
                               timeBudget: Duration, body: untyped): untyped =
@@ -431,8 +436,9 @@ template simulateWithBudget*(seed: uint64, decisionBudget: int,
   ## sharing a name, resolving a call to either miscompiles `await` in
   ## `body` (reproduced standalone against the Nim 2.2.10 toolchain;
   ## not specific to this module - see `simulateCore`'s docstring).
-  simulateCore(seed, decisionBudget, timeBudget, false, RandomOracle(seed),
-    body)
+  let seedOnce = seed
+  simulateCore(seedOnce, decisionBudget, timeBudget, false,
+    RandomOracle(seedOnce), body)
 
 template simulateWithBudgetAndLedger*(seed: uint64, decisionBudget: int,
                                        timeBudget: Duration,
@@ -441,8 +447,9 @@ template simulateWithBudgetAndLedger*(seed: uint64, decisionBudget: int,
   ## overriding the defaults - the budget-and-ledger corner of the
   ## `{budget}x{ledger}` matrix `simulate`/`simulateWithBudget`/
   ## `simulateWithLedger` alone left uncovered.
-  simulateCore(seed, decisionBudget, timeBudget, true, RandomOracle(seed),
-    body)
+  let seedOnce = seed
+  simulateCore(seedOnce, decisionBudget, timeBudget, true,
+    RandomOracle(seedOnce), body)
 
 template simulateWithOracle*(seed: uint64, oracle: SimOracle,
                               body: untyped): untyped =
@@ -457,26 +464,23 @@ template simulateWithOracle*(seed: uint64, oracle: SimOracle,
   simulateCore(seed, simulateDefaultDecisionBudget, simulateDefaultTimeBudget,
     false, oracle, body)
 
-proc simulateReplaySeed(tracePath: string): uint64
-                        {.raises: [IOError, SimTraceReadError].} =
-  ## The seed `simulateReplay` attributes a replay run to: the one
-  ## recorded in `tracePath`'s own header, never the caller's - a
-  ## replay has no seed of its own to offer, and the header's is the
-  ## only honest answer (RFC 0003 3.7's header already carries it for
-  ## exactly this kind of attribution).
-  readSimTrace(tracePath).header.seed
-
 template simulateReplay*(tracePath: string, body: untyped): untyped =
   ## Replays a previously recorded trace (RFC 0003 3.8's sketch): drives
-  ## the same harness `simulate` does, over a `ReplayOracle(tracePath)`
-  ## in place of `RandomOracle(seed)`, attributed to the seed recorded in
-  ## the trace's own header. `body` must be the same code that produced
-  ## the trace; a divergent decision sequence surfaces as a
-  ## `SimulationError` with `kind == SimFailureKind.ProtocolViolation`
-  ## (`ReplayOracle`'s structured digest mismatch, converted the same
-  ## way any other oracle error is - see `SimulationError`'s docstring).
-  simulateCore(simulateReplaySeed(tracePath), simulateDefaultDecisionBudget,
-    simulateDefaultTimeBudget, false, ReplayOracle(tracePath), body)
+  ## the same harness `simulate` does, over a `ReplayOracle` built from
+  ## the trace at `tracePath`, in place of `RandomOracle(seed)`,
+  ## attributed to the seed recorded in the trace's own header - a
+  ## replay has no seed of its own to offer, and the header's is the
+  ## only honest answer (RFC 0003 3.7's header already carries it for
+  ## exactly this kind of attribution). Reads and parses `tracePath`
+  ## exactly once, for both the attribution and the oracle. `body` must
+  ## be the same code that produced the trace; a divergent decision
+  ## sequence surfaces as a `SimulationError` with `kind ==
+  ## SimFailureKind.ProtocolViolation` (`ReplayOracle`'s structured
+  ## digest mismatch, converted the same way any other oracle error is -
+  ## see `SimulationError`'s docstring).
+  let trace = readSimTrace(tracePath)
+  simulateCore(trace.header.seed, simulateDefaultDecisionBudget,
+    simulateDefaultTimeBudget, false, ReplayOracle(trace.records), body)
 
 proc simLedgerDebugPlantDroppedEnqueue*(kind: SimLedgerQueueKind) =
   ## TEST-ONLY escape hatch (RFC 0003 slice S14's RED phase): records
