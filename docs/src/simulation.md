@@ -208,7 +208,7 @@ template sweepSeedsWith*(seeds: Slice[uint64], opts: SimRunOptions,
 proc collectSweepSeeds*(seeds: Slice[uint64], decisionBudget: int,
                          timeBudget: Duration,
                          body: proc(): Future[void] {.gcsafe.},
-                         enableLedger: bool = false):
+                         ledger: bool = false):
     seq[SimSeedOutcome]
 ```
 
@@ -269,7 +269,7 @@ guarded by nothing but prose. Check `failureKind` first, the way
 `collectSweepSeeds` is the aggregation loop on its own, with no
 `unittest2` dependency, for a caller that wants the raw outcomes without
 `sweepSeeds`'s own reporting (or a different report entirely).
-`enableLedger` (default `false`, so every pre-existing caller is
+`ledger` (default `false`, so every pre-existing caller is
 unaffected) turns on ghost-ledger checking for every seed, the same
 flag `runSimulation` threads through the single-run harness.
 

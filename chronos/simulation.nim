@@ -738,12 +738,12 @@ proc runSweepSeed(seed: uint64, decisionBudget: int, timeBudget: Duration,
 proc collectSweepSeeds*(seeds: Slice[uint64], decisionBudget: int,
                          timeBudget: Duration,
                          body: proc(): Future[void] {.gcsafe.},
-                         enableLedger: bool = false):
+                         ledger: bool = false):
     seq[SimSeedOutcome] =
   ## The aggregation loop behind `sweepSeeds`/`sweepSeedsWith`, exposed
   ## on its own (RFC 0003 3.8): runs `body` once per seed in `seeds`,
   ## every seed regardless of its siblings' outcomes, and returns every
-  ## `SimSeedOutcome` in seed order. `enableLedger` (default `false`, so
+  ## `SimSeedOutcome` in seed order. `ledger` (default `false`, so
   ## every pre-existing caller is unaffected) turns on the D8 ghost-
   ## ledger laws for every seed in the sweep, the same flag
   ## `simulateWith(seed, simOptions(ledger = true))` threads through the
@@ -753,7 +753,7 @@ proc collectSweepSeeds*(seeds: Slice[uint64], decisionBudget: int,
   ## way; a caller wanting a different report, or none, calls this
   ## directly).
   for seed in seeds:
-    result.add runSweepSeed(seed, decisionBudget, timeBudget, enableLedger,
+    result.add runSweepSeed(seed, decisionBudget, timeBudget, ledger,
                              body)
 
 proc reportSweep(outcomes: seq[SimSeedOutcome]) =

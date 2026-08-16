@@ -445,3 +445,25 @@ suite "sim trace reader":
     let header = parseSimTraceHeader(
       renderHeaderLine(1'u64, 10_000, 4_611_686_018_427_387_904'i64, "", ""))
     check header.timeBudgetNanoseconds == 4_611_686_018_427_387_904'i64
+
+  test "an advanceTo past the documented bound is refused":
+    ## The bound is the clock anchor plus the header's own documented
+    ## time-budget bound (`extractBoundedAdvanceToField`'s docstring,
+    ## `chronos/internal/simtrace.nim`): `1_577_836_800_000_000_000 +
+    ## 4_611_686_018_427_387_904 = 6_189_522_818_427_387_904`.
+    let path = getTempDir() / "chronos-simtrace-read-advancetoobig.ndjson"
+    writeFile(path, validHeaderLine &
+      "{\"i\":0,\"kind\":\"time\",\"digest\":\"0000000000000000\"," &
+      "\"decision\":{\"advanceTo\":6189522818427387905}}\n")
+    expect SimTraceReadError:
+      discard readSimTrace(path)
+    removeFile(path)
+
+  test "a negative advanceTo is refused":
+    let path = getTempDir() / "chronos-simtrace-read-advancetoneg.ndjson"
+    writeFile(path, validHeaderLine &
+      "{\"i\":0,\"kind\":\"time\",\"digest\":\"0000000000000000\"," &
+      "\"decision\":{\"advanceTo\":-5}}\n")
+    expect SimTraceReadError:
+      discard readSimTrace(path)
+    removeFile(path)

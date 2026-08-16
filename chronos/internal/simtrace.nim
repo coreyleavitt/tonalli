@@ -363,6 +363,31 @@ proc extractBoundedTimeBudgetField(line, key: string): int64
       "field \"" & key & "\" out of range: " & $value & " in: " & line)
   value
 
+proc extractBoundedAdvanceToField(line, key: string): int64
+                                  {.raises: [SimTraceReadError].} =
+  ## `"advanceTo"`: a `Time` record's recorded target, always an absolute
+  ## virtual-time nanosecond value (`chronos/internal/simclock.nim`'s
+  ## `simClockAnchorNanoseconds`-anchored clock), never a raw duration.
+  ## Bound at parse the same discipline
+  ## `extractBoundedIntField`/`extractBoundedByteCountField`/
+  ## `extractBoundedTimeBudgetField` already apply to their own fields,
+  ## rather than left to a plain `extractIntField` on the theory that
+  ## today's only two downstream uses (a multiply-by-1 and a compare)
+  ## happen to be safe unbounded - a theory later code at either use site
+  ## could quietly invalidate. The bound is the anchor plus the header's
+  ## own documented time-budget bound (`extractBoundedTimeBudgetField`,
+  ## 2^62 nanoseconds): `1_577_836_800_000_000_000 +
+  ## 4_611_686_018_427_387_904 = 6_189_522_818_427_387_904`. This module
+  ## stays a leaf (no `chronos/internal/simclock.nim` import - the module
+  ## docstring), so the anchor appears here as a documented literal
+  ## rather than the named constant, the same tradeoff the 2^62 bound
+  ## above already makes for the time budget it derives from.
+  let value = extractIntField(line, key)
+  if value < 0 or value > 6_189_522_818_427_387_904'i64:
+    raise newException(SimTraceReadError,
+      "field \"" & key & "\" out of range: " & $value & " in: " & line)
+  value
+
 proc parseEventId(text: string): SimEventId {.raises: [SimTraceReadError].} =
   if text.len < 2 or text[0] != 'e':
     raise newException(SimTraceReadError, "malformed event id: " & text)
@@ -435,7 +460,8 @@ proc parseSimTraceRecord*(line: string): SimTraceRecord
   of "time":
     SimTraceRecord(index: index, digest: digest,
                     kind: SimTraceRecordKind.Time,
-                    advanceToNanoseconds: extractIntField(line, "advanceTo"))
+                    advanceToNanoseconds:
+                      extractBoundedAdvanceToField(line, "advanceTo"))
   of "batch":
     SimTraceRecord(index: index, digest: digest,
                     kind: SimTraceRecordKind.Batch,
@@ -458,16 +484,28 @@ proc parseSimTraceRecord*(line: string): SimTraceRecord
 proc readSimTrace*(path: string):
     tuple[header: SimTraceHeader, records: seq[SimTraceRecord]]
     {.raises: [IOError, SimTraceReadError].} =
-  ## Reads and parses an entire trace file: the header line (version-
-  ## gated per 3.7), then one `SimTraceRecord` per remaining non-empty
-  ## line, in file order.
-  let lines = readFile(path).splitLines()
-  if lines.len == 0 or lines[0].len == 0:
-    raise newException(SimTraceReadError, "empty trace file: " & path)
-  let header = parseSimTraceHeader(lines[0])
+  ## Reads and parses a trace file line by line (`std/syncio`'s `lines`
+  ## iterator, one buffered `readLine` at a time) rather than pulling the
+  ## whole file into memory - the header line (version-gated per 3.7),
+  ## then one `SimTraceRecord` per remaining non-empty line, in file
+  ## order. `path` names an untrusted-file surface (a trace a caller
+  ## hands `simulateReplay`/`simulateReplayWith`), so nothing about this
+  ## proc's own footprint should scale with the file's size; each parsed
+  ## line is still buffered on its own (`parseSimTraceRecord`'s ordinary
+  ## string handling), the same as before this streamed the file read.
+  var header: SimTraceHeader
+  var sawHeader = false
   var records = newSeq[SimTraceRecord]()
-  for line in lines[1 .. ^1]:
+  for line in lines(path):
+    if not sawHeader:
+      if line.len == 0:
+        raise newException(SimTraceReadError, "empty trace file: " & path)
+      header = parseSimTraceHeader(line)
+      sawHeader = true
+      continue
     if line.len == 0:
       continue
     records.add parseSimTraceRecord(line)
+  if not sawHeader:
+    raise newException(SimTraceReadError, "empty trace file: " & path)
   (header: header, records: records)
