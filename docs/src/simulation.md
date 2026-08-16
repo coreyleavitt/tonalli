@@ -293,6 +293,20 @@ compile with a new choice point silently nil, crashing at the first call
 instead of failing per-seed, so the constructor forces every field
 explicit.
 
+Each `IoOutcomePoint` a live `decideIo` call receives carries a
+`trigger: SimEventId` -- the readiness event whose delivery is firing
+the callback issuing this I/O, letting a decision log answer "which
+event caused this read or write" instead of only "what did it decide".
+`SimEventId(0)` is the honest "not triggered by a readiness delivery"
+value: I/O the body issues on its own, outside any delivered callback,
+carries it, and it can never collide with a real event id (`decideBatch`
+mints ids starting at 1). The correlation is per fd and per direction,
+not per call stack: it names the last readiness delivery for that
+fd/direction, so an I/O call a callback makes for reasons other than the
+delivery that woke it (a retry loop, or code running outside the
+callback the delivery armed) still reports that delivery's id rather
+than losing the correlation.
+
 **`RandomOracle(seed)`** is what `simulate`/`sweepSeeds` use: the same
 seed produces the same decisions on every run (a self-contained
 `splitmix64` generator, never `std/random`'s global state). It shuffles

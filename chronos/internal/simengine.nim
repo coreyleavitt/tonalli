@@ -206,6 +206,13 @@ type
   SimReadyEvent = object
     event: SimEvent
     callback: InternalAsyncCallback
+    direction: SimReadyDirection
+      ## Which armed interest this event delivers (RFC 0003 3.3's
+      ## `IoOutcomePoint.trigger` correlation, this round's fix):
+      ## `simTakeDelivery` uses it to record the delivered id under the
+      ## right one of `lastReadEvent`/`lastWriteEvent` below, keyed
+      ## separately per direction since a reader and a writer readiness
+      ## for the same fd can both land in one delivered batch.
 
   SimDatagramMessage = object
     ## One queued whole datagram (RFC 0003 6, S12b): unlike a stream
@@ -274,6 +281,28 @@ type
     streamEndpoints: Table[int, SimStreamEndpoint]
     datagramEndpoints: Table[int, SimDatagramEndpoint]
     nextEndpointIdValue: uint32
+    lastReadEvent: Table[int, SimEventId]
+    lastWriteEvent: Table[int, SimEventId]
+      ## Per-fd "last readiness event delivered for this direction"
+      ## (RFC 0003 3.3's `IoOutcomePoint.trigger`, completed this
+      ## round): `simTakeDelivery` writes these as it pops a `Readiness`
+      ## delivery, and `simStreamIo`/`simDatagramIo` read them to fill
+      ## `trigger` on the `IoOutcomePoint` they build. Absent (id
+      ## `SimEventId(0)`, `nextEventId` mints from 1 precisely so a real
+      ## event id can never collide with this) means "no readiness
+      ## delivery has fired this fd's direction yet" - true for I/O the
+      ## body issues before any event fires, and for the bare-fd
+      ## fallback branches, which never go through `simMarkReady` at
+      ## all. This is fd-direction identity, not call-stack identity: it
+      ## names the last delivery for that fd/direction, not necessarily
+      ## the callback currently executing, so an I/O call made on a fd
+      ## for reasons other than the callback its last delivery armed
+      ## (proactive code running outside any delivered callback, after
+      ## that fd already saw one) reports that stale id rather than
+      ## `SimEventId(0)` - an accepted approximation of "which callback
+      ## issued this I/O", not exact causal tracking of the executing
+      ## callback (which would require threading the id through the
+      ## callback closure itself).
     ledger: SimLedgerState
       ## `nil` unless the caller opted into ledger checking (RFC 0003
       ## 3.9, slice S14): `chronos/simulation.nim`'s
@@ -516,14 +545,20 @@ proc newSimEngineState*(startValue: int = 0,
   ## this constructor still gets. `seed` is carried only for budget-
   ## exhaustion messages and the trace writer's records. `enableLedger`
   ## (default `false`, so every existing caller is unaffected) turns on
-  ## the D8 ghost-ledger laws (RFC 0003 3.9, slice S14).
+  ## the D8 ghost-ledger laws (RFC 0003 3.9, slice S14). `nextEventId`
+  ## starts at 1, not 0: `SimEventId(0)` is reserved as
+  ## `lastReadEvent`/`lastWriteEvent`'s "no delivery yet" sentinel, so a
+  ## real minted id must never collide with it.
   SimEngineState(endpoints: initHashSet[int](), nextFdValue: startValue,
                   oracle: oracle, interest: initTable[int, SimInterest](),
+                  nextEventId: 1'u64,
                   decisionBudget: decisionBudget, seed: seed,
                   hasTimeBudget: hasTimeBudget,
                   timeBudgetCutoffNanoseconds: timeBudgetCutoffNanoseconds,
                   streamEndpoints: initTable[int, SimStreamEndpoint](),
                   datagramEndpoints: initTable[int, SimDatagramEndpoint](),
+                  lastReadEvent: initTable[int, SimEventId](),
+                  lastWriteEvent: initTable[int, SimEventId](),
                   ledger: (if enableLedger: newSimLedgerState() else: nil))
 
 proc simLedgerState*(state: SimEngineState): SimLedgerState {.inline.} =
@@ -780,7 +815,7 @@ proc simMarkReady*(state: SimEngineState, fd: int,
   state.readyQueue.add SimReadyEvent(
     event: SimEvent(id: id, kind: SimEventKind.Readiness,
                      source: SimEndpointId(uint32(fd))),
-    callback: cb)
+    callback: cb, direction: direction)
   id
 
 proc simMarkReadyOnce(state: SimEngineState, fd: int,
@@ -821,6 +856,19 @@ proc simStreamDeliver(state: SimEngineState, fd: int, data: pointer, n: int) =
     state.streamEndpoints[peerFd] = peer
   state.simMarkReadyOnce(peerFd, SimReadyDirection.Read)
 
+proc simLastTrigger(state: SimEngineState, fd: int, op: SimIoOp): SimEventId
+                    {.inline.} =
+  ## The `IoOutcomePoint.trigger` an `op` against `fd` should carry
+  ## (RFC 0003 3.3, completed this round): the last `Readiness` event
+  ## `simTakeDelivery` delivered for `fd`'s `op`-matching direction, or
+  ## `SimEventId(0)` if none has - the honest "not triggered by an
+  ## event" value for I/O the body issues before any delivery, and for
+  ## the bare-fd fallback branches below, which never arm interest
+  ## through `simMarkReady` at all.
+  case op
+  of SimIoOp.Read: state.lastReadEvent.getOrDefault(fd, SimEventId(0))
+  of SimIoOp.Write: state.lastWriteEvent.getOrDefault(fd, SimEventId(0))
+
 proc simStreamIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
                    maxBytes: int): tuple[res: int, err: OSErrorCode]
                   {.raises: [SimEngineError].} =
@@ -837,8 +885,9 @@ proc simStreamIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
   ## picks a byte count and no content is copied.
   if fd notin state.streamEndpoints:
     let decision = state.simDecideIo(IoOutcomePoint(
-      trigger: SimEventId(0), endpoint: SimEndpointId(uint32(fd)),
-      op: op, maxBytes: maxBytes, faults: {SimFault.Reset}))
+      trigger: state.simLastTrigger(fd, op),
+      endpoint: SimEndpointId(uint32(fd)), op: op, maxBytes: maxBytes,
+      faults: {SimFault.Reset}))
     return case decision.outcome
       of SimIoOutcome.Ok: (decision.bytes, OSErrorCode(0))
       of SimIoOutcome.Fault: (-1, simFaultToError(decision.fault))
@@ -847,7 +896,7 @@ proc simStreamIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
   case op
   of SimIoOp.Write:
     let decision = state.simDecideIo(IoOutcomePoint(
-      trigger: SimEventId(0), endpoint: endpointId, op: op,
+      trigger: state.simLastTrigger(fd, op), endpoint: endpointId, op: op,
       maxBytes: maxBytes, faults: {SimFault.Reset}))
     case decision.outcome
     of SimIoOutcome.Ok:
@@ -864,7 +913,7 @@ proc simStreamIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
       else:
         return (-1, oserrno.EWOULDBLOCK)
     let decision = state.simDecideIo(IoOutcomePoint(
-      trigger: SimEventId(0), endpoint: endpointId, op: op,
+      trigger: state.simLastTrigger(fd, op), endpoint: endpointId, op: op,
       maxBytes: min(maxBytes, avail), faults: {SimFault.Reset}))
     case decision.outcome
     of SimIoOutcome.Ok:
@@ -980,8 +1029,9 @@ proc simDatagramIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
   ## before it would otherwise translate to an `OSErrorCode`.
   if fd notin state.datagramEndpoints:
     let decision = state.simDecideIo(IoOutcomePoint(
-      trigger: SimEventId(0), endpoint: SimEndpointId(uint32(fd)), op: op,
-      maxBytes: maxBytes, faults: {SimFault.Reset}))
+      trigger: state.simLastTrigger(fd, op),
+      endpoint: SimEndpointId(uint32(fd)), op: op, maxBytes: maxBytes,
+      faults: {SimFault.Reset}))
     return case decision.outcome
       of SimIoOutcome.Ok: (decision.bytes, OSErrorCode(0), newSeq[byte]())
       of SimIoOutcome.Fault:
@@ -998,7 +1048,7 @@ proc simDatagramIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
         return (-1, oserrno.EWOULDBLOCK, newSeq[byte]())
     let msgLen = state.datagramEndpoints.getOrDefault(fd).inbound[0].data.len
     let decision = state.simDecideIo(IoOutcomePoint(
-      trigger: SimEventId(0), endpoint: endpointId, op: op,
+      trigger: state.simLastTrigger(fd, op), endpoint: endpointId, op: op,
       maxBytes: min(maxBytes, msgLen), faults: {SimFault.Reset}))
     case decision.outcome
     of SimIoOutcome.Ok:
@@ -1014,7 +1064,7 @@ proc simDatagramIo*(state: SimEngineState, fd: int, op: SimIoOp, data: pointer,
       (-1, simFaultToError(decision.fault), newSeq[byte]())
   of SimIoOp.Write:
     let decision = state.simDecideIo(IoOutcomePoint(
-      trigger: SimEventId(0), endpoint: endpointId, op: op,
+      trigger: state.simLastTrigger(fd, op), endpoint: endpointId, op: op,
       maxBytes: maxBytes,
       faults: {SimFault.Drop, SimFault.Duplicate, SimFault.Reorder}))
     case decision.outcome
@@ -1139,10 +1189,22 @@ proc simTakeDelivery*(state: SimEngineState, id: SimEventId):
   ## pending event set by `simDecideBatch`: the armed callback for a
   ## `Readiness` event, or a bare `Arrival` marker (S13 gives it a real
   ## payload; asyncengine.nim's poll() drains it through the unmodified
-  ## `processThreadCallbacks` path per RFC 0003 3.5).
+  ## `processThreadCallbacks` path per RFC 0003 3.5). A `Readiness`
+  ## delivery also records itself under `lastReadEvent`/`lastWriteEvent`
+  ## (this round's `IoOutcomePoint.trigger` fix), keyed by the fd
+  ## `SimReadyEvent.event.source` already carries and split by
+  ## `direction` - the fd, not the callback, is the correlation key
+  ## `simStreamIo`/`simDatagramIo` can actually look up from, since
+  ## delivery only enqueues the callback (`asyncengine.nim`'s
+  ## `pollSimSelectBranch`); it fires later, from `loop.callbacks`, with
+  ## no id attached to the call.
   for idx in 0 ..< state.readyQueue.len:
     if state.readyQueue[idx].event.id == id:
       result = (SimEventKind.Readiness, state.readyQueue[idx].callback)
+      let fd = int(uint32(state.readyQueue[idx].event.source))
+      case state.readyQueue[idx].direction
+      of SimReadyDirection.Read: state.lastReadEvent[fd] = id
+      of SimReadyDirection.Write: state.lastWriteEvent[fd] = id
       state.readyQueue.delete(idx)
       return
   for idx in 0 ..< state.arrivalQueue.len:

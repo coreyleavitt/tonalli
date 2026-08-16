@@ -175,6 +175,92 @@ when defined(chronosSimulation) and compileOption("threads") and
       outcome = ProbeOutcome(ok: false, msg: "unexpected raise: " & exc.msg)
     probeChan.send(outcome)
 
+  proc probeReadinessTriggeredReadCarriesRealTrigger() {.thread.} =
+    ## RFC 0003 3.3's `IoOutcomePoint.trigger` names the readiness event
+    ## whose delivery is firing the callback that issues an I/O
+    ## decision - a correlation `simStreamIo`/`simDatagramIo` never
+    ## actually wired before this round (every production call site
+    ## hardcoded `trigger: SimEventId(0)`, so a decision log could never
+    ## answer "which event's callback issued this I/O"). A scripted
+    ## `decideBatch` records the single delivered readiness id whenever
+    ## exactly one is delivered in a poll iteration (the shape this
+    ## scenario produces: the server's already-armed `readOnce` waking
+    ## when the client's write lands); a scripted `decideIo` records the
+    ## `trigger` the resulting read actually saw. The two must agree,
+    ## and neither may be the `SimEventId(0)` placeholder. The
+    ## snapshot is taken right after the awaited read, before
+    ## `closeWait()`'s own EOF notification delivers a second, unrelated
+    ## readiness event to the same still-armed reader - that later read
+    ## is real too (this fix makes it carry its own real trigger, not
+    ## the sentinel), just not the one this probe is pinning.
+    var outcome = ProbeOutcome(ok: true)
+    var lastSingleDelivery = SimEventId(0)
+    var readTriggerCalls = 0
+    var seenReadTrigger = SimEventId(0)
+    var snapshotTriggerCalls = 0
+    var snapshotTrigger = SimEventId(0)
+    var snapshotDelivery = SimEventId(0)
+
+    proc decideBatch(cp: SelectBatchPoint):
+        Result[BatchDecision, SimOracleError] {.gcsafe, raises: [].} =
+      let decision = defaultDecideBatch(cp)
+      if decision.isOk and decision.get().order.len == 1:
+        lastSingleDelivery = decision.get().order[0]
+      decision
+
+    proc decideIo(cp: IoOutcomePoint): Result[IoDecision, SimOracleError]
+        {.gcsafe, raises: [].} =
+      if cp.op == SimIoOp.Read:
+        inc readTriggerCalls
+        seenReadTrigger = cp.trigger
+      defaultDecideIo(cp)
+
+    let oracle = newSimOracle(decideBatch, decideIo, defaultDecideTime)
+    setThreadDispatcher(newSimDispatcher(oracle = oracle))
+
+    proc body() {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
+      let net = simNet()
+      let address = initTAddress("127.0.0.1:0")
+      let server = net.listenStream(address)
+      let acceptFut = server.accept()
+      let client = await net.connectStream(address)
+      let serverTransp = await acceptFut
+
+      # Armed before the write lands, so the read below only completes
+      # once a delivered `Readiness` event wakes it - not synchronously.
+      var buf = newSeq[byte](chunkSize)
+      let readFut = serverTransp.readOnce(addr buf[0], chunkSize)
+      discard await client.write("message1")
+      discard await readFut
+
+      snapshotTriggerCalls = readTriggerCalls
+      snapshotTrigger = seenReadTrigger
+      snapshotDelivery = lastSingleDelivery
+
+      await client.closeWait()
+      await serverTransp.closeWait()
+
+    try:
+      waitFor body()
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false, msg: "unexpected raise: " & exc.msg)
+
+    if outcome.ok:
+      if snapshotTriggerCalls != 1:
+        outcome = ProbeOutcome(ok: false,
+          msg: "decideIo(Read) called " & $snapshotTriggerCalls &
+            " times before the awaited read completed, expected 1")
+      elif snapshotTrigger == SimEventId(0):
+        outcome = ProbeOutcome(ok: false,
+          msg: "readiness-triggered read carried trigger=" &
+            $snapshotTrigger & " (the not-triggered placeholder), " &
+            "expected the delivering event's real id")
+      elif snapshotTrigger != snapshotDelivery:
+        outcome = ProbeOutcome(ok: false,
+          msg: "read trigger " & $snapshotTrigger & " does not match " &
+            "the delivered readiness event id " & $snapshotDelivery)
+    probeChan.send(outcome)
+
   proc probeEndpointIdentityIsNotFdCast() {.thread.} =
     ## S4 left `SimEndpointId` a provisional cast of the fd int; S11a
     ## gives it real identity (RFC 0003 3.3.1's per-kind monotonic
@@ -483,6 +569,11 @@ when defined(chronosSimulation) and compileOption("threads") and
 
     test "SimEndpointId is minted from its own counter, not cast from the fd":
       let outcome = runProbe(probeEndpointIdentityIsNotFdCast)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "a readiness-triggered read carries the delivering event's real SimEventId as trigger":
+      let outcome = runProbe(probeReadinessTriggeredReadCarriesRealTrigger)
       checkpoint outcome.msg
       check outcome.ok
 
