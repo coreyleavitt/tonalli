@@ -309,15 +309,20 @@ proc runSimulation(seed: uint64, decisionBudget: int, timeBudget: Duration,
     ledgerFailure = exc
   except SimEngineError as exc:
     failure = newSimulationError(exc.kind, seed, tracePath, exc.msg, exc)
+  except SimBarrierError as exc:
+    # A provenance-guarded touch site the body reached, propagated
+    # unchanged (`object of CatchableError`, deliberately not a subtype
+    # of `AsyncError` - see its own docstring). A real hermeticity
+    # violation - an un-barriered producer touching the sim dispatcher -
+    # gets its own classification, `SimFailureKind.BarrierHit`, so a
+    # sweep distinguishes it from the body's own ordinary bug by type,
+    # never by parsing `exc.msg`.
+    failure = newSimulationError(SimFailureKind.BarrierHit, seed, tracePath,
+                                  exc.msg, exc)
   except CatchableError as exc:
-    # Every other failure, including `SimBarrierError` (raised directly
-    # by a provenance-guarded touch site the body reached, `object of
-    # CatchableError`, deliberately not a subtype of `AsyncError` - see
-    # its own docstring): from `runSimulation`'s perspective this is
-    # indistinguishable from any other exception the body's own code
-    # raised, which is exactly right - `BodyError` names "not one of
-    # the engine's own typed failures", not "the body's logic is at
-    # fault".
+    # Every other failure: from `runSimulation`'s perspective this is
+    # the body's own logic at fault, `BodyError` naming "not one of the
+    # engine's own typed failures, and not a barrier hit either".
     failure = newSimulationError(SimFailureKind.BodyError, seed, tracePath,
                                   exc.msg, exc)
   except Defect as exc:
@@ -350,10 +355,11 @@ proc runSimulation(seed: uint64, decisionBudget: int, timeBudget: Duration,
       failure = newSimulationError(engineExc.kind, seed, tracePath,
                                     engineExc.msg, engineExc)
     elif not exc.parent.isNil and exc.parent of SimBarrierError:
-      # As the direct-propagation `SimBarrierError` case above
-      # (`except CatchableError`): indistinguishable from the body's
-      # own failure.
-      failure = newSimulationError(SimFailureKind.BodyError, seed,
+      # As the direct-propagation `SimBarrierError` case above (`except
+      # SimBarrierError`): a hermeticity violation, classified
+      # `BarrierHit` regardless of which of the two paths (direct
+      # propagation or this Defect envelope) carried it here.
+      failure = newSimulationError(SimFailureKind.BarrierHit, seed,
                                     tracePath, exc.parent.msg, exc.parent)
     else:
       raise exc
@@ -592,11 +598,11 @@ type
     ## string-matching the message", applied to this aggregated value
     ## the same way a raised `SimulationError`/`SimLedgerError` already
     ## is): `Engine` is a `SimulationError`-shaped failure - a livelock,
-    ## a deadlock, an oracle/protocol violation, or the body's own
-    ## exception, `kind` naming which; `Ledger` is a `SimLedgerError`,
-    ## kept a separate case rather than folded into `SimFailureKind`,
-    ## the same separation `SimLedgerError`'s own docstring requires of
-    ## a raised failure.
+    ## a deadlock, an oracle/protocol violation, a barrier hit, or the
+    ## body's own exception, `kind` naming which; `Ledger` is a
+    ## `SimLedgerError`, kept a separate case rather than folded into
+    ## `SimFailureKind`, the same separation `SimLedgerError`'s own
+    ## docstring requires of a raised failure.
     Engine
     Ledger
 

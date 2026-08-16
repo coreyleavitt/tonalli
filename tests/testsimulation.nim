@@ -288,6 +288,91 @@ when defined(chronosSimulation) and compileOption("threads"):
         msg: "wrong exception type: " & exc.msg)
     probeChan.send(outcome)
 
+  proc probeBodyBarrierHitClassifiedAsBarrierHit() {.thread.} =
+    ## A body that reaches a provenance-guarded touch site directly
+    ## (`addReader2` on a real, non-sim-minted fd) propagates
+    ## `SimBarrierError` unchanged, the "propagation" case
+    ## `runSimulation`'s docstring names. Finding 6: this must classify
+    ## `SimFailureKind.BarrierHit`, a hermeticity violation distinct
+    ## from an ordinary body bug, not fold into `BodyError`.
+    var outcome = ProbeOutcome(ok: true)
+    try:
+      simulate(seed = 11'u64):
+        discard addReader2(AsyncFD(999_999),
+          proc(arg: pointer) {.gcsafe, raises: [].} = discard)
+      outcome = ProbeOutcome(ok: false,
+        msg: "simulate() did not propagate the barrier hit")
+    except SimulationError as exc:
+      if exc.kind != SimFailureKind.BarrierHit:
+        outcome = ProbeOutcome(ok: false, msg: "wrong kind: " & $exc.kind)
+      elif exc.parent.isNil or not (exc.parent of SimBarrierError):
+        outcome = ProbeOutcome(ok: false,
+          msg: "parent was not a SimBarrierError")
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "wrong exception type escaped simulate(): " & exc.msg)
+    probeChan.send(outcome)
+
+  proc probeDefectEnvelopedBarrierHitClassifiedAsBarrierHit() {.thread.} =
+    ## The Defect-envelope case `runSimulation`'s docstring names: a
+    ## callback crossing a `raises: []`-typed boundary catches its own
+    ## `SimBarrierError` and re-raises it wrapped in a `Defect`
+    ## (`raiseAsDefect`), mirroring the production idiom at, e.g.,
+    ## `chronos/internal/asyncengine.nim`'s `closeSocket()` continuation.
+    ## Finding 6: recovered here by type, this must also classify
+    ## `SimFailureKind.BarrierHit`, with the original `SimBarrierError`
+    ## still reachable as `.parent`.
+    var outcome = ProbeOutcome(ok: true)
+    try:
+      simulate(seed = 12'u64):
+        let disp = getThreadDispatcher()
+        let fd = disp.mintSimFd()
+        discard addReader2(fd, proc(arg: pointer) {.gcsafe, raises: [].} =
+          try:
+            raiseSimBarrier("test callback touch site")
+          except SimBarrierError as exc:
+            raiseAsDefect(exc, "test: callback hit a sim barrier"))
+        discard disp.simMarkReady(fd, SimReadyDirection.Read)
+        await sleepAsync(0.milliseconds)
+      outcome = ProbeOutcome(ok: false,
+        msg: "simulate() did not propagate the defect-enveloped barrier hit")
+    except SimulationError as exc:
+      if exc.kind != SimFailureKind.BarrierHit:
+        outcome = ProbeOutcome(ok: false, msg: "wrong kind: " & $exc.kind)
+      elif exc.parent.isNil or not (exc.parent of SimBarrierError):
+        outcome = ProbeOutcome(ok: false,
+          msg: "parent was not a SimBarrierError")
+    except CatchableError as exc:
+      outcome = ProbeOutcome(ok: false,
+        msg: "wrong exception type escaped simulate(): " & exc.msg)
+    probeChan.send(outcome)
+
+  proc probeSweepClassifiesBarrierHitByKind() {.thread.} =
+    ## Finding 6's sweep gap: a body that barriers on every seed must
+    ## report `SimSeedOutcome.kind == SimFailureKind.BarrierHit` for
+    ## each failing seed, by enum, never by a message substring.
+    var outcome = ProbeOutcome(ok: true)
+    let outcomes = collectSweepSeeds(30'u64 .. 32'u64,
+      simulateDefaultDecisionBudget, simulateDefaultTimeBudget,
+      proc(): Future[void] {.async, gcsafe.} =
+        discard addReader2(AsyncFD(999_999),
+          proc(arg: pointer) {.gcsafe, raises: [].} = discard))
+    if outcomes.len != 3:
+      outcome = ProbeOutcome(ok: false,
+        msg: "expected 3 outcomes, got " & $outcomes.len)
+    else:
+      for o in outcomes:
+        if o.passed:
+          outcome = ProbeOutcome(ok: false,
+            msg: "seed " & $o.seed & " unexpectedly passed")
+        elif o.failureKind != SimSeedFailureKind.Engine:
+          outcome = ProbeOutcome(ok: false,
+            msg: "seed " & $o.seed & " wrong failureKind: " & $o.failureKind)
+        elif o.kind != SimFailureKind.BarrierHit:
+          outcome = ProbeOutcome(ok: false,
+            msg: "seed " & $o.seed & " wrong kind: " & $o.kind)
+    probeChan.send(outcome)
+
   proc probeScriptedOracleThroughHarnessKeepsGuarantees() {.thread.} =
     ## Finding 5's seam: a scripted oracle driven through the full
     ## harness (`simulateWithOracle`), not a throwaway `newSimDispatcher`/
@@ -450,6 +535,22 @@ when defined(chronosSimulation) and compileOption("threads"):
 
     test "quiescence deadlock is reported as a SimulationError":
       let outcome = runProbe(probeDeadlockIsReportedAsSimulationError)
+      checkpoint outcome.msg
+      check outcome.ok
+
+  suite "SimBarrierError classification":
+    test "a barrier hit propagated from the body is classified BarrierHit":
+      let outcome = runProbe(probeBodyBarrierHitClassifiedAsBarrierHit)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "a Defect-enveloped barrier hit is classified BarrierHit":
+      let outcome = runProbe(probeDefectEnvelopedBarrierHitClassifiedAsBarrierHit)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "a sweep classifies every barriering seed as BarrierHit":
+      let outcome = runProbe(probeSweepClassifiesBarrierHitByKind)
       checkpoint outcome.msg
       check outcome.ok
 

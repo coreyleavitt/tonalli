@@ -103,9 +103,9 @@ same miscompile the moment a caller omits it, so every `simulate*`/
 name with optional parameters).
 
 A failing run raises `SimulationError`, carrying `kind: SimFailureKind`
-(`BodyError`, `Deadlock`, `OracleDeferral`, `ProtocolViolation`,
-`DecisionBudgetExhausted`, `TimeBudgetExhausted`), `seed`, and
-`tracePath` -- the decision log's path under
+(`BodyError`, `BarrierHit`, `Deadlock`, `OracleDeferral`,
+`ProtocolViolation`, `DecisionBudgetExhausted`, `TimeBudgetExhausted`),
+`seed`, and `tracePath` -- the decision log's path under
 `getTempDir() / "chronos-sim" / "seed-<seed>.ndjson"`. A raising body's
 own exception is unwrapped as `.parent`. The seed banner
 (`[chronos-sim] seed=... trace=...`) is written and flushed before the
@@ -515,11 +515,11 @@ reach its caller unchanged. Three things can happen to it:
   `chronos/transports/datagram.nim`, `chronos/threadsync.nim`, and
   `chronos/asyncproc.nim`). `runSimulation` (`chronos/simulation.nim`)
   is the ultimate boundary: it catches `SimEngineError` by type and
-  converts it into `SimulationError`, and treats any other
-  `CatchableError` -- including a propagated `SimBarrierError` -- as
-  `SimFailureKind.BodyError`, indistinguishable from the body's own
-  failure, which is exactly right: a barrier hit inside `body` is a
-  bug in the body, not a distinct engine-detected condition.
+  converts it into `SimulationError`, catches a propagated
+  `SimBarrierError` by type and classifies it `SimFailureKind.BarrierHit`
+  -- a real hermeticity violation, distinct from an ordinary body bug
+  even though both surface through `body` -- and treats any other
+  `CatchableError` as `SimFailureKind.BodyError`.
 - **Absorption.** `chronos/streams/asyncstream.nim`'s `tsource`-
   forwarding vtable procs absorb a `SimBarrierError`/`SimEngineError`
   the same way they already absorb `TransportError`: wrapped into
@@ -540,11 +540,13 @@ reach its caller unchanged. Three things can happen to it:
   unwidenable boundary for an unrecoverable real-mode condition --
   instead of letting it propagate normally. `runSimulation` recovers
   the original by type (`exc.parent of SimLedgerError`/`SimEngineError`/
-  `SimBarrierError`), never by parsing `exc.msg`. This is the one
-  narrow, type-checked exception to typed-channel retirement, forced by
-  those boundaries' reach rather than chosen for convenience; any other
-  `Defect` reaching this boundary (a genuine unrecoverable condition,
-  e.g. `raiseOsDefect`) is not this concern and re-raises unchanged.
+  `SimBarrierError`), never by parsing `exc.msg` -- a recovered
+  `SimBarrierError` classifies `SimFailureKind.BarrierHit`, the same as
+  the propagation case above. This is the one narrow, type-checked
+  exception to typed-channel retirement, forced by those boundaries'
+  reach rather than chosen for convenience; any other `Defect` reaching
+  this boundary (a genuine unrecoverable condition, e.g. `raiseOsDefect`)
+  is not this concern and re-raises unchanged.
 
 **Named in the RFC's design section, not yet wired in code as of this
 page:** `ThreadSignalPtr.fire`/`.wait` and `threadsync.waitSync` (RFC

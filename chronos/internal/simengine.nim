@@ -58,14 +58,19 @@ type
     ## otherwise-unchanged `Result` return.
 
   SimFailureKind* {.pure.} = enum
-    ## What made a `simulate()` run fail (RFC 0003 3.8). `BodyError` is
-    ## the async body's own exception, classified by
-    ## `chronos/simulation.nim`'s `runSimulation` itself (never raised
-    ## from in here); the rest name every failure `SimEngineError`
+    ## What made a `simulate()` run fail (RFC 0003 3.8). `BodyError` and
+    ## `BarrierHit` are both classified by `chronos/simulation.nim`'s
+    ## `runSimulation` itself, never raised from in here: `BodyError`
+    ## names the async body's own exception, and `BarrierHit` names a
+    ## propagated or Defect-enveloped `SimBarrierError` - a hermeticity
+    ## violation (an un-barriered producer touching the sim dispatcher),
+    ## distinct from an ordinary body bug even though both surface
+    ## through the body. The rest name every failure `SimEngineError`
     ## carries directly from its point of detection in this module or
     ## in `asyncengine.nim`'s sim poll loop - `kind` classifies which,
     ## by a type-safe field, never by parsing `msg`.
     BodyError
+    BarrierHit
     Deadlock
     OracleDeferral
     ProtocolViolation
