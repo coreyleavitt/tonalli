@@ -3,7 +3,7 @@
 set -euo pipefail
 
 binary="${1:?usage: run-android-tests.sh <test-binary>}"
-remote_dir="/data/local/tmp/nim-chronos"
+remote_dir="/data/local/tmp/tonalli"
 remote_binary="$remote_dir/$(basename "$binary")"
 
 adb shell "mkdir -p '$remote_dir'"
