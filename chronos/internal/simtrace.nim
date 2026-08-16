@@ -220,7 +220,10 @@ type
     seed*: uint64
     decisionBudget*: int
       ## R2-4: the run's configured decision budget, so a replay can
-      ## default to it instead of the harness's global default.
+      ## default to it instead of the harness's global default. Zero
+      ## means unlimited (see `newSimEngineState`'s docstring,
+      ## `chronos/internal/simengine.nim`) and is honored from the
+      ## header on replay the same as any other recorded value.
     timeBudgetNanoseconds*: int64
       ## R2-4: the run's configured time budget, in nanoseconds - kept
       ## as a raw `int64` rather than a `chronos/timer.nim` `Duration` so
@@ -337,6 +340,29 @@ proc extractBoundedByteCountField(line, key: string): int
       "field \"" & key & "\" out of range: " & $value & " in: " & line)
   int(value)
 
+proc extractBoundedTimeBudgetField(line, key: string): int64
+                                   {.raises: [SimTraceReadError].} =
+  ## `"timeBudgetNanoseconds"`: parsed as a raw `int64` on every target
+  ## width (`SimTraceHeader.timeBudgetNanoseconds`'s own docstring), but
+  ## not left unbounded the way a plain `extractIntField` would leave
+  ## it. `runSimulation` (`chronos/simulation.nim`) adds this value to
+  ## `simClockAnchorNanoseconds` to compute its time-budget cutoff,
+  ## outside any `try` that could catch an overflow - a header naming a
+  ## budget near `int64.high` would overflow that addition into an
+  ## uncatchable `OverflowDefect` before the run's own budget/failure
+  ## handling ever gets a chance to run. The bound below, 2^62
+  ## nanoseconds (~146 years), is generous enough that no legitimate
+  ## `timeBudget` ever approaches it, while leaving `int64.high`'s own
+  ## headroom (~292 years) comfortably wide underneath the addition -
+  ## the same "bound at parse, not at use" discipline
+  ## `extractBoundedIntField`/`extractBoundedByteCountField` already
+  ## apply to their own fields.
+  let value = extractIntField(line, key)
+  if value < 0 or value > 4_611_686_018_427_387_904'i64:
+    raise newException(SimTraceReadError,
+      "field \"" & key & "\" out of range: " & $value & " in: " & line)
+  value
+
 proc parseEventId(text: string): SimEventId {.raises: [SimTraceReadError].} =
   if text.len < 2 or text[0] != 'e':
     raise newException(SimTraceReadError, "malformed event id: " & text)
@@ -396,7 +422,8 @@ proc parseSimTraceHeader*(line: string): SimTraceHeader
       $version)
   SimTraceHeader(seed: extractUIntField(line, "seed"),
                  decisionBudget: extractBoundedIntField(line, "decisionBudget"),
-                 timeBudgetNanoseconds: extractIntField(line, "timeBudgetNanoseconds"),
+                 timeBudgetNanoseconds:
+                   extractBoundedTimeBudgetField(line, "timeBudgetNanoseconds"),
                  commit: extractStringField(line, "commit"),
                  config: extractStringField(line, "config"))
 

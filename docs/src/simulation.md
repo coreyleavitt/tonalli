@@ -68,10 +68,10 @@ OS, and every decision is logged.
 ```nim
 type
   SimRunOptions* = object
-    decisionBudget*: int
-    timeBudget*: Duration
-    ledger*: bool
-    oracle*: Option[SimOracle]
+    decisionBudget: int
+    timeBudget: Duration
+    ledger: bool
+    oracle: Option[SimOracle]
 
 proc simOptions*(decisionBudget = simulateDefaultDecisionBudget,
                   timeBudget = simulateDefaultTimeBudget,
@@ -114,7 +114,10 @@ on-any-outcome, decision/time budgets, trace recording, typed
 `SimulationError` classification) instead of hand-rolling a throwaway
 `newSimDispatcher`/`setThreadDispatcher` pair on its own thread and
 losing all of them. `opts` comes from `simOptions`, an ordinary proc
-that resolves its own defaults -- `simulateWith(1'u64, simOptions(
+that resolves its own defaults -- `simOptions` is `SimRunOptions`'s sole
+constructor, its fields private outside `chronos/simulation.nim`, so a
+caller cannot bypass it and construct a `SimRunOptions` literal with
+some fields silently zero-filled -- `simulateWith(1'u64, simOptions(
 decisionBudget = 500)): body` overrides one field and leaves the rest
 at their defaults. `simOptions`/`SimRunOptions` fold what used to be
 five separate templates (`simulateWithBudget`/`simulateWithLedger`/
@@ -168,7 +171,9 @@ wrong (looser, global-default) budget runs past where the recording
 stopped, exhausts the trace's own recorded decisions, and misreports
 the true `DecisionBudgetExhausted`/`TimeBudgetExhausted` as a
 `ProtocolViolation` (replay exhaustion is itself an oracle error,
-converted the same way any other oracle error is). `simulateReplayWith
+converted the same way any other oracle error is). Ledger checking is
+off by default for a replay, the same as for `simulate`; see
+`simulateReplayWith` below to enable it. `simulateReplayWith
 (tracePath, opts): body` overrides this default the same way
 `simulateWith` overrides `simulate`'s: an explicit `opts.decisionBudget`/
 `opts.timeBudget`/`opts.ledger` always wins over the recorded header.
@@ -305,7 +310,11 @@ through the full harness -- restore-on-any-outcome, decision/time
 budgets, trace recording, typed `SimulationError` classification --
 instead of the scripted oracle's test having to hand-roll a throwaway
 `newSimDispatcher`/`setThreadDispatcher` pair on its own thread and
-lose all of them.
+lose all of them. With `opts.oracle` set, `seed` no longer drives any
+decision -- the scripted oracle owns every one -- and only selects the
+trace path (`simTracePath(seed)`) and the seed a `SimulationError`
+attributes the run to; two scripted-oracle tests sharing a seed share a
+trace file, so pick distinct seeds to keep each test's trace separate.
 
 **`ReplayOracle(path)`**, constructed from a recorded trace, verifies
 each live choice point's digest against the next recorded one (the
@@ -537,7 +546,7 @@ not all landed yet (see the note below the table).
 |---|---|
 | `register2`, `unregister2`, `addReader2`, `removeReader2`, `addWriter2`, `removeWriter2` (POSIX and Windows) | raises `SimBarrierError` directly, at the point of detection, through the otherwise-unchanged `Result` signature |
 | `addSignal2`, `removeSignal2`, `addProcess2`, `removeProcess2` (POSIX and Windows) | same direct-raise mechanism |
-| `unregisterAndCloseFd` (POSIX) | same direct-raise mechanism |
+| `unregisterAndCloseFd` (POSIX and Windows) | same direct-raise mechanism |
 | `handle()` (minting a `DispatcherHandle`) | raises `SimBarrierError` directly rather than minting a handle for a sim dispatcher |
 | `wake()` | raises `SimBarrierError` directly rather than writing to a zero-valued wakeup fd/port |
 | `callSoon(DispatcherHandle, ...)` | raises `SimBarrierError` directly, the cross-thread entry `simProducer` replaces |
@@ -552,7 +561,8 @@ the sim poll loop raise directly for everything else they detect on
 their own: an oracle error, an out-of-range oracle answer, a decision-
 or virtual-time-budget exhaustion, a deadlock, or an oracle deferring
 all deliverable work with no fallback (see
-[`simulate`](#simulate-simulatewithbudget-simulatewithledger) above).
+[`simulate`](#simulate-simulatewith-simulatereplay-simulatereplaywith)
+above).
 Classification is always by type -- `kind` for `SimEngineError`,
 `exc.parent of ...` for `SimulationError` -- never by parsing a
 message.
@@ -668,10 +678,11 @@ Sim substrate tests live under `tests/testsim*.nim` (registered in both
 the `test_simulation` nimble task and `nimble check_windows`, plus
 `tests/testall.nim`): `testsimclock`, `testsimengine`, `testsimloop`,
 `testsimoracle`, `testsimtrace`, `testsimulation`, `testsimstream`,
-`testsimnet`, `testsimdatagram`, `testsimproducer`, and `testsimledger`
-(the ghost-ledger laws, including this page's contextvar, timer, and
-waiter-conservation additions). Every sim leaf test drives its probes
-from a freshly spawned OS thread (`tests/testsimnet.nim`'s pattern),
+`testsimnet`, `testsimdatagram`, `testsimproducer`, `testsimhttp`, and
+`testsimledger` (the ghost-ledger laws, including this page's
+contextvar, timer, and waiter-conservation additions). Every sim leaf
+test drives its probes from a freshly spawned OS thread
+(`tests/testsimnet.nim`'s pattern),
 isolating each scenario's own sim dispatcher from `testall`'s shared
 real one. `nimble test_simulation` runs the full set under both
 `--mm:refc` and `--mm:orc`, pinned to Nim 2.x (the sim substrate is

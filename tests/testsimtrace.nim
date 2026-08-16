@@ -423,3 +423,25 @@ suite "sim trace reader":
       check header.decisionBudget == 5_000_000_000
     else:
       skip()
+
+  test "R3-1: a timeBudgetNanoseconds near int64.high is refused":
+    ## Unbounded, this would overflow `simClockAnchorNanoseconds +
+    ## timeBudget.nanoseconds` in `runSimulation`
+    ## (`chronos/simulation.nim`) into an uncatchable `OverflowDefect`
+    ## before the run's own budget/failure handling ever runs - bounded
+    ## at parse instead, the same discipline `decisionBudget` already
+    ## gets from `extractBoundedIntField`.
+    expect SimTraceReadError:
+      discard parseSimTraceHeader(
+        renderHeaderLine(1'u64, 10_000, high(int64), "", ""))
+
+  test "R3-1: a negative timeBudgetNanoseconds is refused":
+    expect SimTraceReadError:
+      discard parseSimTraceHeader(
+        "{\"trace\":\"chronos-sim\",\"v\":2,\"seed\":1,\"decisionBudget\":" &
+        "10000,\"timeBudgetNanoseconds\":-5,\"commit\":\"\",\"config\":\"\"}")
+
+  test "R3-1: a timeBudgetNanoseconds at the documented bound round-trips":
+    let header = parseSimTraceHeader(
+      renderHeaderLine(1'u64, 10_000, 4_611_686_018_427_387_904'i64, "", ""))
+    check header.timeBudgetNanoseconds == 4_611_686_018_427_387_904'i64

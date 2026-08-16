@@ -410,10 +410,22 @@ type
     ## itself (see `simulateWith`'s docstring for why). By the time a
     ## template call's `opts` argument is evaluated, every default is
     ## already resolved, so the template carries none of its own.
-    decisionBudget*: int
-    timeBudget*: Duration
-    ledger*: bool
-    oracle*: Option[SimOracle]
+    ##
+    ## Fields are private outside this module (R3-5): `simOptions` is
+    ## the sole constructor, the same "construction discipline"
+    ## `SimOracle`/`newSimOracle` already enforce
+    ## (`chronos/internal/simengine.nim`) - a caller constructing a
+    ## `SimRunOptions` literal directly (`SimRunOptions(decisionBudget:
+    ## 500)`) would silently zero-fill every field it left out, most
+    ## surprisingly `timeBudget`, tripping `TimeBudgetExhausted` on the
+    ## first time advance instead of running under a real budget.
+    ## `simulateWith`/`simulateReplayWith`/`sweepSeedsWith` stay able to
+    ## read every field: privacy in Nim is module-scoped, not proc-
+    ## scoped, and all three live in this same module.
+    decisionBudget: int
+    timeBudget: Duration
+    ledger: bool
+    oracle: Option[SimOracle]
       ## `none` (the default): the run is driven by `RandomOracle(seed)`
       ## (`simulateWith`), the trace's own `ReplayOracle`
       ## (`simulateReplayWith`), or one `RandomOracle(seed)` per seed
@@ -479,10 +491,16 @@ template simulateWith*(seed: uint64, opts: SimRunOptions,
   ## harness guarantee (restore-on-any-outcome, decision/time budgets,
   ## trace recording, typed `SimulationError` classification) instead of
   ## hand-rolling a throwaway `newSimDispatcher`/`setThreadDispatcher`
-  ## pair on its own thread and losing all of them. One template, not an
-  ## overload of `simulate` sharing its name: on the pinned Nim 2.2.10
-  ## toolchain, both a same-named overload and *any* defaulted parameter
-  ## ahead of a trailing `untyped` body miscompile `await` inside `body`
+  ## pair on its own thread and losing all of them. With `opts.oracle`
+  ## set, `seed` no longer drives any decision - the scripted oracle
+  ## owns every one - and only selects the trace path
+  ## (`simTracePath(seed)`) and the seed a `SimulationError` attributes
+  ## the run to; two scripted-oracle tests sharing a seed share a trace
+  ## file, so pick distinct seeds to keep each test's trace separate.
+  ## One template, not an overload of `simulate` sharing its name: on
+  ## the pinned Nim 2.2.10 toolchain, both a same-named overload and
+  ## *any* defaulted parameter ahead of a trailing `untyped` body
+  ## miscompile `await` inside `body`
   ## the moment a caller omits it (standalone-reproduced, not specific to
   ## this module) - which is why `opts` is a single pre-resolved value
   ## from `simOptions` (an ordinary proc, defaults and all) rather than
@@ -676,18 +694,24 @@ type
     ## seed order, whether it passed or failed - the sweep never stops
     ## at the first failure, so a multi-seed bug never hides its
     ## siblings. A value the aggregator produces, never parsed back out
-    ## of a message string. `kind` is meaningful only when
-    ## `failureKind == SimSeedFailureKind.Engine`; it holds the zero
-    ## value (`SimFailureKind.BodyError`) for a `Ledger` failure.
+    ## of a message string. `kind` (RFC 0003 R3-6) is nested under the
+    ## `Engine` arm of `failureKind`'s own case, rather than sitting
+    ## beside it with a prose-only "meaningful only when Engine" caveat:
+    ## a `Ledger` failure has no `SimFailureKind` of its own to report,
+    ## and the compiler, not a docstring, now enforces that a caller
+    ## checks `failureKind` before ever reaching for `kind`.
     seed*: uint64
     tracePath*: string
     case passed*: bool
     of true:
       discard
     of false:
-      failureKind*: SimSeedFailureKind
-      kind*: SimFailureKind
       msg*: string
+      case failureKind*: SimSeedFailureKind
+      of SimSeedFailureKind.Engine:
+        kind*: SimFailureKind
+      of SimSeedFailureKind.Ledger:
+        discard
 
 proc runSweepSeed(seed: uint64, decisionBudget: int, timeBudget: Duration,
                    enableLedger: bool,

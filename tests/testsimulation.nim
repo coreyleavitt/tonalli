@@ -188,6 +188,9 @@ when defined(chronosSimulation) and compileOption("threads"):
         if o.passed:
           outcome = ProbeOutcome(ok: false,
             msg: "seed " & $o.seed & " unexpectedly passed")
+        elif o.failureKind != SimSeedFailureKind.Engine:
+          outcome = ProbeOutcome(ok: false,
+            msg: "seed " & $o.seed & " wrong failureKind: " & $o.failureKind)
         elif o.kind != SimFailureKind.BodyError:
           outcome = ProbeOutcome(ok: false,
             msg: "seed " & $o.seed & " wrong kind: " & $o.kind)
@@ -1079,3 +1082,13 @@ when defined(chronosSimulation) and compileOption("threads"):
       let outcome = runProbe(probeDefectWithNonSimParentReraisesUnchanged)
       checkpoint outcome.msg
       check outcome.ok
+
+  suite "SimRunOptions construction discipline":
+    test "R3-5: fields are not constructible from outside chronos/simulation.nim":
+      ## `simOptions` is `SimRunOptions`'s sole constructor (the same
+      ## discipline `SimOracle`/`newSimOracle` already enforce,
+      ## `chronos/internal/simengine.nim`): a caller reaching for
+      ## `SimRunOptions(decisionBudget: 500)` directly would silently
+      ## zero-fill `timeBudget`, tripping `TimeBudgetExhausted` on the
+      ## first time advance instead of running under a real budget.
+      check not compiles(SimRunOptions(decisionBudget: 500))
