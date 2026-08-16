@@ -3,7 +3,7 @@ name: Mobile iOS
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
   merge_group:
   workflow_dispatch:

@@ -1,12 +1,12 @@
 name: Simulation
 # Fork-only workflow for the deterministic simulation substrate
-# (RFC 0003). Kept standalone, separate from ci.yml's delegated
+# (RFC 0003). Kept standalone, separate from ci.yaml's delegated
 # status-im common.yml build, so it survives independently of the
 # shared-workflow arrangement.
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
   workflow_dispatch:
 
