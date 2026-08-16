@@ -4,7 +4,7 @@
 
 **Source code:**
 
-- [chapter5/src/uptimemon.nim](https://github.com/status-im/nim-chronos/blob/master/examples/http_client/chapter5/src/uptimemon.nim)
+- [chapter5/src/uptimemon.nim](https://github.com/coreyleavitt/tonalli/blob/main/examples/http_client/chapter5/src/uptimemon.nim)
 
 Currently, we're just checking the response status to determine if the URI is healthy.
 
@@ -25,7 +25,7 @@ Let's optimize our check to handle large page like this one.
 
 ## Streaming the Body
 
-Chronos allows streaming response body, so let's use this feature to fetch content in chunks, check the collected data for a certain health marker (e.g. "<html" string), and stop immediatelly when we find it or download a certain amount of data:
+Tonalli allows streaming response body, so let's use this feature to fetch content in chunks, check the collected data for a certain health marker (e.g. "<html" string), and stop immediatelly when we find it or download a certain amount of data:
 
 ```admonish info
 The HTTP protocol divides each request and response into a **header** and a **body**. The header contains metadata like the status code, while the body contains the actual content. This is true for both successful responses and error statuses.
@@ -71,7 +71,7 @@ Because the marker can be split between two reads (i.e. we fetch `<ht` in one bu
 
 This a helper function that we'll use later in `readMessage` proc as its predicate (more about it later).
 
-This function must conform to [`ReadMessagePredicate`](../../api/chronos/transports/stream.html#ReadMessagePredicate) type, i.e. accept an open array of bytes from the stream and return a tuple of `(int, bool)` that represents the length of data read in the last read iteration and the exit flag.
+This function must conform to [`ReadMessagePredicate`](../../api/tonalli/transports/stream.html#ReadMessagePredicate) type, i.e. accept an open array of bytes from the stream and return a tuple of `(int, bool)` that represents the length of data read in the last read iteration and the exit flag.
 
 On each iteration, we remove everything from the sample except for the trailing `len(marker) - 1` characters and append the new data, look up `marker` in the new `sample`, and update `found` is the match was found. We also check if `totalRead` is still no higher than `readLimit` and if it is, set the exit flag.
 
@@ -79,7 +79,7 @@ On each iteration, we remove everything from the sample except for the trailing 
 {{#shiftinclude auto:../../../../examples/http_client/chapter5/src/uptimemon.nim:readMessage}}
 ```
 
-[`readMessage`](../../api/chronos/streams/asyncstream.html#readMessage,AsyncStreamReader,ReadMessagePredicate) calls `findMarkerInSample` repeatedly until either there's no more data to read or the exit flag is `true`. The value `found` tells us if the marker was found in any of the samples checked by `readMessage` and we simply return it.
+[`readMessage`](../../api/tonalli/streams/asyncstream.html#readMessage,AsyncStreamReader,ReadMessagePredicate) calls `findMarkerInSample` repeatedly until either there's no more data to read or the exit flag is `true`. The value `found` tells us if the marker was found in any of the samples checked by `readMessage` and we simply return it.
 
 Now, we can use this function in the URI health check.
 
@@ -95,15 +95,15 @@ Note that we close `request` after `response` is instantiated, either successful
 {{#shiftinclude auto:../../../../examples/http_client/chapter5/src/uptimemon.nim:url_response}}
 ```
 
-To stream the response body, we're using a `bodyReader`. To get one for the current response, we're calling [`getBodyReader`](../../api/chronos/apps/http/httpclient.html#getBodyReader,HttpClientResponseRef).
+To stream the response body, we're using a `bodyReader`. To get one for the current response, we're calling [`getBodyReader`](../../api/tonalli/apps/http/httpclient.html#getBodyReader,HttpClientResponseRef).
 
-Like any other resource, `HttpBodyReader` must be closed after use. We do that in the `finally` block. Notice that there's no `except` here, we're OK with `findMarker` raising—we'll catch its exceptions in the outer scope.
+Like any other resource, `HttpBodyReader` must be closed after use. We do that in the `finally` block. Notice that there's no `except` here, we're OK with `findMarker` raising -- we'll catch its exceptions in the outer scope.
 
 ```nim
 {{#shiftinclude auto:../../../../examples/http_client/chapter5/src/uptimemon.nim:except}}
 ```
 
-Since `findMarker` can raise an exception that we haven't been catching so far ([`AsyncStreamError`](../../api/chronos/streams/asyncstream.html#AsyncStreamError)), we need to add it to the list.
+Since `findMarker` can raise an exception that we haven't been catching so far ([`AsyncStreamError`](../../api/tonalli/streams/asyncstream.html#AsyncStreamError)), we need to add it to the list.
 
 ```nim
 {{#shiftinclude auto:../../../../examples/http_client/chapter5/src/uptimemon.nim:finally}}

@@ -2,7 +2,7 @@
 
 **Goal:** Learn how to send POST HTTP requests and set request headers.
 
-**Source code:** [chapter6/src/uptimemon.nim](https://github.com/status-im/nim-chronos/blob/master/examples/http_client/chapter6/src/uptimemon.nim)
+**Source code:** [chapter6/src/uptimemon.nim](https://github.com/coreyleavitt/tonalli/blob/main/examples/http_client/chapter6/src/uptimemon.nim)
 
 How cool would it be to get notified about a service being down to your phone? This way, you can launch the program and just go on with your business and not constantly monitor the terminal window.
 
@@ -53,7 +53,7 @@ Here we set the headers as an arrays of tuples using Nim's shortcut syntax.
 {{#shiftinclude auto:../../../../examples/http_client/chapter6/src/uptimemon.nim:body}}
 ```
 
-Requests body must be a sequence of bytes so we convert our text message using [`stringToBytes`](../../api/chronos/apps/http/httpcommon.html#stringToBytes,openArray[char]).
+Requests body must be a sequence of bytes so we convert our text message using [`stringToBytes`](../../api/tonalli/apps/http/httpcommon.html#stringToBytes,openArray[char]).
 
 ```nim
 {{#shiftinclude auto:../../../../examples/http_client/chapter6/src/uptimemon.nim:request}}

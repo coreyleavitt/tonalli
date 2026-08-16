@@ -1,6 +1,6 @@
 # Deterministic simulation
 
-The simulation substrate lets a test run chronos's event loop over a
+The simulation substrate lets a test run tonalli's event loop over a
 seeded, injectable source of nondeterminism instead of the real clock,
 selector, and network stack. A failing interleaving becomes a seed: one
 number that reproduces the same run, in milliseconds, on any machine,
@@ -10,10 +10,10 @@ instead of an intermittent CI flake that takes days to corner.
 
 > **Fork-only, experimental API.** This substrate is not part of
 > upstream chronos and is not intended to be upstreamed: it is
-> infrastructure for testing chronos itself and the projects built on
+> infrastructure for testing tonalli itself and the projects built on
 > this fork, gated entirely behind the `chronosSimulation` define. With
 > the define undefined, none of it exists in a compiled binary --
-> `chronos.nim`'s export surface, every real-mode call site, and every
+> `tonalli.nim`'s export surface, every real-mode call site, and every
 > benchmark are unaffected (see [Performance](#performance)). With the
 > define on, the API is still young: it grew slice by slice against the
 > tests that needed it (RFC 0003), several corners named throughout this
@@ -24,8 +24,8 @@ instead of an intermittent CI flake that takes days to corner.
 ## Usage
 
 ```nim
-import chronos
-import chronos/simulation
+import tonalli
+import tonalli/simulation
 
 test "a byte written on one side of a sim pair reaches the other":
   simulate(seed = 1'u64):
@@ -55,7 +55,7 @@ equivalent for a message-oriented datagram - a short datagram read is
 simply a truncated message, matching what a real `recvfrom()` into an
 undersized buffer would do.
 
-A `simulate` body is ordinary async chronos code: `await`, combinators,
+A `simulate` body is ordinary async tonalli code: `await`, combinators,
 `AsyncQueue`/`AsyncLock`/etc. (see [Surfaces that need no
 seam](#surfaces-that-need-no-seam)), and any transport built on top of a
 `SimNet` endpoint all work unmodified. What changes underneath is where
@@ -115,7 +115,7 @@ on-any-outcome, decision/time budgets, trace recording, typed
 `newSimDispatcher`/`setThreadDispatcher` pair on its own thread and
 losing all of them. `opts` comes from `simOptions`, an ordinary proc
 that resolves its own defaults -- `simOptions` is `SimRunOptions`'s sole
-constructor, its fields private outside `chronos/simulation.nim`, so a
+constructor, its fields private outside `tonalli/simulation.nim`, so a
 caller cannot bypass it and construct a `SimRunOptions` literal with
 some fields silently zero-filled -- `simulateWith(1'u64, simOptions(
 decisionBudget = 500)): body` overrides one field and leaves the rest
@@ -184,7 +184,7 @@ A divergent decision sequence surfaces the same way any other oracle
 error does: a `SimulationError` with `kind ==
 SimFailureKind.ProtocolViolation`.
 
-**Trace format and version.** The ndjson header (`chronos/internal/
+**Trace format and version.** The ndjson header (`tonalli/internal/
 simtrace.nim`'s `renderHeaderLine`/`parseSimTraceHeader`) is versioned
 (`simTraceVersion`); `readSimTrace` refuses a trace whose header version
 does not match the reading build's, rather than guessing at a schema it
@@ -392,7 +392,7 @@ mint sim-natively, so both sides of a pair are wired atomically in one
 call rather than a listener/dialer pair like the stream case.
 
 **POSIX only in this slice.** Both the stream and datagram surfaces
-build on seams (`chronos/transports/stream.nim`'s and `datagram.nim`'s
+build on seams (`tonalli/transports/stream.nim`'s and `datagram.nim`'s
 raw I/O extraction) that exist only in each module's POSIX branch,
 matching RFC section 4's Windows IOCP-emulation non-goal. On Windows,
 `listenStream`/`connectStream`/`accept`/`datagramPair` compile and
@@ -498,7 +498,7 @@ arm/fire/cancel touchpoints in `asyncengine.nim`, independent counters
 that can only diverge if a real code path bypasses one of them.
 Contextvar accounting is evaluated only at teardown, not per-fire, for
 an interface reason rather than a design one: `DispatcherBase.callbacks`
-is a `CallbackQueue` (`chronos/internal/callbackqueue.nim`) whose public
+is a `CallbackQueue` (`tonalli/internal/callbackqueue.nim`) whose public
 interface is deliberately exactly five entry points with no iteration
 or random access, so there is no cheap way to read "how many queued
 callbacks carry a context" at an arbitrary mid-run checkpoint. Teardown
@@ -508,7 +508,7 @@ is free; timer accounting has no such constraint (the timer heap's
 length is O(1)) and is checked on every fire.
 
 **Waiter conservation** (added 2026-08-15, issue #9) is different in
-kind from the other four: `chronos/asyncsync.nim` gains no seam for it
+kind from the other four: `tonalli/asyncsync.nim` gains no seam for it
 at all. `AsyncLock`, `AsyncEvent`, `AsyncQueue`, `AsyncEventQueue`, and
 `AsyncSemaphore` are unmodified except for read-only accessors
 (`waitersCount`/`gettersCount`/`puttersCount`, from
@@ -558,7 +558,7 @@ resources, a provenance-guarded call fails loudly and catchably instead
 of touching a nil selector or a zero-initialized wakeup handle: it
 raises `SimBarrierError` directly, at the point of detection, via
 `raiseSimBarrier`. The table below is the verified set, by grep of
-`raiseSimBarrier`/`SimBarrierError` in `chronos/internal/asyncengine.nim`
+`raiseSimBarrier`/`SimBarrierError` in `tonalli/internal/asyncengine.nim`
 against this page's own snapshot of the code -- not the RFC's
 design-section sketch, which names a slightly larger surface that has
 not all landed yet (see the note below the table).
@@ -593,16 +593,16 @@ reach its caller unchanged. Three things can happen to it:
 
 - **Propagation.** Most call sites let it through unchanged, widening
   their own `raises` list under `chronosSimulation` (see the sim-widened
-  `async` signatures throughout `chronos/transports/stream.nim`,
-  `chronos/transports/datagram.nim`, `chronos/threadsync.nim`, and
-  `chronos/asyncproc.nim`). `runSimulation` (`chronos/simulation.nim`)
+  `async` signatures throughout `tonalli/transports/stream.nim`,
+  `tonalli/transports/datagram.nim`, `tonalli/threadsync.nim`, and
+  `tonalli/asyncproc.nim`). `runSimulation` (`tonalli/simulation.nim`)
   is the ultimate boundary: it catches `SimEngineError` by type and
   converts it into `SimulationError`, catches a propagated
   `SimBarrierError` by type and classifies it `SimFailureKind.BarrierHit`
   -- a real hermeticity violation, distinct from an ordinary body bug
   even though both surface through `body` -- and treats any other
   `CatchableError` as `SimFailureKind.BodyError`.
-- **Absorption.** `chronos/streams/asyncstream.nim`'s `tsource`-
+- **Absorption.** `tonalli/streams/asyncstream.nim`'s `tsource`-
   forwarding vtable procs absorb a `SimBarrierError`/`SimEngineError`
   the same way they already absorb `TransportError`: wrapped into
   `AsyncStreamReadError`/`AsyncStreamWriteError` rather than widening
@@ -614,7 +614,7 @@ reach its caller unchanged. Three things can happen to it:
   []`-typed boundary no per-build pragma can widen: a `CallbackFunc`
   (the transport seam's I/O-callback wrap and its `register2`/
   `addReader2`/etc. teardown calls) or `finish()`'s unbounded reach
-  (`chronos/internal/asyncfutures.nim`'s `simLedgerNoteFutureFinish`).
+  (`tonalli/internal/asyncfutures.nim`'s `simLedgerNoteFutureFinish`).
   Each of these catches its own typed `SimBarrierError`/
   `SimEngineError`/`SimLedgerError` locally and re-raises it wrapped in
   a `Defect` via `raiseAsDefect` -- exempt from the raises effect
@@ -647,10 +647,10 @@ so a test relying on it does not discover the gap by surprise.
 `chronosSimulation` undefined: **zero cost, verified by inspection.**
 Every touchpoint this page's underlying laws (contextvar accounting,
 timer accounting) and the waiter-conservation registration API add to
-`chronos/internal/asyncengine.nim` sits inside an existing or newly
+`tonalli/internal/asyncengine.nim` sits inside an existing or newly
 added `when chronosSimulation:` block; none of it compiles when the
 define is off. The one unconditional addition is
-`chronos/asyncsync.nim`'s new `AsyncEventQueue.waitersCount` accessor
+`tonalli/asyncsync.nim`'s new `AsyncEventQueue.waitersCount` accessor
 (alongside the cherry-picked `waitersCount`/`gettersCount`/
 `puttersCount` family) -- pure, additive, read-only procs that no
 existing call site invokes, so they add a symbol to the binary and
@@ -685,7 +685,7 @@ change to `simulate()`'s default behavior."
 
 ## Surfaces that need no seam
 
-`chronos/asyncsync.nim` (locks, events, queues, semaphores, the event
+`tonalli/asyncsync.nim` (locks, events, queues, semaphores, the event
 bus) is pure `Future` machinery with no OS coupling, so it runs
 unmodified under simulation with zero instrumentation beyond the
 read-only waiter-conservation accessors above. This is the same

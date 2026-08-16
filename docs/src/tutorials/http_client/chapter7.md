@@ -2,7 +2,7 @@
 
 **Goal:** Learn how to use semaphores to control concurrency.
 
-**Source code:** [chapter7/src/uptimemon.nim](https://github.com/status-im/nim-chronos/blob/master/examples/http_client/chapter7/src/uptimemon.nim)
+**Source code:** [chapter7/src/uptimemon.nim](https://github.com/coreyleavitt/tonalli/blob/main/examples/http_client/chapter7/src/uptimemon.nim)
 
 Our app is almost ready to run on production and do regular background URI checks.
 
@@ -10,7 +10,7 @@ However, there's one issue we need to address before we can feed it tens of URIs
 
 Instead of simultaneusly launching checks for all URIs in the list, we'll run them in batches of 5, i.e. no more than 5 checks will run at any given moment, keeping resource usage low and under control.
 
-To achieve that, we'll use a _semaphore_—an special object that a function must acquire to run and must release after it's finished. A semaphore can be acquired by a fixed number of function at any moment, and this is how it regulates concurrency.
+To achieve that, we'll use a _semaphore_ -- an special object that a function must acquire to run and must release after it's finished. A semaphore can be acquired by a fixed number of function at any moment, and this is how it regulates concurrency.
 
 Here's the code with a semaphore and an infinite loop added:
 
@@ -36,11 +36,11 @@ We've added more URIs to the list to make batching effect visible.
 {{#shiftinclude auto:../../../../examples/http_client/chapter7/src/uptimemon.nim:semaphore}}
 ```
 
-We've modified `check` function for a single URI so that it accepts a `semaphore` (of type[`AsyncSemaphore`](../../api/chronos/asyncsync.html#AsyncSemaphore)), waits to [`acquire`](../../api/chronos/asyncsync.html#acquire,AsyncSemaphore) it, and [`release`](../../api/chronos/asyncsync.html#release,AsyncSemaphore)s it at the end (we use `defer` to postpone the release).
+We've modified `check` function for a single URI so that it accepts a `semaphore` (of type[`AsyncSemaphore`](../../api/tonalli/asyncsync.html#AsyncSemaphore)), waits to [`acquire`](../../api/tonalli/asyncsync.html#acquire,AsyncSemaphore) it, and [`release`](../../api/tonalli/asyncsync.html#release,AsyncSemaphore)s it at the end (we use `defer` to postpone the release).
 
 With this short addition, we prevent `check` from running if the semaphore is full.
 
-Because releasing a semaphore can raise a [`AsyncSemaphoreError`](../../api/chronos/asyncsync.html#AsyncSemaphoreError) and it would happen outside of our managed `try` block, we wrap the `release` call in its own `try..except` block to handle it gracefully and prevent it from bubbling up.
+Because releasing a semaphore can raise a [`AsyncSemaphoreError`](../../api/tonalli/asyncsync.html#AsyncSemaphoreError) and it would happen outside of our managed `try` block, we wrap the `release` call in its own `try..except` block to handle it gracefully and prevent it from bubbling up.
 
 ```nim
 {{#shiftinclude auto:../../../../examples/http_client/chapter7/src/uptimemon.nim:check}}

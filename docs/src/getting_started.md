@@ -1,15 +1,15 @@
 ## Getting started
 
-Install `chronos` using `nimble`:
+Install `tonalli` using `nimble`:
 
 ```text
-nimble install chronos
+nimble install tonalli
 ```
 
 or add a dependency to your `.nimble` file:
 
 ```text
-requires "chronos"
+requires "tonalli"
 ```
 
 and start using it:

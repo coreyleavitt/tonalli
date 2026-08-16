@@ -1,10 +1,10 @@
 # Bonus Track - Performance and Benchmarking
 
-**Goal:** Understand how Chronos performs under load and learn how to benchmark your server. 
+**Goal:** Understand how Tonalli performs under load and learn how to benchmark your server. 
 
-**Source code:** [chapter4/src/dashboard.nim](https://github.com/status-im/nim-chronos/blob/master/examples/http_server/chapter4/src/dashboard.nim)
+**Source code:** [chapter4/src/dashboard.nim](https://github.com/coreyleavitt/tonalli/blob/main/examples/http_server/chapter4/src/dashboard.nim)
 
-One of the main reasons to use Chronos is its performance. Thanks to its asynchronous architecture, a single-threaded Chronos server can handle thousands of concurrent connections with minimal overhead.
+One of the main reasons to use Tonalli is its performance. Thanks to its asynchronous architecture, a single-threaded Tonalli server can handle thousands of concurrent connections with minimal overhead.
 
 In this chapter, we'll see check how our app performs under load.
 
@@ -82,6 +82,6 @@ Percentage of the requests served within a certain time (ms)
 
 Pay attention to these metrics:
 
-- **Requests per second (RPS):** How many requests your server processed per second. Even with the overhead of JSON parsing and logging, Chronos should achieve hundreds of RPS even on a common laptop.
+- **Requests per second (RPS):** How many requests your server processed per second. Even with the overhead of JSON parsing and logging, Tonalli should achieve hundreds of RPS even on a common laptop.
 - **Time per request:** The average time it took to complete a single reques. You'll see two numbers, one roughly 100 times larger than the other. This is due to the concurrency factor of 100. The smaller number represents the actuall processing time per request. This should be close to 1 ms. 
-- **Failed requests:** How many requests were not successful. With Chronos, this should be zero even under high load.
+- **Failed requests:** How many requests were not successful. With Tonalli, this should be zero even under high load.

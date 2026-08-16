@@ -13,8 +13,8 @@ procedure signature.
 ## Usage
 
 ```nim
-import chronos
-import chronos/contextvars
+import tonalli
+import tonalli/contextvars
 
 type User = object
   name: string
@@ -206,7 +206,7 @@ proc corrupt() =
 Treat a `ref`-typed default as an immutable shared singleton. If a key
 needs a fresh instance per unbound read, bind it explicitly with
 `withValue` at the point of use instead of relying on the default; a lazy
-`proc(): T` factory default is not offered: nothing in chronos needs one
+`proc(): T` factory default is not offered: nothing in tonalli needs one
 today.
 
 ### Reads inside your own `{.cast(gcsafe).}` blocks
@@ -223,7 +223,7 @@ Current Nim (through 2.2.x and devel at the time of writing) mishandles
 compiler's effect tracking clears the enforcement outright instead of
 restoring the enclosing block's state, so every statement *after* the
 inner block loses the outer cast's protection. This is not specific to
-chronos (two hand-written nested blocks reproduce it), but calling one
+tonalli (two hand-written nested blocks reproduce it), but calling one
 of the templates above inside your own cast block is an easy way to
 trigger it, and the resulting "is not GC-safe" errors point at unrelated
 statements after the call. Until the compiler fix propagates, hoist the
@@ -269,7 +269,7 @@ deliberate, for two reasons:
 - Reading a must-bind key before it's bound is a contract violation (the
   caller forgot a `withValue` somewhere up the call chain), not a
   recoverable runtime condition like a failed network call. `Defect` is
-  chronos's (and Nim's) vocabulary for "this is a bug," the same category
+  tonalli's (and Nim's) vocabulary for "this is a bug," the same category
   as an out-of-bounds index or a failed `doAssert`.
 - `Defect`s sit outside Nim's `raises` effect tracking. A must-bind read
   can therefore happen inside an `{.async: (raises: []).}` proc (the
@@ -353,7 +353,7 @@ proc readOrDefault[T](cv: ContextVar[T]): T =
                 # dispatch, no macro expansion involved
 ```
 
-chronos's own benchmark suite uses a runtime-indexed *array* of keys to
+tonalli's own benchmark suite uses a runtime-indexed *array* of keys to
 build a chain-depth ladder that a one-declaration-one-symbol pragma
 cannot mint (`benchmarks/bench_contextvars.nim`):
 
@@ -382,7 +382,7 @@ independently-scheduled callbacks with no `await` or shared call stack
 between them are, by construction, not a single logical task, and no
 binder can span them. The dispatcher restores the context it captured at
 scheduling time around *every* callback invocation (`fireWithContext` in
-`chronos/internal/asyncengine.nim`), so nothing one callback binds
+`tonalli/internal/asyncengine.nim`), so nothing one callback binds
 survives into a second, separately-scheduled callback: the next callback
 observes whatever context it captured at its own registration.
 
@@ -419,7 +419,7 @@ on cross-thread scheduling), so a snapshot captured on one thread must not
 be sent to or restored on another: "any number of times" means any
 number of callbacks on the capturing thread.
 
-chronos has no imperative token API (PEP 567's `ContextVar.set()`/
+tonalli has no imperative token API (PEP 567's `ContextVar.set()`/
 `Token.reset()` shape): within a single logical task, `withValue`
 expresses every binding lifecycle, and across independent callbacks a
 token could not work anyway: the dispatcher's restore-at-fire discipline
@@ -516,7 +516,7 @@ on the main thread before any other thread exists. It does not hold
 across `dlopen`/shared-library boundaries: a library loaded after other
 threads already exist can construct keys concurrently with readers on
 those other threads, and unloading it leaves dangling registry entries.
-Neither shape is a chronos use case today, but embedding chronos in a
+Neither shape is a tonalli use case today, but embedding tonalli in a
 plugin/shared-library host would need to revisit this registry's
 construction discipline.
 
@@ -545,7 +545,7 @@ every mature ecosystem converged on: Python PEP 567 (`var.get()`,
 `ctx[var]`), Kotlin (`coroutineContext[Key]`), Java JEP 446 ScopedValue
 (`sv.get()`, `ScopedValue.where(sv, v).run(...)`), .NET `AsyncLocal`
 (`v.Value`). None of them mint derived identifiers per variable: that's
-the design principle this API borrows. Where chronos's design diverges
+the design principle this API borrows. Where tonalli's design diverges
 from those precedents:
 
 - **PEP 567**: an unbound read there raises a catchable `LookupError`;
@@ -553,14 +553,14 @@ from those precedents:
   [Required variables](#required-variables) for the raises-tracking
   rationale, a Nim-specific constraint Python has no analog of). Python's
   `Context.run(fn)` value-isolated execution is also not offered;
-  `withContext`'s mutate-and-restore covers chronos's callback-boundary
+  `withContext`'s mutate-and-restore covers tonalli's callback-boundary
   cases (see [Bridging independent callbacks](#bridging-independent-callbacks)).
 - **Kotlin** couples a key and its value type through a companion object
-  declared on the value type. chronos keeps independent factories
+  declared on the value type. tonalli keeps independent factories
   (`newContextVar[T]`/`newRequiredContextVar[T]`) instead: Nim has no
   companion-object idiom, and the coupling wouldn't buy anything here.
 - **JEP 446** forbids rebinding a `ScopedValue` within the same dynamic
-  scope. chronos keeps arbitrary LIFO re-shadowing: `cv.withValue` nests
+  scope. tonalli keeps arbitrary LIFO re-shadowing: `cv.withValue` nests
   freely, and the innermost binding always wins.
 - **.NET** `AsyncLocal.Value` is an imperative setter with forward flow
   (`asyncLocal.Value = x` mutates ambient state going forward). Only its
@@ -576,7 +576,7 @@ hot path, from a build without the feature at all. This is measured, not
 assumed: every number below comes from `benchmarks/bench_contextvars.nim`,
 run under both memory managers.
 
-**refc** (chronos's most latency-sensitive consumers pin `--mm:refc`
+**refc** (tonalli's most latency-sensitive consumers pin `--mm:refc`
 unconditionally) and **orc** both show the dispatcher-level headline
 metrics (`callSoon` schedule+fire, sleepAsync await chains, future
 create/await, and the two memory metrics) landing within the same
@@ -621,14 +621,14 @@ dispatcher's internal callback queues previously used `std/deques`,
 whose `popFirst` returns its element by value: a pre-existing cost
 (present before contextvars, on the queue's original single `ref`
 field) that contextvars' second `ref` field doubled. The dispatcher
-now uses a small purpose-built queue (`chronos/internal/callbackqueue.nim`)
+now uses a small purpose-built queue (`tonalli/internal/callbackqueue.nim`)
 whose dequeue is barrier-free on the copy-out; this restores
 queue-transport cost per hop to parity with what the pre-contextvars
 codebase already paid on its one field.
 
 ## Internals
 
-The rest of this document describes the implementation for chronos
+The rest of this document describes the implementation for tonalli
 contributors extending the context-variable substrate itself; application
 code using the API above does not need it.
 
@@ -669,7 +669,7 @@ be fabricated from an arbitrary `ContextNodeBase`. `AsyncContext* =
 object` wraps its chain head in a field private to this module: the only
 route to a populated value in safe Nim is `currentContext()`'s own
 capture, so no safe construction (not even from code that imports
-`chronos/internal/contextnode` directly) can hand `withContext` a
+`tonalli/internal/contextnode` directly) can hand `withContext` a
 snapshot whose chain wasn't built the normal way. This guarantee covers
 every safe-Nim construction route; `cast[AsyncContext](node)` bypasses it
 the same way a `cast` bypasses any Nim type's invariants.
@@ -721,7 +721,7 @@ enumeration filter, never a key's lifetime.
 registry already needs, enforced two ways.
 
 The first is automatic, needs no setup, and runs in every build,
-including a release build: on a key's first registration, chronos stamps
+including a release build: on a key's first registration, tonalli stamps
 the constructing thread with a process-lifetime generation counter (not
 `getThreadId()`, whose OS-level ids are recycled once a thread exits, and
 so cannot tell a returning thread from an unrelated later one reusing its
@@ -742,7 +742,7 @@ construction from that point on, nothing makes the process itself sound
 again.
 
 The second is `lockContextVarConstruction()`, a stricter, `tonalliDebug`-
-only opt-in boundary: chronos does not wrap or intercept thread creation,
+only opt-in boundary: tonalli does not wrap or intercept thread creation,
 so nothing flips this lock automatically. Call it yourself at your
 program's own construction/thread-creation boundary (the test suite is
 its only caller today), and every `newContextVar`/`newRequiredContextVar`
@@ -784,14 +784,14 @@ context-sensitive code without one of the other two constructors upstream
 reintroduces a leak silently.
 
 Every `AsyncCallback` construction site must pick one of three
-constructors defined in `chronos/futures.nim`:
+constructors defined in `tonalli/futures.nim`:
 
 - `capturingCallback(fn, udata)`: for every scheduling site whose callback
   must observe registration-time bindings (`addCallback`, `callSoon`,
   `setTimer`, `addReader`/`addWriter`, `addSignal`/`addProcess`, `callIdle`,
   `closeSocket`/`closeHandle` after-callbacks), whether the callback is
-  application code or chronos-internal. Captures the current context.
-- `bareCallback(fn, udata)`: for chronos-internal trampolines (sentinels,
+  application code or tonalli-internal. Captures the current context.
+- `bareCallback(fn, udata)`: for tonalli-internal trampolines (sentinels,
   cross-thread queue draining, the low-level per-operation IOCP
   read/write completion trampolines, `internalCallTick`'s `CallbackFunc`
   overloads) where no meaningful registration-time context exists: those
@@ -820,11 +820,11 @@ are therefore context-blind by design.
 
 Only `capturingCallback`/`bareCallback`/`contextCallback` can construct an
 `InternalAsyncCallback`: `function`/`udata`/`context` are private to
-`chronos/futures.nim`, and no other module can read or modify a field
+`tonalli/futures.nim`, and no other module can read or modify a field
 after construction (existing readers go through the exported
 `function()`/`udata()`/`context()` getters). A raw
 `AsyncCallback(function: ..., udata: ...)` literal, or a direct field
-assignment, anywhere outside `chronos/futures.nim` fails to compile:
+assignment, anywhere outside `tonalli/futures.nim` fails to compile:
 `tests/testcontextvarsguardrails.nim` pins this with `not compiles(...)`
 checks.
 

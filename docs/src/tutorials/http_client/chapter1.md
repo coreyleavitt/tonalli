@@ -1,8 +1,8 @@
-# Making an HTTP Request with Chronos
+# Making an HTTP Request with Tonalli
 
-**Goal:** Learn how to make an HTTP request and proccess its response with Chronos.
+**Goal:** Learn how to make an HTTP request and proccess its response with Tonalli.
 
-**Source code:** [chapter1/src/uptimemon.nim](https://github.com/status-im/nim-chronos/blob/master/examples/http_client/chapter1/src/uptimemon.nim)
+**Source code:** [chapter1/src/uptimemon.nim](https://github.com/coreyleavitt/tonalli/blob/main/examples/http_client/chapter1/src/uptimemon.nim)
 
 Create a new Nimble project:
 
@@ -36,7 +36,7 @@ Now let's see what we're doing here line by line.
 {{#shiftinclude auto:../../../../examples/http_client/chapter1/src/uptimemon.nim:import}}
 ```
 
-[`httpclient`](../../api/chronos/apps/http/httpclient.html) module, as the title suggests, implements the HTTP client capabilities, i.e. sending HTTP requests and dealing with the responses asynchronously.
+[`httpclient`](../../api/tonalli/apps/http/httpclient.html) module, as the title suggests, implements the HTTP client capabilities, i.e. sending HTTP requests and dealing with the responses asynchronously.
 
 ```nim
 {{#shiftinclude auto:../../../../examples/http_client/chapter1/src/uptimemon.nim:check}}
@@ -44,9 +44,9 @@ Now let's see what we're doing here line by line.
 
 We define a function that sends an HTTP request to a URL we provide, checks if this URL is available, and prints the result.
 
-Note that this function is annotated with `async` pragma because we won't call it directly but instead will "book" its execution from Chronos in an asynchronous way.
+Note that this function is annotated with `async` pragma because we won't call it directly but instead will "book" its execution from Tonalli in an asynchronous way.
 
-Also note the `raises: [CancelledError]` part. This is Chronos's way of announcing the exceptions that are expected to the raised by this function. This mechanism is called [checked exceptions](../../error_handling.md#checked-exceptions). In this particular case, we tell the compiler that this function has cancellable things inside it and propagates the cancellation to its caller. No other exceptions should leak from it and if they do, it's a defect in the program.
+Also note the `raises: [CancelledError]` part. This is Tonalli's way of announcing the exceptions that are expected to the raised by this function. This mechanism is called [checked exceptions](../../error_handling.md#checked-exceptions). In this particular case, we tell the compiler that this function has cancellable things inside it and propagates the cancellation to its caller. No other exceptions should leak from it and if they do, it's a defect in the program.
 
 ```nim
 {{#shiftinclude auto:../../../../examples/http_client/chapter1/src/uptimemon.nim:session}}
@@ -60,7 +60,7 @@ Here, we're creating an HTTP session. Sessions are responsible for connection po
 
 When dealing with the Web, we must always assume the connection can break. So it's a good idea to get wrap all web interactions in a `try-except` block.
 
-[`fetch`](../../api/chronos/apps/http/httpclient.html#fetch,HttpSessionRef,Uri) is a shortcut for "create an HTTP GET request within the given session to the given URL."
+[`fetch`](../../api/tonalli/apps/http/httpclient.html#fetch,HttpSessionRef,Uri) is a shortcut for "create an HTTP GET request within the given session to the given URL."
 
 [`parseUri`](https://nim-lang.org/docs/uri.html#parseUri,string) is a function that parses a string into a structured URI object.
 
@@ -70,7 +70,7 @@ Notice that when we are assigning a value to `response`, we do not just call `fe
 {{#shiftinclude auto:../../../../examples/http_client/chapter1/src/uptimemon.nim:status}}
 ```
 
-Once we've received our response, we can check its status. If it's 200, we mark this URL healthy (later in the tutorial, we'll improve this logic to handle empty and junk responses), otherwise—not healthy.
+Once we've received our response, we can check its status. If it's 200, we mark this URL healthy (later in the tutorial, we'll improve this logic to handle empty and junk responses), otherwise -- not healthy.
 
 ```nim
 {{#shiftinclude auto:../../../../examples/http_client/chapter1/src/uptimemon.nim:except}}
@@ -84,7 +84,7 @@ Note that catching `HttpError` does not contradict the `raises` value at the fun
 {{#shiftinclude auto:../../../../examples/http_client/chapter1/src/uptimemon.nim:finally}}
 ```
 
-No matter if the check was successful, we must close the session after we're done with it and return the resources back to your computer. [`closeWait`](../../api/chronos/apps/http/httpclient.html#closeWait,HttpSessionRef) is a function that schedules all open connections within this session to be closed.
+No matter if the check was successful, we must close the session after we're done with it and return the resources back to your computer. [`closeWait`](../../api/tonalli/apps/http/httpclient.html#closeWait,HttpSessionRef) is a function that schedules all open connections within this session to be closed.
 
 ```nim
 {{#shiftinclude auto:../../../../examples/http_client/chapter1/src/uptimemon.nim:isMainModule}}

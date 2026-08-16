@@ -2,16 +2,16 @@
 
 **Goal:** Learn how to make arbitrarily many HTTP requests asynchronously.
 
-**Source code:** [chapter3/src/uptimemon.nim](https://github.com/status-im/nim-chronos/blob/master/examples/http_client/chapter3/src/uptimemon.nim)
+**Source code:** [chapter3/src/uptimemon.nim](https://github.com/coreyleavitt/tonalli/blob/main/examples/http_client/chapter3/src/uptimemon.nim)
 
-In the previous chapter, we learned how to reuse a session to check multiple URIs serially. While efficient, checking URIs one by one is slow. Now, let's unlock the true power of Chronos—concurrency!
+In the previous chapter, we learned how to reuse a session to check multiple URIs serially. While efficient, checking URIs one by one is slow. Now, let's unlock the true power of Tonalli -- concurrency!
 
-We want Chronos to start all the requests at the same time and handle each result as soon as it's available.
+We want Tonalli to start all the requests at the same time and handle each result as soon as it's available.
 
 To achieve that, we will:
 
 1. Use `mapIt` from `std/sequtils` to create a list of `Future`s for our requests.
-2. Await all `Future`s at once with [`allFutures`](../../api/chronos/internal/asyncfutures.html#allFutures,varargs[Future[T]]).
+2. Await all `Future`s at once with [`allFutures`](../../api/tonalli/internal/asyncfutures.html#allFutures,varargs[Future[T]]).
 3. Add cancellation logic to ensure that if the main check is cancelled, all individual requests are also cancelled and awaited.
 
 Here's the code:

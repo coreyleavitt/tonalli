@@ -55,7 +55,7 @@ proc p3() {.async.} =
   await fut2
 ```
 
-Because `chronos` ensures that all exceptions are re-routed to the `Future`,
+Because `tonalli` ensures that all exceptions are re-routed to the `Future`,
 `poll` will not itself raise exceptions.
 
 `poll` may still panic / raise `Defect` if such are raised in user code due to
@@ -97,7 +97,7 @@ var fut: Future[int].Raising([CancelledError])
 ```admonition note
 `Raising` creates a specialization of `InternalRaisesFuture` type - as the name
 suggests, this is an internal type whose implementation details are likely to
-change in future `chronos` versions.
+change in future `tonalli` versions.
 ```
 
 ## The `Exception` type
@@ -144,7 +144,7 @@ proc callRaiseException() {.async: (raises: []).} =
 ```
 
 **Global flag.**  This mode can be enabled globally with
-`-d:tonalliHandleException` as a help when porting code to `chronos`. The
+`-d:tonalliHandleException` as a help when porting code to `tonalli`. The
 behavior in this case will be that:
 
 1. old-style functions annotated with plain `async` will behave as if they had
@@ -164,5 +164,5 @@ annotations and get compiler feedback while not requiring that every bit of
 legacy code is updated at once.
 
 This should be used sparingly and with care, however, as global configuration
-settings may interfere with libraries that use `chronos` leading to unexpected
+settings may interfere with libraries that use `tonalli` leading to unexpected
 behavior.

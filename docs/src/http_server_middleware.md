@@ -1,6 +1,6 @@
 ## HTTP server middleware
 
-Chronos provides a powerful mechanism for customizing HTTP request handlers via
+Tonalli provides a powerful mechanism for customizing HTTP request handlers via
 middlewares.
 
 A middleware is a coroutine that can modify, block or filter HTTP request.

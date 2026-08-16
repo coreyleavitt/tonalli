@@ -1,6 +1,6 @@
 # Updating this book
 
-To contribute to this book, [fork the repository](https://github.com/status-im/nim-chronos/fork), edit the book locally, and [send a pull request](https://github.com/status-im/nim-chronos/compare) with your changes.
+To contribute to this book, [fork the repository](https://github.com/coreyleavitt/tonalli/fork), edit the book locally, and [send a pull request](https://github.com/coreyleavitt/tonalli/compare) with your changes.
 
 ## Modifying the content
 
@@ -21,7 +21,7 @@ If you want to add a new page, edit the file `docs/src/SUMMARY.md`. It's a list 
 - [Errors and exceptions](./error_handling.md)
 - [Threads](./threads.md)
 - [Tips, tricks and best practices](./tips.md)
-- [Porting code to `chronos`](./porting.md)
+- [Porting code to `tonalli`](./porting.md)
 - [HTTP server middleware](./http_server_middleware.md)
 
 # Developer guide

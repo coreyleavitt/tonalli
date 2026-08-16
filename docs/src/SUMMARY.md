@@ -10,7 +10,7 @@
 - [Deterministic simulation](./simulation.md)
 - [Threads](./threads.md)
 - [Tips, tricks and best practices](./tips.md)
-- [Porting code to `chronos`](./porting.md)
+- [Porting code to `tonalli`](./porting.md)
 - [HTTP server middleware](./http_server_middleware.md)
 
 # Tutorials
@@ -18,7 +18,7 @@
 ## Uptime Monitor
 
 - [HTTP Client: Uptime Monitor](./tutorials/http_client/intro.md)
-  - [Making an HTTP Request with Chronos](./tutorials/http_client/chapter1.md)
+  - [Making an HTTP Request with Tonalli](./tutorials/http_client/chapter1.md)
   - [Session Reuse](./tutorials/http_client/chapter2.md)
   - [Making Requests Concurrently](./tutorials/http_client/chapter3.md)
   - [Timeouts & Cancellation](./tutorials/http_client/chapter4.md)

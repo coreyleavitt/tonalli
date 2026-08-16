@@ -211,10 +211,10 @@ waitFor fut # keeps printing `tick!` every second.
 
 ## Compile-time configuration
 
-`chronos` contains several compile-time
-[configuration options](./chronos/config.nim) enabling stricter compile-time
+`tonalli` contains several compile-time
+[configuration options](./tonalli/config.nim) enabling stricter compile-time
 checks and debugging helpers whose runtime cost may be significant.
 
-Strictness options generally will become default in future chronos releases and
+Strictness options generally will become default in future tonalli releases and
 allow adapting existing code without changing the new version - see the
-[`config.nim`](./chronos/config.nim) module for more information.
+[`config.nim`](./tonalli/config.nim) module for more information.

@@ -1,15 +1,15 @@
-# Porting code to `chronos` v4
+# Porting code to `tonalli` v4
 
 <!-- toc -->
 
 Thanks to its macro support, Nim allows `async`/`await` to be implemented in
 libraries with only minimal support from the language - as such, multiple
-`async` libraries exist, including `chronos` and `asyncdispatch`, and more may
+`async` libraries exist, including `tonalli` and `asyncdispatch`, and more may
 come to be developed in the futures.
 
 ## Chronos v3
 
-Chronos v4 introduces new features for IPv6, exception effects, a stand-alone
+Tonalli v4 introduces new features for IPv6, exception effects, a stand-alone
 `Future` type as well as several other changes - when upgrading from chronos v3,
 here are several things to consider:
 
@@ -22,12 +22,12 @@ here are several things to consider:
 
 ## `asyncdispatch`
 
-Code written for `asyncdispatch` and `chronos` looks similar but there are
+Code written for `asyncdispatch` and `tonalli` looks similar but there are
 several differences to be aware of:
 
-* `chronos` has its own dispatch loop - you can typically not mix `chronos` and
+* `tonalli` has its own dispatch loop - you can typically not mix `tonalli` and
   `asyncdispatch` in the same thread
-* `import chronos` instead of `import asyncdispatch`
+* `import tonalli` instead of `import asyncdispatch`
 * cleanup is important - make sure to use `closeWait` to release any resources
   you're using or file descriptor and other leaks will ensue
 * cancellation support means that `CancelledError` may be raised from most
@@ -51,7 +51,7 @@ applications to choose the backend with `-d:asyncBackend=<backend_name>`.
 
 Known `async` backends include:
 
-* `chronos` - this library (`-d:asyncBackend=chronos`)
+* `tonalli` - this library (`-d:asyncBackend=tonalli`)
 * `asyncdispatch` the standard library `asyncdispatch` [module](https://nim-lang.org/docs/asyncdispatch.html) (`-d:asyncBackend=asyncdispatch`)
 * `none` - ``-d:asyncBackend=none`` - disable ``async`` support completely
 

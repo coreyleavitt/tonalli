@@ -1,6 +1,6 @@
 # Async procedures
 
-Async procedures are those that interact with `chronos` to cooperatively
+Async procedures are those that interact with `tonalli` to cooperatively
 suspend and resume their execution depending on the completion of other
 async procedures, timers, tasks on other threads or asynchronous I/O scheduled
 with the operating system.
@@ -64,7 +64,7 @@ the value before and after `await` might not be the same as the order of executi
 
 ## Raw async procedures
 
-Raw async procedures are those that interact with `chronos` via the `Future`
+Raw async procedures are those that interact with `tonalli` via the `Future`
 type but whose body does not go through the async transformation.
 
 Such functions are created by adding `raw: true` to the `async` parameters:

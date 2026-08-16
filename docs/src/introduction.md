@@ -1,6 +1,6 @@
 # Introduction
 
-Chronos implements the [async/await](https://en.wikipedia.org/wiki/Async/await)
+Tonalli implements the [async/await](https://en.wikipedia.org/wiki/Async/await)
 paradigm in a self-contained library using macro and closure iterator
 transformation features provided by Nim.
 
@@ -15,16 +15,16 @@ Features include:
 
 ## Installation
 
-Install `chronos` using `nimble`:
+Install `tonalli` using `nimble`:
 
 ```text
-nimble install chronos
+nimble install tonalli
 ```
 
 or add a dependency to your `.nimble` file:
 
 ```text
-requires "chronos"
+requires "tonalli"
 ```
 
 and start using it:
@@ -46,14 +46,14 @@ Several platforms are supported, with different backend [options](./concepts.md#
 
 ## API documentation
 
-This guide covers basic usage of chronos - for details, see the API reference:
-- [chronos](api/chronos.html)
-- [httpagent](api/chronos/apps/http/httpagent.html)
-- [httpbodyrw](api/chronos/apps/http/httpbodyrw.html)
-- [httpclient](api/chronos/apps/http/httpclient.html)
-- [httpcommon](api/chronos/apps/http/httpcommon.html)
-- [httpdebug](api/chronos/apps/http/httpdebug.html)
-- [httpserver](api/chronos/apps/http/httpserver.html)
-- [httptable](api/chronos/apps/http/httptable.html)
-- [multipart](api/chronos/apps/http/multipart.html)
-- [shttpserver](api/chronos/apps/http/shttpserver.html)
+This guide covers basic usage of tonalli - for details, see the API reference:
+- [tonalli](api/tonalli.html)
+- [httpagent](api/tonalli/apps/http/httpagent.html)
+- [httpbodyrw](api/tonalli/apps/http/httpbodyrw.html)
+- [httpclient](api/tonalli/apps/http/httpclient.html)
+- [httpcommon](api/tonalli/apps/http/httpcommon.html)
+- [httpdebug](api/tonalli/apps/http/httpdebug.html)
+- [httpserver](api/tonalli/apps/http/httpserver.html)
+- [httptable](api/tonalli/apps/http/httptable.html)
+- [multipart](api/tonalli/apps/http/multipart.html)
+- [shttpserver](api/tonalli/apps/http/shttpserver.html)

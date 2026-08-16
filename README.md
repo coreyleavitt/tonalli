@@ -4,7 +4,9 @@ Tonalli is a hard fork of [nim-chronos](https://github.com/status-im/nim-chronos
 
 ## Relationship to chronos
 
-Tonalli is a friendly fork -- chronos remains the upstream merge source, and targeted fixes flow back upstream when they apply there too. Module names are still `chronos*` for now; renames to `tonalli*` are staged for later and have not happened yet, so the usage examples below are accurate as written.
+Tonalli is a friendly fork -- chronos remains the upstream merge source, and targeted fixes flow back upstream when they apply there too. The project was originally developed under the chronos name; the old fork remains in place as the vehicle for the contextvars pull request upstream, unaffected by this rename.
+
+`-d:chronosSimulation` keeps its old spelling deliberately: the deterministic simulation substrate is scheduled for removal once the dispatcher port work lands, so it was left unrenamed rather than renamed twice. A grep hit on it is expected, not a missed rename.
 
 ## Introduction
 
@@ -19,22 +21,22 @@ Tonalli is an efficient [async/await](https://en.wikipedia.org/wiki/Async/await)
 
 ## Getting started
 
-Install `chronos` using `nimble`:
+Install `tonalli` using `nimble`:
 
 ```text
-nimble install chronos
+nimble install tonalli
 ```
 
 or add a dependency to your `.nimble` file:
 
 ```text
-requires "chronos"
+requires "tonalli"
 ```
 
 and start using it:
 
 ```nim
-import chronos/apps/http/httpclient
+import tonalli/apps/http/httpclient
 
 proc retrievePage(uri: string): Future[string] {.async.} =
   # Create a new HTTP session
@@ -48,12 +50,12 @@ proc retrievePage(uri: string): Future[string] {.async.} =
     await httpSession.closeWait()
 
 echo waitFor retrievePage(
-  "https://raw.githubusercontent.com/status-im/nim-chronos/master/README.md")
+  "https://raw.githubusercontent.com/coreyleavitt/tonalli/main/README.md")
 ```
 
 ## Documentation
 
-See the [user guide](https://status-im.github.io/nim-chronos/).
+See the [user guide](https://coreyleavitt.github.io/tonalli/).
 
 ## Deterministic simulation
 
@@ -82,7 +84,7 @@ Submit a PR to add yours!
 
 When submitting pull requests, please add test cases for any new features or fixes and make sure `nimble test` is still able to execute the entire test suite successfully.
 
-`chronos` follows the [Status Nim Style Guide](https://status-im.github.io/nim-style-guide/).
+`tonalli` follows the [Status Nim Style Guide](https://status-im.github.io/nim-style-guide/).
 
 ## License
 

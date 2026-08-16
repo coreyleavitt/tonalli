@@ -2,7 +2,7 @@
 
 **Goal:** Learn how to prevent the program from freezing on slow responses.
 
-**Source code:** [chapter4/src/uptimemon.nim](https://github.com/status-im/nim-chronos/blob/master/examples/http_client/chapter4/src/uptimemon.nim)
+**Source code:** [chapter4/src/uptimemon.nim](https://github.com/coreyleavitt/tonalli/blob/main/examples/http_client/chapter4/src/uptimemon.nim)
 
 Our current program works fine with the well-behaving URIs we've tested so far: all these locations either respond quickly or quickly return an error.
 
@@ -30,8 +30,8 @@ Here's the part that changed:
 {{#shiftinclude auto:../../../../examples/http_client/chapter4/src/uptimemon.nim:check}}
 ```
 
-1. We use the [`.wait(timeout)`](../../api/chronos/internal/asyncfutures.html#wait,Future[T],Duration) modifier on our `fetch` future.
-2. If the request takes longer than the provided duration, `.wait()` automatically cancels the underlying future and raises an [`AsyncTimeoutError`](../../api/chronos/internal/errors.html#AsyncTimeoutError).
+1. We use the [`.wait(timeout)`](../../api/tonalli/internal/asyncfutures.html#wait,Future[T],Duration) modifier on our `fetch` future.
+2. If the request takes longer than the provided duration, `.wait()` automatically cancels the underlying future and raises an [`AsyncTimeoutError`](../../api/tonalli/internal/errors.html#AsyncTimeoutError).
 3. We catch this error alongside other expected exceptions in our `except` block.
 
 ```admonish info
@@ -43,7 +43,7 @@ Both variants have their advantages and limitations. For example, the `as` synta
 
 On the other hand, because `e.msg` is guaranteed to capture a particular exception type, it's more deterministic and gives better control over exception handling logic.
 
-The rule of thumb is that when your exception handling is simple (like we have in this tutorial—we simply `echo` the message regardless of the exception type), `getCurrentExceptionMsg()` is a simpler, more readable option, but if elaborate exception handling is an essential part of your business logic, you should prefer `except <Exception> as e ... e.msg` syntax.
+The rule of thumb is that when your exception handling is simple (like we have in this tutorial -- we simply `echo` the message regardless of the exception type), `getCurrentExceptionMsg()` is a simpler, more readable option, but if elaborate exception handling is an essential part of your business logic, you should prefer `except <Exception> as e ... e.msg` syntax.
 ```
 
 Run the program again and you'll see it complete in roughly 5 seconds, i.e. our timeout.
@@ -51,7 +51,7 @@ Run the program again and you'll see it complete in roughly 5 seconds, i.e. our 
 ```admonish warning
 One important thing to notice here is that adding a timeout won't save us from slow DNS resolutions.
 
-Before we can make an HTTP request, we need to *resolve the target hostname*, i.e. get the IP address that corresponds to the given hostname. This is called DNS resolution and it is a blocking operation in Chronos.
+Before we can make an HTTP request, we need to *resolve the target hostname*, i.e. get the IP address that corresponds to the given hostname. This is called DNS resolution and it is a blocking operation in Tonalli.
 
 For valid URIs, DNS resolution happens quickly enough to not interfere with the main logic. However, for invalid URIs (e.g. `https://123.456.789.90`) the resolution can stall for several seconds.
 
