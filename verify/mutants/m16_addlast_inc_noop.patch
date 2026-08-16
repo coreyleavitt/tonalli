@@ -1,12 +1,12 @@
-diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
-index ffee89f..2b815fc 100644
---- i/chronos/internal/callbackqueue.nim
-+++ w/chronos/internal/callbackqueue.nim
-@@ -146,7 +146,6 @@ proc addLast*[T](q: var CallbackQueue[T], item: chronosSink T) =
-   # `chronosMoveSink`, which is for lvalue reads (see `popFirst` below),
+diff --git i/tonalli/internal/callbackqueue.nim w/tonalli/internal/callbackqueue.nim
+index 621253f..1b465c0 100644
+--- i/tonalli/internal/callbackqueue.nim
++++ w/tonalli/internal/callbackqueue.nim
+@@ -140,7 +140,6 @@ proc addLast*[T](q: var CallbackQueue[T], item: tonalliSink T) =
+   # `tonalliMoveSink`, which is for lvalue reads (see `popFirst` below),
    # not already-sink parameters.
    q.data[idx] = item
 -  inc q.tail
  
- proc prependNoGrow*[T](q: var CallbackQueue[T], item: chronosSink T) =
+ proc prependNoGrow*[T](q: var CallbackQueue[T], item: tonalliSink T) =
    ## Push onto the front. Precondition: `q` must not be full — unlike

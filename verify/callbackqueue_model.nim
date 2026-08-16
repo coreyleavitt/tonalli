@@ -22,7 +22,7 @@
 ## implementation to falsify against the adopted `popFirst`. Both
 ## templates operate on the exact same private backing store.
 
-import tonalli/config  # verify/ -> chronos/ is the permitted direction.
+import tonalli/config  # verify/ -> tonalli/ is the permitted direction.
 import ./primitives
 
 type

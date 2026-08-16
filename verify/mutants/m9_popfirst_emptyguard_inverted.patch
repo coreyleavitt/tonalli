@@ -1,13 +1,13 @@
-diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
-index ffee89f..0b589d3 100644
---- i/chronos/internal/callbackqueue.nim
-+++ w/chronos/internal/callbackqueue.nim
-@@ -199,7 +199,7 @@ template popFirst*[T](q: var CallbackQueue[T]): T =
-   ## The vacated slot is cleared via `chronosMoveSink`, an lvalue read of
+diff --git i/tonalli/internal/callbackqueue.nim w/tonalli/internal/callbackqueue.nim
+index 621253f..1ebad77 100644
+--- i/tonalli/internal/callbackqueue.nim
++++ w/tonalli/internal/callbackqueue.nim
+@@ -180,7 +180,7 @@ template popFirst*[T](q: var CallbackQueue[T]): T =
+   ## The vacated slot is cleared via `tonalliMoveSink`, an lvalue read of
    ## a live queue slot — unlike `addLast`/`prependNoGrow` above, which assign
    ## already-spent `sink` parameters directly.
 -  doAssert q.tail != q.head, "CallbackQueue.popFirst(): queue is empty"
 +  doAssert q.tail == q.head, "CallbackQueue.popFirst(): queue is empty"
-   let chronosQueueIdx = slotIndex(q.head, q.data.len)
+   let queueIdx = slotIndex(q.head, q.data.len)
    inc q.head
-   when defined(chronosDebug) and chronosUseSink:
+   when defined(tonalliDebug) and tonalliUseSink:

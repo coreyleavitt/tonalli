@@ -1,8 +1,8 @@
-diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
-index ffee89f..02c2dd8 100644
---- i/chronos/internal/callbackqueue.nim
-+++ w/chronos/internal/callbackqueue.nim
-@@ -155,8 +155,6 @@ proc prependNoGrow*[T](q: var CallbackQueue[T], item: chronosSink T) =
+diff --git i/tonalli/internal/callbackqueue.nim w/tonalli/internal/callbackqueue.nim
+index 621253f..5b03f39 100644
+--- i/tonalli/internal/callbackqueue.nim
++++ w/tonalli/internal/callbackqueue.nim
+@@ -149,8 +149,6 @@ proc prependNoGrow*[T](q: var CallbackQueue[T], item: tonalliSink T) =
    ## intended for re-inserting an item into a queue known to have
    ## spare capacity (e.g. re-inserting a sentinel at the front of an
    ## already-fully-drained batch).

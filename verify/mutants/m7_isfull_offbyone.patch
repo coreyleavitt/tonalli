@@ -1,13 +1,13 @@
-diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
-index ffee89f..1ff3b87 100644
---- i/chronos/internal/callbackqueue.nim
-+++ w/chronos/internal/callbackqueue.nim
-@@ -88,7 +88,7 @@ proc isFull(head, tail: uint, cap: int): bool {.inline.} =
+diff --git i/tonalli/internal/callbackqueue.nim w/tonalli/internal/callbackqueue.nim
+index 621253f..7ad6fae 100644
+--- i/tonalli/internal/callbackqueue.nim
++++ w/tonalli/internal/callbackqueue.nim
+@@ -73,7 +73,7 @@ func isFull(head, tail: uint, cap: int): bool {.inline.} =
    doAssert n >= 0 and n <= cap,
-     "CallbackQueue: length invariant violated - `tail - head` " &
+     "CallbackQueue.isFull(): length invariant violated - `tail - head` " &
      "(mod 2^wordsize) must never exceed capacity"
 -  n >= cap
 +  n > cap
  
- proc growTargetCap(cap: int): int {.inline.} =
-   doAssert cap >= 0, "CallbackQueue: capacity must not be negative"
+ func growTargetCap(cap: int): int {.inline.} =
+   doAssert cap >= 0, "CallbackQueue.growTargetCap(): capacity must not be negative"

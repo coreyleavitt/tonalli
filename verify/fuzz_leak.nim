@@ -4,16 +4,16 @@
 ## **FORK-ONLY.** See `verify/README.md`. Run via `verify/run.sh fuzz`, once
 ## per MM (`MM=refc ./run.sh fuzz`, `MM=orc ./run.sh fuzz`).
 ##
-## Imports the REAL `chronos/internal/callbackqueue.nim` directly (see
+## Imports the REAL `tonalli/internal/callbackqueue.nim` directly (see
 ## `bisim_check.nim`'s module doc for why layers 3-5 do this and layers 1-2
 ## do not). This is the only layer that exercises the real allocator under
 ## a real memory manager -- proving the adopted fused-move dequeue does not
 ## leak, against the real `--mm:refc`/`--mm:orc` allocators rather than a
 ## ghost ledger.
 ##
-## **Coverage-guided fuzz, honestly scoped.** `proptest/fuzz`'s `fuzzWith`
+## **Coverage-guided fuzz, honestly scoped.** `nelli/fuzz`'s `fuzzWith`
 ## is coverage-guided when the SUT carries `{.cover.}` instrumentation.
-## `chronos/internal/callbackqueue.nim` is upstream-bound and must not
+## `tonalli/internal/callbackqueue.nim` is upstream-bound and must not
 ## carry any fork-only pragma or import, so it is never instrumented, and
 ## per `fuzz.nim`'s own module doc, this run degrades to a random
 ## IR-mutation fuzz over IR-mode's structural mutators, not
@@ -45,7 +45,7 @@
 ## afterward.
 
 import std/[times, strutils, tables, algorithm]
-import proptest
+import nelli
 import ../tonalli/internal/callbackqueue
 
 type
@@ -98,7 +98,7 @@ var baselineOcc: int
 ## --- Coverage accounting -------------------------------------------------
 ##
 ## Per-run observations, from public observations only -- no pragmas on
-## `chronos/internal/callbackqueue.nim`, nothing reads its private fields.
+## `tonalli/internal/callbackqueue.nim`, nothing reads its private fields.
 ##
 ## - **final capacity**: the existing `cap` shadow local, already tracked
 ##   per-`prop()`-call via `growTargetCapShadow` -- its value at the end

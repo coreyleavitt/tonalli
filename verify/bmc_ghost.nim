@@ -41,7 +41,7 @@
 ##      which is exactly why the ghost model has to exist)
 
 import std/[tables, hashes, sets, options, strutils]
-import proptest
+import nelli
 import ./callbackqueue_model
 
 const

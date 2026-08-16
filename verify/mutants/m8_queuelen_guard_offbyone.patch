@@ -1,13 +1,13 @@
-diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
-index ffee89f..6a8f7c1 100644
---- i/chronos/internal/callbackqueue.nim
-+++ w/chronos/internal/callbackqueue.nim
-@@ -85,7 +85,7 @@ proc queueLen(head, tail: uint): int {.inline.} =
+diff --git i/tonalli/internal/callbackqueue.nim w/tonalli/internal/callbackqueue.nim
+index 621253f..1629cc0 100644
+--- i/tonalli/internal/callbackqueue.nim
++++ w/tonalli/internal/callbackqueue.nim
+@@ -70,7 +70,7 @@ func queueLen(head, tail: uint): int {.inline.} =
  
- proc isFull(head, tail: uint, cap: int): bool {.inline.} =
+ func isFull(head, tail: uint, cap: int): bool {.inline.} =
    let n = queueLen(head, tail)
 -  doAssert n >= 0 and n <= cap,
 +  doAssert n >= 0 and n < cap,
-     "CallbackQueue: length invariant violated - `tail - head` " &
+     "CallbackQueue.isFull(): length invariant violated - `tail - head` " &
      "(mod 2^wordsize) must never exceed capacity"
    n >= cap

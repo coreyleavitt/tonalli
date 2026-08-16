@@ -1,13 +1,13 @@
-diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
-index ffee89f..03fe902 100644
---- i/chronos/internal/callbackqueue.nim
-+++ w/chronos/internal/callbackqueue.nim
-@@ -58,7 +58,7 @@ proc capMask(cap: int): uint {.inline.} =
-   # but `verify/`'s symex walker (fork-only, see `verify/primitives.nim`)
-   # cannot resolve a bitwise-`and` whose second operand is an inline
-   # arithmetic sub-expression of the same variable as the first operand.
+diff --git i/tonalli/internal/callbackqueue.nim w/tonalli/internal/callbackqueue.nim
+index 621253f..dee8c5e 100644
+--- i/tonalli/internal/callbackqueue.nim
++++ w/tonalli/internal/callbackqueue.nim
+@@ -48,7 +48,7 @@ func capMask(cap: int): uint {.inline.} =
+   # `let`-bound rather than inlined into the `and` below: identical
+   # codegen, but keeps the operand resolvable by symbolic-execution
+   # tooling verifying this module's index arithmetic.
 -  let capMinusOne = cap - 1
 +  let capMinusOne = cap - 2
    doAssert cap > 0 and (cap and capMinusOne) == 0,
-     "CallbackQueue: capacity must be a positive power of two"
+     "CallbackQueue.capMask(): capacity must be a positive power of two"
    uint(capMinusOne)

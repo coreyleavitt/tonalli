@@ -16,7 +16,7 @@
 import std/[strutils, os]
 
 const
-  realModulePath = "../chronos/internal/callbackqueue.nim"
+  realModulePath = "../tonalli/internal/callbackqueue.nim"
   modelPath = "./callbackqueue_model.nim"
 
 type
@@ -43,7 +43,7 @@ proc runCheck(label, needle: string; realSrc: string; mirrorSrc: string) =
       echo "    MISSING from mirror: " & needle
     doAssert false, label & ": drift between verify/'s mirror and the real module"
 
-echo "=== Drift check: verify/ mirrors vs chronos/internal/callbackqueue.nim ==="
+echo "=== Drift check: verify/ mirrors vs tonalli/internal/callbackqueue.nim ==="
 
 if not fileExists(realModulePath):
   echo "FATAL: " & realModulePath & " not found (run from verify/ with the worktree layout intact)"

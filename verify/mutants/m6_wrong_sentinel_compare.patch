@@ -1,13 +1,13 @@
-diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
-index ffee89f..f566bd5 100644
---- i/chronos/internal/callbackqueue.nim
-+++ w/chronos/internal/callbackqueue.nim
-@@ -185,7 +185,7 @@ when defined(chronosDebug) and chronosUseSink:
-     ## own generic-instantiation path does not hit this, so hoisting the
-     ## check here is the fix, not a workaround for a real ambiguity in
-     ## what's being asserted.
+diff --git i/tonalli/internal/callbackqueue.nim w/tonalli/internal/callbackqueue.nim
+index 621253f..3747bbe 100644
+--- i/tonalli/internal/callbackqueue.nim
++++ w/tonalli/internal/callbackqueue.nim
+@@ -165,7 +165,7 @@ when defined(tonalliDebug) and tonalliUseSink:
+     ## discipline below. A standalone proc, not inlined into `popFirst`'s
+     ## `when` body: Nim 1.6 fails to resolve `default(T)`'s `T` when the
+     ## call sits inside a `when` nested in a generic `template`.
 -    doAssert item == default(T),
 +    doAssert item != default(T),
-       "CallbackQueue: a vacated slot retained a non-nil ghost value after " &
-       "popFirst() — a slot-vacating path bypassed the fused-move discipline"
- 
+       "CallbackQueue.checkVacatedSlot(): a vacated slot retained a " &
+       "non-nil ghost value after popFirst() — a slot-vacating path " &
+       "bypassed the fused-move discipline"

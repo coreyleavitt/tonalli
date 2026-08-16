@@ -1,8 +1,8 @@
-diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
-index ffee89f..d35af47 100644
---- i/chronos/internal/callbackqueue.nim
-+++ w/chronos/internal/callbackqueue.nim
-@@ -157,7 +157,6 @@ proc prependNoGrow*[T](q: var CallbackQueue[T], item: chronosSink T) =
+diff --git i/tonalli/internal/callbackqueue.nim w/tonalli/internal/callbackqueue.nim
+index 621253f..74cd24b 100644
+--- i/tonalli/internal/callbackqueue.nim
++++ w/tonalli/internal/callbackqueue.nim
+@@ -151,7 +151,6 @@ proc prependNoGrow*[T](q: var CallbackQueue[T], item: tonalliSink T) =
    ## already-fully-drained batch).
    doAssert not isFull(q.head, q.tail, q.data.len),
      "CallbackQueue.prependNoGrow(): queue unexpectedly full"

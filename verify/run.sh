@@ -40,7 +40,7 @@ run_bmc() {
 }
 
 run_drift() {
-  echo "--- Drift check: verify/ mirrors vs chronos/internal/callbackqueue.nim ---"
+  echo "--- Drift check: verify/ mirrors vs tonalli/internal/callbackqueue.nim ---"
   nim c -r --mm:orc --out:build/drift_check drift_check.nim
 }
 

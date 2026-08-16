@@ -1,13 +1,13 @@
-diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
-index ffee89f..de5c257 100644
---- i/chronos/internal/callbackqueue.nim
-+++ w/chronos/internal/callbackqueue.nim
-@@ -61,7 +61,7 @@ proc capMask(cap: int): uint {.inline.} =
+diff --git i/tonalli/internal/callbackqueue.nim w/tonalli/internal/callbackqueue.nim
+index 621253f..97b5f19 100644
+--- i/tonalli/internal/callbackqueue.nim
++++ w/tonalli/internal/callbackqueue.nim
+@@ -51,7 +51,7 @@ func capMask(cap: int): uint {.inline.} =
    let capMinusOne = cap - 1
    doAssert cap > 0 and (cap and capMinusOne) == 0,
-     "CallbackQueue: capacity must be a positive power of two"
+     "CallbackQueue.capMask(): capacity must be a positive power of two"
 -  uint(capMinusOne)
 +  uint(cap)
  
- proc slotIndex(pos: uint, cap: int): int {.inline.} =
-   ## Fold a monotonic (uint, possibly-wrapped) logical position into
+ func slotIndex(pos: uint, cap: int): int {.inline.} =
+   ## Fold a monotonic (possibly-wrapped) logical position into

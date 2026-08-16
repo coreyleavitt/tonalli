@@ -1,13 +1,13 @@
-diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
-index ffee89f..cbda988 100644
---- i/chronos/internal/callbackqueue.nim
-+++ w/chronos/internal/callbackqueue.nim
-@@ -81,7 +81,7 @@ proc queueLen(head, tail: uint): int {.inline.} =
-   ## ordering comparison between them is meaningful any more (unlike the
-   ## former monotonic-`int` discipline, "tail must never precede head"
-   ## does not hold under wraparound).
+diff --git i/tonalli/internal/callbackqueue.nim w/tonalli/internal/callbackqueue.nim
+index 621253f..9b446b4 100644
+--- i/tonalli/internal/callbackqueue.nim
++++ w/tonalli/internal/callbackqueue.nim
+@@ -66,7 +66,7 @@ func queueLen(head, tail: uint): int {.inline.} =
+   ## `tail - head`, unsigned: congruent mod `2^wordsize`, so this is the
+   ## true logical length regardless of wraps — no ordering comparison
+   ## between `head`/`tail` is meaningful any more.
 -  int(tail - head)
 +  int(head - tail)
  
- proc isFull(head, tail: uint, cap: int): bool {.inline.} =
+ func isFull(head, tail: uint, cap: int): bool {.inline.} =
    let n = queueLen(head, tail)

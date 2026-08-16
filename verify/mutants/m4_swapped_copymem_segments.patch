@@ -1,8 +1,8 @@
-diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
-index ffee89f..c115590 100644
---- i/chronos/internal/callbackqueue.nim
-+++ w/chronos/internal/callbackqueue.nim
-@@ -127,11 +127,11 @@ proc grow[T](q: var CallbackQueue[T]) =
+diff --git i/tonalli/internal/callbackqueue.nim w/tonalli/internal/callbackqueue.nim
+index 621253f..2d84e4e 100644
+--- i/tonalli/internal/callbackqueue.nim
++++ w/tonalli/internal/callbackqueue.nim
+@@ -121,11 +121,11 @@ proc grow[T](q: var CallbackQueue[T]) =
    if n > 0:
      let startIdx = slotIndex(q.head, oldCap)
      let firstSeg = min(n, oldCap - startIdx)

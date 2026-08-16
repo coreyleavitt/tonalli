@@ -1,15 +1,15 @@
-diff --git i/chronos/internal/callbackqueue.nim w/chronos/internal/callbackqueue.nim
-index ffee89f..35b7dc0 100644
---- i/chronos/internal/callbackqueue.nim
-+++ w/chronos/internal/callbackqueue.nim
-@@ -203,8 +203,8 @@ template popFirst*[T](q: var CallbackQueue[T]): T =
-   let chronosQueueIdx = slotIndex(q.head, q.data.len)
+diff --git i/tonalli/internal/callbackqueue.nim w/tonalli/internal/callbackqueue.nim
+index 621253f..2879500 100644
+--- i/tonalli/internal/callbackqueue.nim
++++ w/tonalli/internal/callbackqueue.nim
+@@ -184,8 +184,8 @@ template popFirst*[T](q: var CallbackQueue[T]): T =
+   let queueIdx = slotIndex(q.head, q.data.len)
    inc q.head
-   when defined(chronosDebug) and chronosUseSink:
--    let chronosPopped = chronosMoveSink(q.data[chronosQueueIdx])
-+    let chronosPopped = q.data[chronosQueueIdx]
-     chronosCheckVacatedSlot(q.data[chronosQueueIdx])
-     chronosPopped
+   when defined(tonalliDebug) and tonalliUseSink:
+-    let internalPopped = tonalliMoveSink(q.data[queueIdx])
++    let internalPopped = q.data[queueIdx]
+     checkVacatedSlot(q.data[queueIdx])
+     internalPopped
    else:
--    chronosMoveSink(q.data[chronosQueueIdx])
-+    q.data[chronosQueueIdx]
+-    tonalliMoveSink(q.data[queueIdx])
++    q.data[queueIdx]

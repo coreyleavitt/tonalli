@@ -4,11 +4,11 @@
 ## once per MM (`MM=refc ./run.sh bisim`, `MM=orc ./run.sh bisim`).
 ##
 ## Unlike layers 1-2 (which walk hand-mirrored copies), this file imports
-## the REAL, shipped `chronos/internal/callbackqueue.nim` directly, using
+## the REAL, shipped `tonalli/internal/callbackqueue.nim` directly, using
 ## only its five public entry points (`initCallbackQueue`, `addLast`,
 ## `addFirst`, `popFirst`, `len`) -- no private-field access needed.
 ##
-## **Algorithm**: proptest's `bisimulationCheck` -- deterministic lock-step
+## **Algorithm**: nelli's `bisimulationCheck` -- deterministic lock-step
 ## BFS over `(realState, refState)` product pairs, comparing (a)
 ## observations and (b) enabled-rule-name sets at every reached pair.
 ##
@@ -40,7 +40,7 @@
 ## crashing the harness.
 
 import std/[deques, hashes, strutils]
-import proptest
+import nelli
 import ../tonalli/internal/callbackqueue
 
 const

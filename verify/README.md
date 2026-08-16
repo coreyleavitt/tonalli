@@ -12,7 +12,7 @@ and matrix cycles on it, not to ship.
 
 ## Shape dependency on `capMask`/`slotIndex`
 
-`chronos/internal/callbackqueue.nim`'s `capMask` and `slotIndex` bind their
+`tonalli/internal/callbackqueue.nim`'s `capMask` and `slotIndex` bind their
 sub-expression/call-result operands to a named `let` rather than inlining
 them into the surrounding bitwise expression. That shape is required by
 this harness's Layer 1 symex walker (see Finding 2 below): inlining either
@@ -23,16 +23,16 @@ relying on `./run.sh symex` again.
 
 Hard segregation rules (from RFC 0001 §3 D9-V, enforced by construction):
 
-- `chronos.nimble` gains no dependency and no task from this directory —
+- `tonalli.nimble` gains no dependency and no task from this directory —
   the only edit is a defensive `skipDirs` addition (`"verify"`, alongside
   the pre-existing `"tests"`).
 - No CI workflow references this directory. There is none, anywhere, for
   it — manual/local runs only, documented below.
-- Nothing under `chronos/`, `tests/`, `benchmarks/`, or `docs/` imports
-  `proptest` or `z3`. The only import direction that ever crosses the
-  `verify/` boundary is `verify/` importing FROM `chronos/`
-  (`callbackqueue_model.nim` imports `chronos/config` for the
-  `chronosSink`/`chronosMoveSink` templates) — never the reverse.
+- Nothing under `tonalli/`, `tests/`, `benchmarks/`, or `docs/` imports
+  `nelli` or `z3`. The only import direction that ever crosses the
+  `verify/` boundary is `verify/` importing FROM `tonalli/`
+  (`callbackqueue_model.nim` imports `tonalli/config` for the
+  `tonalliSink`/`tonalliMoveSink` templates) — never the reverse.
 - Wiring (`nim.cfg`) is three pinned `--path:` lines to sibling checkouts,
   resolved by absolute filesystem path — never nimble, never milpa.
 
@@ -59,7 +59,7 @@ Layers 3–5 (bisim vs `std/deques`, coverage-guided fuzz + GC stress,
 mutation scoring) are S11's job, against the real implementation now that
 S10 has shipped it (`db43cff`) — see the S11 sections below.
 
-**This slice made zero changes to chronos library code.** `chronos/internal/
+**This slice made zero changes to tonalli library code.** `tonalli/internal/
 callbackqueue.nim` does not exist yet; everything under `verify/` is a
 fresh, from-scratch mirror of D9's specified shapes, built for exactly this
 verification and nothing else.
@@ -68,15 +68,15 @@ verification and nothing else.
 
 | File | Role |
 |---|---|
-| `primitives.nim` | W3: `include`s `chronos/internal/callbackqueue.nim` directly (no more hand-copied mirror - see "Why layers 1-2 still use mirrors, but 3-4 don't") and re-exports the five index primitives (`capMask`, `slotIndex`, `queueLen`, `isFull`, `growTargetCap`) as thin `*V`-suffixed wrappers for `symex_checks.nim`/`callbackqueue_model.nim` to call. Pre-W3, this was a hand-copied textual mirror of the S9.0 spike with two documented, load-bearing deviations (see Findings below) - those deviations now live directly in the real module's `capMask`/`slotIndex` instead (same reasoning, same fix). |
+| `primitives.nim` | W3: `include`s `tonalli/internal/callbackqueue.nim` directly (no more hand-copied mirror - see "Why layers 1-2 still use mirrors, but 3-4 don't") and re-exports the five index primitives (`capMask`, `slotIndex`, `queueLen`, `isFull`, `growTargetCap`) as thin `*V`-suffixed wrappers for `symex_checks.nim`/`callbackqueue_model.nim` to call. Pre-W3, this was a hand-copied textual mirror of the S9.0 spike with two documented, load-bearing deviations (see Findings below) - those deviations now live directly in the real module's `capMask`/`slotIndex` instead (same reasoning, same fix). |
 | `callbackqueue_model.nim` | The generic `CallbackQueue[T]` (all five real entry points + growth), plus `GhostItem` and a second dequeue template, `popFirstRejected`, implementing the round-4 REJECTED `copyMem`-to-stack-local shape for layer 2 to falsify against. |
 | `symex_checks.nim` | Layer 1: six `symexFind(..., tAssertionViolation())` proofs. |
 | `bmc_ghost.nim` | Layer 2: six `bmcCheck` runs (two ownership shapes × three invariants) over a ghost refcount ledger. |
 | `drift_check.nim` | S11: cheap textual drift check, originally between BOTH `primitives.nim`/`callbackqueue_model.nim` and the real module. W3 retired the `primitives.nim` half as vacuous (it now `include`s the real module - nothing left that could drift without a compile error); `callbackqueue_model.nim` is still a genuinely independent reimplementation, so its precondition-message checks remain load-bearing. |
 | `bisim_check.nim` | S11 layer 3: bisimulation (`bisimulationCheck`) of the REAL `CallbackQueue[int]` vs a `std/deques[int]` reference, both MMs. |
 | `fuzz_leak.nim` | S11 layer 4: coverage-guided (IR-mutation) fuzz over random op sequences against the REAL `CallbackQueue[LeakItem]` (`ref`-typed elements), with `GC_fullCollect`/`getOccupiedMem` leak accounting and a dedicated Defect-unwind check, both MMs. |
-| `mutants/*.patch` | S11 layer 5: one unified diff per systematic mutant applied to `chronos/internal/callbackqueue.nim` during mutation testing — applied, checked, and reverted mechanically; never left in the tree (see the Layer 5 section below for the kill matrix). |
-| `nim.cfg` | The three sibling `--path:` lines (`proptest`, `nim-z3`, `softlink`) + one `chronos/` path for `config.nim` and (S11) the real `chronos/internal/callbackqueue.nim`. |
+| `mutants/*.patch` | S11 layer 5: one unified diff per systematic mutant applied to `tonalli/internal/callbackqueue.nim` during mutation testing — applied, checked, and reverted mechanically; never left in the tree (see the Layer 5 section below for the kill matrix). |
+| `nim.cfg` | The three sibling `--path:` lines (`proptest`, `nim-z3`, `softlink`) + one `tonalli/` path for `config.nim` and (S11) the real `tonalli/internal/callbackqueue.nim`. |
 | `Containerfile` | Derived, throwaway image (`FROM ghcr.io/coreyleavitt/nim:2.2.10`); never modifies the shared base. |
 | `run.sh` | `verify/run.sh <symex\|bmc\|drift\|bisim\|fuzz\|all>` — the only supported entry point. `bisim`/`fuzz` are MM-sensitive: select via `MM=refc\|orc` (default `refc`). |
 | `bench_crosscommit.nim` | Cross-commit benchmark harness: imports plain `chronos` only, so it compiles unmodified against both a base checkout (`b71392a`) and any commit in this series (`build/base` protocol — see the file's own header for the full interleaved-trial procedure). Relocated here from `benchmarks/` because it requires a second checkout to compare against and is fork-only review methodology, not an upstream-shippable benchmark. |
@@ -87,7 +87,7 @@ Build the derived image (once; rebuild only if `Containerfile` changes):
 
 ```sh
 cd /home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase
-podman build -t localhost/chronos-verify:latest -f verify/Containerfile verify
+podman build -t localhost/tonalli-verify:latest -f verify/Containerfile verify
 ```
 
 Run both layers. `/home/corey/projects/nim/libs` is bind-mounted at the
@@ -103,7 +103,7 @@ podman run --rm --userns=keep-id \
   --env HOME=/home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase/verify/.container-home \
   --env USER=corey \
   --workdir /home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase/verify \
-  localhost/chronos-verify:latest \
+  localhost/tonalli-verify:latest \
   sh -c './run.sh all'
 ```
 
@@ -124,21 +124,21 @@ podman run --rm --userns=keep-id \
   --env USER=corey \
   --env MM=refc \
   --workdir /home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase/verify \
-  localhost/chronos-verify:latest \
+  localhost/tonalli-verify:latest \
   sh -c './run.sh bisim'   # then MM=orc, then ./run.sh fuzz for each MM
 ```
 
-Layers 3-4 import the REAL `chronos/internal/callbackqueue.nim` directly
+Layers 3-4 import the REAL `tonalli/internal/callbackqueue.nim` directly
 (no more mirroring — see "Why layers 1-2 still use mirrors, but 3-4 don't"
 below), so no rebuild of `verify/`'s own files is needed when
-`chronos/internal/callbackqueue.nim` changes; the next `./run.sh` picks it
+`tonalli/internal/callbackqueue.nim` changes; the next `./run.sh` picks it
 up through the bind mount. Runtime: layer 3 (bisim) is a few hundred
 milliseconds per MM (a small, exhaustively-dedup'd BFS); layer 4 (fuzz) is
 single-digit-to-twenties of seconds per MM at its configured iteration
 count (see the Layer 4 section below).
 
 **S11 layer 5** (mutation testing) has no `run.sh` case — it mutates the
-tracked `chronos/internal/callbackqueue.nim` directly, which `run.sh`
+tracked `tonalli/internal/callbackqueue.nim` directly, which `run.sh`
 deliberately never does on its own. See the Layer 5 section below for the
 methodology, the patches under `verify/mutants/`, and how to reproduce a
 single mutant's check.
@@ -180,7 +180,7 @@ deferred, with a reason.
 
 ### Layer 2 — bmcCheck ghost-ownership model (`bmc_ghost.nim`)
 
-Six runs: two dequeue shapes (`FUSED` = D9's adopted `chronosMoveSink`
+Six runs: two dequeue shapes (`FUSED` = D9's adopted `tonalliMoveSink`
 template; `REJECTED` = round 4's rejected `copyMem`-to-stack-local template)
 × three invariants. `maxDepth=12`, `maxStates=20000`, `initialCap=2`
 (deliberately small so growth is exercised well inside the swept depth: cap
@@ -211,7 +211,7 @@ describes in prose; the model reproduces it mechanically, from a real
 backing store, not from a hand-simulated abstraction.
 
 **The verification (part b):** the FUSED shape (D9's adopted
-`chronosMoveSink`-fused `popFirst`) VERIFIES refcount conservation across
+`tonalliMoveSink`-fused `popFirst`) VERIFIES refcount conservation across
 every reachable plan up to depth 12 — the atomic transfer (same ledger
 entry relocates from `tlSlot` to `tlCallerLocal` in one step, backed by the
 real template's `wasMoved` semantics) never duplicates or drops a count.
@@ -245,7 +245,7 @@ not viable; it would never fire.
 
 ## W3 — uint wraparound counters: re-verification
 
-`chronos/internal/callbackqueue.nim`'s `head`/`tail` changed from
+`tonalli/internal/callbackqueue.nim`'s `head`/`tail` changed from
 monotonic (never-wrapped) `int` to monotonic, wraparound-tolerant `uint`
 (textbook ring-buffer discipline: `len = tail - head` as unsigned
 arithmetic is correct across any number of wraps; "empty" is `head ==
@@ -263,7 +263,7 @@ cannot overflow, removing the bound entirely.
 Layers 1-2 were switched to target the real module directly for this
 re-verification (see "Why layers 1-2 still use mirrors, but 3-4 don't",
 above, for the mechanism). All verdicts below are against the ACTUAL
-shipped `chronos/internal/callbackqueue.nim`, not a mirror.
+shipped `tonalli/internal/callbackqueue.nim`, not a mirror.
 
 **Layer 1 (symex, `symex_checks.nim`) — all six re-proven, PROVEN, over a
 STRICTLY WIDER domain than before:**
@@ -306,8 +306,8 @@ re-run. All six still killed:**
 | M2 | `capMask`: return `uint(cap)` instead of `uint(cap - 1)` | A (4/11 fail) | A, B, C |
 | M3 | `grow()`: drop the first segment's `zeroMem` | **A and B (process crash / SIGSEGV, no leg needed escalation to fuzz)** | D only (A/B/C survived pre-W3; closed by the same distilled regression pin this run's leg A now reliably crashes on) |
 | M4 | `grow()`: swap the two `copyMem` destinations | A and B (process crash / SIGSEGV) | A, B, C |
-| M5 | `popFirst`: drop `chronosMoveSink`, both branches | B (10/11 fail); A survives (documented — no *observable* corruption at this scale under refc's ordinary scope-exit decref) | B only |
-| M6 | canary: `==` → `!=` in the vacated-slot-zeroed `doAssert` | B (10/11 fail); A survives (canary is `chronosDebug`-gated) | B only |
+| M5 | `popFirst`: drop `tonalliMoveSink`, both branches | B (10/11 fail); A survives (documented — no *observable* corruption at this scale under refc's ordinary scope-exit decref) | B only |
+| M6 | canary: `==` → `!=` in the vacated-slot-zeroed `doAssert` | B (10/11 fail); A survives (canary is `tonalliDebug`-gated) | B only |
 
 Zero survivors, same as pre-W3 — mutation testing has the same (M3: even
 stronger) teeth against the `uint`-based code. No proof failed against
@@ -326,9 +326,9 @@ silently avoided.
 
 1. **D9's index primitives must be declared `proc`, not `func`.** The
    validated S9.0 spike (`ad569a3`) declares `capMask`/`slotIndex`/
-   `queueLen`/`isFull`/`growTargetCap` as `func`. proptest's symex
+   `queueLen`/`isFull`/`growTargetCap` as `func`. nelli's symex
    Phase-3 interprocedural resolution (`ensureProcRegistered`,
-   `proptest/smt/dsl_parser.nim`) hard-errors on any callee whose
+   `nelli/smt/dsl_parser.nim`) hard-errors on any callee whose
    `getImpl.kind != nnkProcDef` — `func` lowers to `nnkFuncDef` and is
    rejected outright, both as a direct `symexFind` target and as an
    interprocedural callee (`symex Phase 3: cannot resolve getImpl for
@@ -340,10 +340,10 @@ silently avoided.
    no spec change needed, just confirm the real implementation follows the
    RFC prose rather than the spike's shorthand.
 
-2. **A proptest/symex walker limitation, not a D9 defect**, discovered
+2. **A nelli/symex walker limitation, not a D9 defect**, discovered
    while proving `capMask` and `slotIndex`: two related expression shapes
    crash the walker (`AssertionDefect: lowerBool: expected Bool, got
-   svBV64`, `proptest/smt/runtime.nim:3345`) —
+   svBV64`, `nelli/smt/runtime.nim:3345`) —
    - `doAssert (cap and (cap - 1)) == 0` — a bitwise-AND whose second
      operand is an inline arithmetic sub-expression of the *same* variable
      as the first operand.
@@ -360,7 +360,7 @@ silently avoided.
    carries no cost if S10 chooses not to mirror it in the shipped code (the
    spike's original one-line shapes remain fine to ship; only the
    symex-walked mirror in `verify/` needed the hoist to be provable at
-   all). Filing this against proptest itself is out of this slice's scope.
+   all). Filing this against nelli itself is out of this slice's scope.
 
 3. **A genuine, but physically-unreachable, `OverflowDefect`** in
    `queueLen`'s `tail - head`: unconstrained, `head`/`tail` can range over
@@ -370,13 +370,13 @@ silently avoided.
    bounded out (`[-2^40, 2^40]`) for the same reason `growTargetCap`'s own
    `cap * 2` needs the analogous bound, not silently avoided. No action
    needed for D9's design; recorded so a future revisit of these bounds
-   (should chronos ever run in some multi-decade, trillions-of-callbacks
+   (should tonalli ever run in some multi-decade, trillions-of-callbacks
    process — not a realistic target) knows where the edge is.
 
 ## S11 — harness build-out against the real queue
 
 RFC 0001 §6 S11: layers 3-5, run against the REAL, shipped
-`chronos/internal/callbackqueue.nim` (S10, `db43cff`) rather than S9's
+`tonalli/internal/callbackqueue.nim` (S10, `db43cff`) rather than S9's
 throwaway mirrors — bisimulation vs `std/deques`, coverage-guided fuzz with
 GC stress + occupied-memory leak accounting, and mutation scoring. Both
 MMs for layers 3-4; mutation testing (layer 5) runs primarily under refc,
@@ -390,8 +390,8 @@ each mutant was checked against.
 on a hand-copied mirror" tradeoff below was S11's call given S9/S10's
 constraints at the time. W3 (the `int` -> `uint` wraparound-counter
 change) revisited it and found a way to point layers 1-2 at the real
-module too, without widening chronos's public surface: `primitives.nim`
-now `include`s `chronos/internal/callbackqueue.nim` directly (`include`,
+module too, without widening tonalli's public surface: `primitives.nim`
+now `include`s `tonalli/internal/callbackqueue.nim` directly (`include`,
 unlike `import`, ignores Nim's module-privacy boundary entirely — the
 five primitives become visible to `primitives.nim` itself exactly as if
 written there, with no `*` ever added to the real file), and re-exports
@@ -409,17 +409,17 @@ interprocedural walker already resolves one frame of plain
 `proc`-to-`proc` indirection), `drift_check.nim`'s `primitives.nim`-vs-
 real checks are retired as vacuous (nothing left that could drift without
 a compile error), and the public surface is untouched (the wrappers live
-in `verify/`, fork-only, never exported to `chronos/`). The historical
+in `verify/`, fork-only, never exported to `tonalli/`). The historical
 rationale below is kept for the record, not because it is still current.
 
 S9's `primitives.nim`/`callbackqueue_model.nim` were built before
-`chronos/internal/callbackqueue.nim` existed, so they had nothing to
+`tonalli/internal/callbackqueue.nim` existed, so they had nothing to
 import. Now that S10 has shipped the real module, S11 was asked to point
 layers 3-5 at it directly wherever practical, and to consider whether the
 S9 mirrors are now redundant.
 
 **Layers 3-4 (this slice): refactored to import the real module directly.**
-`bisim_check.nim` and `fuzz_leak.nim` both `import ../chronos/internal/
+`bisim_check.nim` and `fuzz_leak.nim` both `import ../tonalli/internal/
 callbackqueue` and exercise it through its five public entry points —
 no duplication needed, because bisimulation and fuzzing only ever touch
 the public interface.
@@ -438,7 +438,7 @@ were kept rather than refactored away.
 
 **The tradeoff needs a check, and now has one: `drift_check.nim`.** A
 plain, dependency-free textual comparison (`nim c -r --mm:orc
-drift_check.nim`, no proptest/z3) that re-reads both files and confirms
+drift_check.nim`, no nelli/z3) that re-reads both files and confirms
 ten load-bearing substrings — each primitive's exact `doAssert` message,
 plus the arithmetic/threshold expressions that survive S9's documented
 symex-walker hoist unchanged (`cap - 1`, `tail - head`, `queueLen(head,
@@ -492,7 +492,7 @@ seeing is caught at shallow depth, not missed).
 
 Against a real `CallbackQueue[LeakItem]` (`LeakItem = ref object`, heap
 allocated, GC-traced) — the only layer exercising the real allocator under
-a real MM. `proptest/fuzz`'s `fuzzWith` (IR-mutation mode): random
+a real MM. `nelli/fuzz`'s `fuzzWith` (IR-mutation mode): random
 op-sequence generation (`addLast`/`addFirst`/`popFirst`, `lists` +
 `frequency` strategies, up to 300 ops/sequence) refined by the mutator
 kernel's perturb-integer/kind-boundary/span-splice/delete/duplicate
@@ -500,9 +500,9 @@ transforms.
 
 **Honestly scoped as "coverage-guided."** `fuzzWith` is edge-coverage
 directed only when the SUT carries `{.cover.}` instrumentation.
-`chronos/internal/callbackqueue.nim` is upstream-bound and must not carry
+`tonalli/internal/callbackqueue.nim` is upstream-bound and must not carry
 any fork-only pragma (the segregation mandate), so it is never
-instrumented; per `proptest/fuzz.nim`'s own module doc, this degrades
+instrumented; per `nelli/fuzz.nim`'s own module doc, this degrades
 gracefully to structural (uninstrumented) IR-mutation fuzzing. Still real
 signal: the IR mutators explore op-sequence shape more effectively than
 independent-draw random generation, and every finding is genuine either
@@ -517,7 +517,7 @@ GC-traced allocations, then plateau; warming up before sampling avoids
 mistaking that bump for drift).
 
 **Calibration (real finding, confirms the check has teeth):** a temporary
-one-line change (`chronosCalibrationLeakSink.add leaked` instead of
+one-line change (`tonalliCalibrationLeakSink.add leaked` instead of
 `discard` in the drain loop — applied, run, and reverted for this
 calibration only, never committed) reliably tripped the assertion almost
 immediately: the very first `prop()` call already exceeded baseline +
@@ -545,12 +545,12 @@ both MMs.
 ### Layer 5 — mutation scoring
 
 Systematic mutants applied directly to the tracked
-`chronos/internal/callbackqueue.nim` (mechanical apply → check → revert,
+`tonalli/internal/callbackqueue.nim` (mechanical apply → check → revert,
 via `git checkout`), one unified diff per mutant saved under
 `verify/mutants/*.patch` for reproducibility. Each mutant was checked
 against three legs: (A) `tests/testcallbackqueue.nim`, plain
 (`-d:release --mm:refc`); (B) the same file under the standard matrix's
-debug leg (`-d:debug -d:chronosDebug -d:useSysAssert -d:useGcAssert
+debug leg (`-d:debug -d:tonalliDebug -d:useSysAssert -d:useGcAssert
 --mm:refc`); (C) `bisim_check.nim` (`--mm:refc`). A mutant surviving all
 three escalates to (D) `fuzz_leak.nim` (`--mm:refc`).
 
@@ -560,7 +560,7 @@ Reproduce a single mutant, e.g. M3:
 cd /home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase
 git apply verify/mutants/m3_dropped_zeromem.patch
 # ... run legs A/B/C/D as below ...
-git checkout -- chronos/internal/callbackqueue.nim   # ALWAYS revert
+git checkout -- tonalli/internal/callbackqueue.nim   # ALWAYS revert
 ```
 
 | # | mutant | class | killed by | notes |
@@ -569,13 +569,13 @@ git checkout -- chronos/internal/callbackqueue.nim   # ALWAYS revert
 | M2 | `capMask`: return `cap` instead of `cap - 1` | wrong mask | A, B, C (depth 1) | 8/10 plain tests fail; bisim distinguishes on the first `addFirst` |
 | M3 | `grow()`: drop the first segment's `zeroMem` | dropped zeroMem | **D only** (A/B/C survive) | Silent double-decref (real module's own doc comment predicts this exactly); SIGSEGV in `fuzz_leak.nim` after ~8500 iterations under refc. **Distilled**: new pin added to `tests/testcallbackqueue.nim` ("repeated growth cycles preserve ref-field values under memory pressure") — 200 growth cycles + allocator noise, now reliably reproduces the SIGSEGV under plain leg A too. Re-verified: real (unmutated) code passes the new pin cleanly on both MMs. |
 | M4 | `grow()`: swap the two `copyMem` destinations (`newData[0]` ↔ `newData[firstSeg]`) | swapped copyMem segments | A, B, C (depth 3) | SIGSEGV in both plain and debug legs; bisim distinguishes after 3 `addLast`s |
-| M5 | `popFirst`: drop `chronosMoveSink`, both branches | dropped sink/move | **B only** (A, C survive) | Plain leg A passes (refc's normal seq-destructor at `prop()`'s scope exit still decrefs the stale slot — no *observable* corruption at this scale); leg B's existing `chronosDebug` guardrail canary (already shipped, RFC 0001 D9) fails 10/11 tests immediately. No new pin needed: the standard 6-leg matrix's debug leg already exercises this canary on every `nimble test` run. |
-| M6 | canary: `==` → `!=` in the vacated-slot-zeroed `doAssert` | wrong sentinel/zero compare | **B only** (A, C survive) | Same shape as M5: leg B fails immediately (10/11) on the very first `popFirst()`; leg A/C don't reach the `chronosDebug`-gated canary at all. No new pin needed, same reasoning as M5. |
+| M5 | `popFirst`: drop `tonalliMoveSink`, both branches | dropped sink/move | **B only** (A, C survive) | Plain leg A passes (refc's normal seq-destructor at `prop()`'s scope exit still decrefs the stale slot — no *observable* corruption at this scale); leg B's existing `tonalliDebug` guardrail canary (already shipped, RFC 0001 D9) fails 10/11 tests immediately. No new pin needed: the standard 6-leg matrix's debug leg already exercises this canary on every `nimble test` run. |
+| M6 | canary: `==` → `!=` in the vacated-slot-zeroed `doAssert` | wrong sentinel/zero compare | **B only** (A, C survive) | Same shape as M5: leg B fails immediately (10/11) on the very first `popFirst()`; leg A/C don't reach the `tonalliDebug`-gated canary at all. No new pin needed, same reasoning as M5. |
 
 **All six mutants killed.** Zero survivors. M3 is the slice's one genuine
 finding — see "S11 findings" appended to RFC 0001 §1 — and is now closed
 by a distilled, plain-`unittest2` regression pin; M5/M6 confirm the
-existing `chronosDebug` guardrail canary (shipped at S10) is load-bearing
+existing `tonalliDebug` guardrail canary (shipped at S10) is load-bearing
 and already covered by the standing matrix, not merely decorative; M1/M2/M4
 confirm layers 3-4 (and the pre-existing test suite) have real teeth
 against the more overt structural bug classes without needing escalation.
@@ -583,12 +583,12 @@ against the more overt structural bug classes without needing escalation.
 ## B-wave verification upgrades (fork-only, post-S11)
 
 Three additional slices, run against the same final fold head this
-repository's `worktree-contextvars-rebase` branch carries (`chronos/`
+repository's `worktree-contextvars-rebase` branch carries (`tonalli/`
 content here is bit-identical to the published series head — the only
 difference between this branch and the published head is the presence of
 this `verify/` directory itself, which is never part of any upstream or
 downstream pin; see the top of this file). None of these touch
-`chronos/internal/callbackqueue.nim` or any other tracked file outside
+`tonalli/internal/callbackqueue.nim` or any other tracked file outside
 `verify/` — Phase 2's mutant patches are applied, checked, and reverted
 mechanically, exactly like the original six.
 
@@ -627,7 +627,7 @@ flipped to its off-by-one neighbor, every `±1` shift, every `inc`/`dec`
 target turned into a no-op or a double-application, and the wraparound
 subtraction's operands swapped. **The original 6 mutant patch files on
 disk had gone stale** (four of six no longer applied cleanly against the
-current `chronos/internal/callbackqueue.nim` — `addFirst`/`int`-cap-era
+current `tonalli/internal/callbackqueue.nim` — `addFirst`/`int`-cap-era
 line numbers, pre-dating the `prependNoGrow` rename and the W3 `uint`
 change) despite the README text above claiming they were "regenerated";
 all six were regenerated fresh as part of this sweep (`m1`–`m6`, same
@@ -637,7 +637,7 @@ confirmed to `git apply --check` cleanly against the current tree.
 
 Kill ladder, same four legs as the original slice, stopping at first kill:
 (A) `tests/testcallbackqueue.nim` plain (`-d:release --mm:refc`); (B) the
-same file under the debug leg (`-d:debug -d:chronosDebug -d:useSysAssert
+same file under the debug leg (`-d:debug -d:tonalliDebug -d:useSysAssert
 -d:useGcAssert --mm:refc`); (C) `bisim_check.nim` (`--mm:refc`); (D)
 `fuzz_leak.nim` (`--mm:refc`). Driven mechanically by
 `verify/mutants/run_ladder.sh` (apply → legs in order → revert,
@@ -652,7 +652,7 @@ regardless of outcome; per-mutant results appended to
 | M2 | `capMask`: return `cap` instead of `cap - 1` | wrong mask | mask literal | A |
 | M3 | `grow()`: drop the first segment's `zeroMem` | dropped zeroMem | double-decref on next growth | A (the S11 distilled pin — "repeated growth cycles preserve ref-field values under memory pressure" — already lands this at leg A; previously D-only, see S11's own ledger above) |
 | M4 | `grow()`: swap the two `copyMem` destinations | swapped copyMem segments | wrong-slot relocation | A |
-| M5 | `popFirst`: drop `chronosMoveSink`, both branches | dropped move | vacated slot retains a live ref | B |
+| M5 | `popFirst`: drop `tonalliMoveSink`, both branches | dropped move | vacated slot retains a live ref | B |
 | M6 | canary: `==` → `!=` in the vacated-slot-zeroed `doAssert` | wrong sentinel compare | canary inverted | B |
 | M7 | `isFull`: `n >= cap` → `n > cap` | comparison off-by-one | full-check under-triggers by one slot | A |
 | M8 | `isFull`'s `doAssert` guard: `n <= cap` → `n < cap` | comparison off-by-one | guard rejects the valid `n == cap` state | A |
@@ -671,7 +671,7 @@ regardless of outcome; per-mutant results appended to
 No survivors past all four legs, so no new test pin is required by this
 sweep (the standing rule: "a SURVIVOR of all four layers is a finding" —
 none occurred). 14 of 19 mutants die at the cheapest leg (A, plain
-release tests); M5/M6 need the `chronosDebug` canary (leg B, matching the
+release tests); M5/M6 need the `tonalliDebug` canary (leg B, matching the
 original slice's finding that the canary is load-bearing, not
 decorative); M11/M15 need the fuzz harness's explicit
 `runDefectUnwindChecks` full-queue/initial-capacity probes (leg D) —
@@ -686,7 +686,7 @@ edge catches them. No leg-C-only kills and no full survivors this round.
 
 `verify/fuzz_leak.nim`'s `prop()` now records three per-run observations,
 all derived from public operations only (no pragmas or private-field
-reads on `chronos/internal/callbackqueue.nim` — see the `RunCoverage`
+reads on `tonalli/internal/callbackqueue.nim` — see the `RunCoverage`
 doc comment in the file itself for the full derivation):
 
 - **final capacity reached** — the file's pre-existing `cap` shadow local
@@ -743,13 +743,13 @@ Layer 4 ledger exactly (no regression from adding the instrumentation).
 
 ```sh
 cd /home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase
-podman build -t localhost/chronos-verify:latest -f verify/Containerfile verify
+podman build -t localhost/tonalli-verify:latest -f verify/Containerfile verify
 podman run --rm --userns=keep-id \
   -v /home/corey/projects/nim/libs:/home/corey/projects/nim/libs:z \
   --env HOME=/home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase/verify/.container-home \
   --env USER=corey \
   --workdir /home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase/verify \
-  localhost/chronos-verify:latest \
+  localhost/tonalli-verify:latest \
   sh -c './run.sh all'
 ```
 
@@ -766,7 +766,7 @@ for mm in refc orc; do
     --env HOME=/home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase/verify/.container-home \
     --env USER=corey --env MM=$mm \
     --workdir /home/corey/projects/nim/libs/chronos/.claude/worktrees/contextvars-rebase/verify \
-    localhost/chronos-verify:latest \
+    localhost/tonalli-verify:latest \
     sh -c './run.sh bisim && ./run.sh fuzz'
 done
 ```

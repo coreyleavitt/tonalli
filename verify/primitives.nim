@@ -3,7 +3,7 @@
 ## **FORK-ONLY. Never imported by, referenced by, or coupled to any
 ## upstream-bound file.** See `verify/README.md`.
 ##
-## `include`s the real `chronos/internal/callbackqueue.nim` rather than
+## `include`s the real `tonalli/internal/callbackqueue.nim` rather than
 ## mirroring it, so callers here (`symex_checks.nim`, `callbackqueue_model.nim`)
 ## prove the shipped primitives directly, with nothing left to drift.
 ## `include`, not `import`: the five primitives are private (no `*`) by

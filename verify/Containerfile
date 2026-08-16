@@ -1,12 +1,12 @@
 # RFC 0001 D9-V / S9 — fork-only verification harness container.
 #
 # FORK-ONLY. Never referenced by any upstream-bound file or CI workflow
-# (there is none, deliberately -- see verify/README.md). The shared chronos
+# (there is none, deliberately -- see verify/README.md). The shared tonalli
 # dev image (ghcr.io/coreyleavitt/nim:2.2.10) is never modified; this is a
 # throwaway derived image, built and tagged locally.
 #
 # Build:
-#   podman build -t localhost/chronos-verify:latest -f verify/Containerfile verify
+#   podman build -t localhost/tonalli-verify:latest -f verify/Containerfile verify
 #
 # **Deviation from the RFC's stated `libz3-4_15`-only plan (a build-time
 # finding, recorded in verify/README.md's ledger):** `libz3-4_15` alone is

@@ -11,7 +11,7 @@
 # verify/mutants/ladder_results.tsv: mutant<TAB>killed_by<TAB>notes
 
 set -u
-F=chronos/internal/callbackqueue.nim
+F=tonalli/internal/callbackqueue.nim
 RESULTS=verify/mutants/ladder_results.tsv
 
 run_leg_a() {
@@ -20,7 +20,7 @@ run_leg_a() {
 }
 
 run_leg_b() {
-  nim c -r -d:debug -d:chronosDebug -d:useSysAssert -d:useGcAssert --mm:refc --skipParentCfg --skipUserCfg --nimcache:build/nimcache_lad_b --out:build/leg_b tests/testcallbackqueue.nim > build/leg_b.log 2>&1
+  nim c -r -d:debug -d:tonalliDebug -d:useSysAssert -d:useGcAssert --mm:refc --skipParentCfg --skipUserCfg --nimcache:build/nimcache_lad_b --out:build/leg_b tests/testcallbackqueue.nim > build/leg_b.log 2>&1
   echo $?
 }
 
@@ -57,7 +57,7 @@ for name in "$@"; do
     killed_by="A"
     notes="exit=$rc"
   else
-    echo "  leg A survived; leg B (debug, chronosDebug)..."
+    echo "  leg A survived; leg B (debug, tonalliDebug)..."
     rc=$(run_leg_b)
     if [ "$rc" != "0" ]; then
       killed_by="B"

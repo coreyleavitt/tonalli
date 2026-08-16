@@ -46,7 +46,7 @@
 ## is the confirmed workaround; every precondition assumption in this file
 ## goes through it rather than re-deriving the inline shape.
 
-import proptest/symex
+import nelli/symex
 import ./primitives
 
 const realisticCapBound = 1 shl 40
