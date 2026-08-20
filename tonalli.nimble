@@ -116,17 +116,14 @@ task test, "Run all tests":
     # isolation holds by construction rather than by import order.
     build args & " --mm:refc", "tests/testcontextvarsstandalone"
     exec "build/testcontextvarsstandalone orchestrate"
-    if (NimMajor, NimMinor) >= (2, 2): # ORC on 2.0 is too broken to investigate
-      run args & " --mm:orc", "tests/testall"
-      build args & " --mm:orc", "tests/testcontextvarsstandalone"
-      exec "build/testcontextvarsstandalone orchestrate"
+    run args & " --mm:orc", "tests/testall"
+    build args & " --mm:orc", "tests/testcontextvarsstandalone"
+    exec "build/testcontextvarsstandalone orchestrate"
 
-  # Make sure benchmarks compile. `--threads:on` explicitly: Nim 1.6
-  # does not default it on, and bench_bulk_tcp.nim imports
-  # chronos/threadsync, which hard-fails to compile without it.
+  # Make sure benchmarks compile.
   for f in walkDirRec("benchmarks"):
     if f.extractFilename.startsWith("bench_") and f.endsWith(".nim"):
-      build "--threads:on", f[0..^5]
+      build "", f[0..^5]
 
   if testSuccessMarker.len > 0:
     # Mobile CI uses this to confirm that the full task reached its end.
@@ -134,41 +131,33 @@ task test, "Run all tests":
 
 task test_v3_compat, "Run all tests in v3 compatibility mode":
   for args in testArguments:
-    if (NimMajor, NimMinor) >= (2, 2):
-      # First run tests with `refc` memory manager.
-      run args & " --mm:refc -d:tonalliHandleException", "tests/testall"
+    # First run tests with `refc` memory manager.
+    run args & " --mm:refc -d:tonalliHandleException", "tests/testall"
 
     run args & " -d:tonalliHandleException", "tests/testall"
 
 task test_simulation, "Run the deterministic simulation suites":
-  # The sim substrate is fork-only test infrastructure and pins Nim 2.x
-  # (RFC 0003 3.8): buying back the 1.6 design constraints the
-  # contextvars series had to fight is the whole point of not shipping
-  # it upstream. `tonalliEventEngine` is left at its platform default
-  # throughout: the selector backend still compiles as dead code under
-  # `chronosSimulation`, and sim behavior is engine-independent by
-  # construction.
-  if (NimMajor, NimMinor) >= (2, 0):
-    let simArgs =
-      "-d:debug -d:tonalliDebug -d:useSysAssert -d:useGcAssert " &
-      "-d:chronosSimulation -d:tonalliFutureTracking --threads:on"
-    let simLeafTests = [
-      "tests/testsimclock", "tests/testsimengine", "tests/testsimloop",
-      "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
-      "tests/testsimstream", "tests/testsimnet", "tests/testsimdatagram",
-      "tests/testsimproducer", "tests/testsimledger", "tests/testsimhttp",
-    ]
+  # The sim substrate is fork-only test infrastructure. `tonalliEventEngine`
+  # is left at its platform default throughout: the selector backend still
+  # compiles as dead code under `chronosSimulation`, and sim behavior is
+  # engine-independent by construction.
+  let simArgs =
+    "-d:debug -d:tonalliDebug -d:useSysAssert -d:useGcAssert " &
+    "-d:chronosSimulation -d:tonalliFutureTracking --threads:on"
+  let simLeafTests = [
+    "tests/testsimclock", "tests/testsimengine", "tests/testsimloop",
+    "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
+    "tests/testsimstream", "tests/testsimnet", "tests/testsimdatagram",
+    "tests/testsimproducer", "tests/testsimledger", "tests/testsimhttp",
+  ]
 
-    run simArgs & " --mm:refc", "tests/testall"
-    for t in simLeafTests:
-      run simArgs & " --mm:refc", t
+  run simArgs & " --mm:refc", "tests/testall"
+  for t in simLeafTests:
+    run simArgs & " --mm:refc", t
 
-    if (NimMajor, NimMinor) >= (2, 2): # ORC on 2.0 is too broken to investigate
-      run simArgs & " --mm:orc", "tests/testall"
-      for t in simLeafTests:
-        run simArgs & " --mm:orc", t
-  else:
-    echo "test_simulation: skipped, the sim substrate requires Nim >= 2.0 (RFC 0003 3.8)"
+  run simArgs & " --mm:orc", "tests/testall"
+  for t in simLeafTests:
+    run simArgs & " --mm:orc", t
 
 task check_windows, "Windows parity: semantic-check the library surface (fork issue #20)":
   # The dev container has no mingw (fork issue #20 gap 4), so this
@@ -231,8 +220,7 @@ task test_libbacktrace, "test with libbacktrace":
     for args in allArgs:
       # First run tests with `refc` memory manager.
       run args & " --mm:refc", "tests/testall"
-      if (NimMajor, NimMinor) >= (2, 2):
-        run args & " --mm:orc", "tests/testall"
+      run args & " --mm:orc", "tests/testall"
 
 task docs, "Generate API documentation":
   exec "mdbook build docs"

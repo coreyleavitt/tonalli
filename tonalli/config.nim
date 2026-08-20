@@ -105,10 +105,8 @@ const
   tonalliTLSSessionCacheBufferSize* {.intdefine.} = 4096
     ## Default size of chronos TLS Session cache's internal buffer.
 
-  tonalliUseSink* {.booldefine.} = (NimMajor, NimMinor, NimPatch) >= (2, 0, 6)
-    ## Whether or not to use `sink` - using a recent Nim version helps:
-    ## * https://github.com/nim-lang/Nim/issues/23354
-    ## * https://github.com/nim-lang/Nim/issues/22175
+  tonalliUseSink* {.booldefine.} = true
+    ## Whether or not to use `sink`.
     ##
     ## https://github.com/nim-lang/Nim/issues/12340 is a particularily serious
     ## bug but it does not affect chronos' usage as long as values are not

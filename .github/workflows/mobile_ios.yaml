@@ -41,9 +41,11 @@ jobs:
           ln -s "$GITHUB_WORKSPACE/.github/scripts/ios-clang.sh" "$toolchain/clang"
           ln -s "$GITHUB_WORKSPACE/.github/scripts/ios-clang.sh" "$toolchain/clang++"
           chmod +x "$GITHUB_WORKSPACE/.github/scripts/ios-clang.sh"
-          echo "IOS_NIM_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
-          echo "IOS_SDK_PATH=$(xcrun --sdk iphonesimulator --show-sdk-path)" >> "$GITHUB_ENV"
-          echo "NIMFLAGS=--os:ios --cpu:arm64 --cc:clang --clang.path:$toolchain --clang.exe:clang --clang.linkerexe:clang --passC:-D_DARWIN_C_SOURCE" >> "$GITHUB_ENV"
+          {
+            echo "IOS_NIM_TOOLCHAIN=$toolchain"
+            echo "IOS_SDK_PATH=$(xcrun --sdk iphonesimulator --show-sdk-path)"
+            echo "NIMFLAGS=--os:ios --cpu:arm64 --cc:clang --clang.path:$toolchain --clang.exe:clang --clang.linkerexe:clang --passC:-D_DARWIN_C_SOURCE"
+          } >> "$GITHUB_ENV"
 
       - name: Build and run tests on iOS simulator
         env:
