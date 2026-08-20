@@ -60,7 +60,7 @@ jobs:
             nim: "2.2.10"
             platform: x64
           - builder: ubuntu-latest
-            nim: "2.2.0"
+            nim: "2.2.2"
             platform: x64
           - builder: ubuntu-latest
             nim: "version-2-4"
