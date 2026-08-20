@@ -28,11 +28,7 @@ static:
   doAssert declared(newContextVar),    "newContextVar must be public"
   doAssert declared(newRequiredContextVar),
     "newRequiredContextVar (the must-bind constructor) must be public"
-  when (NimMajor, NimMinor) >= (2, 0):
-    # The `{.contextVar.}` pragma itself is 2.x-only — macro pragmas on
-    # `let`/`var` sections don't exist in the 1.6 compiler — so this probe
-    # doesn't even parse-expand on 1.6.
-    doAssert declared(contextVar),     "the {.contextVar.} pragma macro must be public"
+  doAssert declared(contextVar),     "the {.contextVar.} pragma macro must be public"
   doAssert declared(AsyncContext),     "AsyncContext type must be public"
   doAssert declared(currentContext),   "currentContext proc must be public"
   doAssert declared(withContext),      "withContext template must be public"
@@ -78,13 +74,11 @@ static:
   doAssert compiles($(currentContext())),
     "`$`(ctx: AsyncContext): string must be public and callable"
 
-when (NimMajor, NimMinor) >= (2, 0):
-  # A must-bind key declared via the pragma (`var name* {.contextVar.}: T`,
-  # no default) must be legal syntax; this probe (module-scope, so it runs
-  # regardless of which test below executes) pins that the surface accepts
-  # it. 2.x-only, same as the `declared(contextVar)` probe above — the
-  # pragma doesn't even parse-expand on 1.6.
-  var surfaceMustBind* {.contextVar.}: int
+# A must-bind key declared via the pragma (`var name* {.contextVar.}: T`,
+# no default) must be legal syntax; this probe (module-scope, so it runs
+# regardless of which test below executes) pins that the surface accepts
+# it.
+var surfaceMustBind* {.contextVar.}: int
 
 # --- Deliberately absent surface ---------------------------------------------
 #

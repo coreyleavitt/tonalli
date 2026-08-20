@@ -53,10 +53,7 @@
 ##   (`.value` or `ctx[cv]`) when read while unbound; carries the key's
 ##   name in `varName`.
 
-import std/[algorithm, atomics, hashes, strutils]
-when (NimMajor, NimMinor) >= (2, 0):
-  # `{.contextVar.}` (see the gate below) is the only consumer.
-  import std/macros
+import std/[algorithm, atomics, hashes, macros, strutils]
 import ./config
 import ./futures
 import ./internal/contextnode
@@ -515,111 +512,99 @@ proc `$`*(ctx: AsyncContext): string {.raises: [].} =
 # star/type/default parsing; the macro only rewrites the RHS into a
 # `newContextVar` call and re-emits the one `let`/`var` symbol.
 
-# Macro pragmas on `let`/`var` sections (the mechanism `{.contextVar.}`
-# relies on) are a 2.x-only language capability — `semVarMacroPragma`,
-# which rewrites `var p {.m.}` into a call to `m`, does not exist in the
-# 1.6 compiler, so the pragma silently never invokes on 1.6. Declare keys
-# with `newContextVar`/`newRequiredContextVar` directly on 1.6; see
-# docs/src/contextvars.md, "The `{.contextVar.}` pragma".
-when (NimMajor, NimMinor) >= (2, 0):
-  proc splitContextVarNameAndPrivate(identNode: NimNode):
-      tuple[nameNode: NimNode, nameStr: string, private: bool] =
-    ## Star present -> exported -> private = false; absent -> private =
-    ## true. `nnkIdent`/`nnkSym` both resolve via `strVal` (a wrapper
-    ## template forwarding its own parameter arrives as `nnkSym`); only
-    ## `nnkPostfix` needs unwrapping to reach the name.
-    # 1.6: explicit `result =` per branch, not a case-expression — 1.6 sems
-    # case-branches as statements even when the last one is a noreturn
-    # `error()` call, and rejects the tuple as unused. (Moot under the
-    # 2.x gate above, kept for hygiene since the shape is trivial to keep
-    # portable.)
-    case identNode.kind
-    of nnkPostfix:
-      if identNode.len != 2 or identNode[0].strVal != "*":
-        error("contextVar: unexpected postfix form: " & identNode.repr, identNode)
-      result = (identNode, identNode[1].strVal, false)
-    of nnkIdent, nnkSym:
-      result = (identNode, identNode.strVal, true)
-    else:
-      error("contextVar: expected `name` or `name*`, got " & identNode.repr, identNode)
+proc splitContextVarNameAndPrivate(identNode: NimNode):
+    tuple[nameNode: NimNode, nameStr: string, private: bool] =
+  ## Star present -> exported -> private = false; absent -> private =
+  ## true. `nnkIdent`/`nnkSym` both resolve via `strVal` (a wrapper
+  ## template forwarding its own parameter arrives as `nnkSym`); only
+  ## `nnkPostfix` needs unwrapping to reach the name.
+  case identNode.kind
+  of nnkPostfix:
+    if identNode.len != 2 or identNode[0].strVal != "*":
+      error("contextVar: unexpected postfix form: " & identNode.repr, identNode)
+    result = (identNode, identNode[1].strVal, false)
+  of nnkIdent, nnkSym:
+    result = (identNode, identNode.strVal, true)
+  else:
+    error("contextVar: expected `name` or `name*`, got " & identNode.repr, identNode)
 
-  proc parsePrivateOverride(opts: NimNode): bool =
-    ## Unwraps the argument of `{.contextVar: (private: true|false).}` —
-    ## `(private: true)` parses as a one-field `nnkTupleConstr` holding an
-    ## `nnkExprColonExpr`, and `true`/`false` there arrive as `nnkIdent`
-    ## (bare identifiers, not bool literals — the argument is untyped).
-    ## Any other shape is a compile error naming the one accepted form.
-    if opts.kind == nnkTupleConstr and opts.len == 1 and
-        opts[0].kind == nnkExprColonExpr and opts[0][0].eqIdent("private") and
-        opts[0][1].kind == nnkIdent and opts[0][1].strVal in ["true", "false"]:
-      return opts[0][1].strVal == "true"
-    error("contextVar: expected `(private: true)` or `(private: false)`, " &
-          "got " & opts.repr, opts)
+proc parsePrivateOverride(opts: NimNode): bool =
+  ## Unwraps the argument of `{.contextVar: (private: true|false).}` —
+  ## `(private: true)` parses as a one-field `nnkTupleConstr` holding an
+  ## `nnkExprColonExpr`, and `true`/`false` there arrive as `nnkIdent`
+  ## (bare identifiers, not bool literals — the argument is untyped).
+  ## Any other shape is a compile error naming the one accepted form.
+  if opts.kind == nnkTupleConstr and opts.len == 1 and
+      opts[0].kind == nnkExprColonExpr and opts[0][0].eqIdent("private") and
+      opts[0][1].kind == nnkIdent and opts[0][1].strVal in ["true", "false"]:
+    return opts[0][1].strVal == "true"
+  error("contextVar: expected `(private: true)` or `(private: false)`, " &
+        "got " & opts.repr, opts)
 
-  proc contextVarImpl(def: NimNode, hasPrivateOverride: bool,
-                       overridePrivate: bool): NimNode =
-    ## `let name* {.contextVar.} = default` (T inferred), `let name*
-    ## {.contextVar.}: T = default` (explicit T), or `var name*
-    ## {.contextVar.}: T` (must-bind) — expands to exactly one symbol,
-    ## `let name* = newContextVar(...)` or `newRequiredContextVar(...)`.
-    ## See docs/src/contextvars.md, "The `{.contextVar.}` pragma". The
-    ## `let`/`var` choice is enforced here, not just documented: a
-    ## defaulted key must be a `let`, a must-bind key must be a `var` —
-    ## the same split between `newContextVar` and `newRequiredContextVar`
-    ## the call site makes, moved to the declaration site. `hasPrivateOverride`
-    ## selects between the export-derived default (`{.contextVar.}`) and the
-    ## explicit `{.contextVar: (private: ...).}` override, common to both
-    ## pragma arities below.
-    if def.kind notin {nnkLetSection, nnkVarSection}:
-      error("contextVar: must annotate a `let` or `var` statement", def)
-    if def.len != 1:
-      error("contextVar: supports exactly one identifier per statement", def)
-    let identDefs = def[0]
-    if identDefs.kind != nnkIdentDefs or identDefs.len != 3:
-      error("contextVar: expected a single `name[*][: T] [= default]` " &
-            "identifier definition, got " & identDefs.repr, identDefs)
-    let (nameNode, nameStr, derivedPrivate) = splitContextVarNameAndPrivate(identDefs[0])
-    let private = if hasPrivateOverride: overridePrivate else: derivedPrivate
-    let typAnnotation = identDefs[1]
-    let value = identDefs[2]
+proc contextVarImpl(def: NimNode, hasPrivateOverride: bool,
+                     overridePrivate: bool): NimNode =
+  ## `let name* {.contextVar.} = default` (T inferred), `let name*
+  ## {.contextVar.}: T = default` (explicit T), or `var name*
+  ## {.contextVar.}: T` (must-bind) — expands to exactly one symbol,
+  ## `let name* = newContextVar(...)` or `newRequiredContextVar(...)`.
+  ## See docs/src/contextvars.md, "The `{.contextVar.}` pragma". The
+  ## `let`/`var` choice is enforced here, not just documented: a
+  ## defaulted key must be a `let`, a must-bind key must be a `var` —
+  ## the same split between `newContextVar` and `newRequiredContextVar`
+  ## the call site makes, moved to the declaration site. `hasPrivateOverride`
+  ## selects between the export-derived default (`{.contextVar.}`) and the
+  ## explicit `{.contextVar: (private: ...).}` override, common to both
+  ## pragma arities below.
+  if def.kind notin {nnkLetSection, nnkVarSection}:
+    error("contextVar: must annotate a `let` or `var` statement", def)
+  if def.len != 1:
+    error("contextVar: supports exactly one identifier per statement", def)
+  let identDefs = def[0]
+  if identDefs.kind != nnkIdentDefs or identDefs.len != 3:
+    error("contextVar: expected a single `name[*][: T] [= default]` " &
+          "identifier definition, got " & identDefs.repr, identDefs)
+  let (nameNode, nameStr, derivedPrivate) = splitContextVarNameAndPrivate(identDefs[0])
+  let private = if hasPrivateOverride: overridePrivate else: derivedPrivate
+  let typAnnotation = identDefs[1]
+  let value = identDefs[2]
 
+  if value.kind == nnkEmpty:
+    if typAnnotation.kind == nnkEmpty:
+      error("contextVar: must-bind keys need an explicit type, e.g. " &
+            "`var " & nameStr & "*: T {.contextVar.}`", identDefs)
+    if def.kind != nnkVarSection:
+      error("contextVar: a must-bind key (no `= default`) needs `var`, " &
+            "not `let` — spell it `var " & nameStr & "*: " &
+            typAnnotation.repr & " {.contextVar.}`", def)
+  elif def.kind != nnkLetSection:
+    error("contextVar: a defaulted key (`= default`) needs `let`, not " &
+          "`var` — spell it `let " & nameStr & "*" &
+          (if typAnnotation.kind != nnkEmpty: ": " & typAnnotation.repr
+           else: "") & " {.contextVar.} = " & value.repr & "`", def)
+
+  let ctorCall =
     if value.kind == nnkEmpty:
-      if typAnnotation.kind == nnkEmpty:
-        error("contextVar: must-bind keys need an explicit type, e.g. " &
-              "`var " & nameStr & "*: T {.contextVar.}`", identDefs)
-      if def.kind != nnkVarSection:
-        error("contextVar: a must-bind key (no `= default`) needs `var`, " &
-              "not `let` — spell it `var " & nameStr & "*: " &
-              typAnnotation.repr & " {.contextVar.}`", def)
-    elif def.kind != nnkLetSection:
-      error("contextVar: a defaulted key (`= default`) needs `let`, not " &
-            "`var` — spell it `let " & nameStr & "*" &
-            (if typAnnotation.kind != nnkEmpty: ": " & typAnnotation.repr
-             else: "") & " {.contextVar.} = " & value.repr & "`", def)
+      quote do: newRequiredContextVar[`typAnnotation`](`nameStr`, private = `private`)
+    elif typAnnotation.kind != nnkEmpty:
+      quote do: newContextVar[`typAnnotation`](`nameStr`, `value`, private = `private`)
+    else:
+      quote do: newContextVar(`nameStr`, `value`, private = `private`)
 
-    let ctorCall =
-      if value.kind == nnkEmpty:
-        quote do: newRequiredContextVar[`typAnnotation`](`nameStr`, private = `private`)
-      elif typAnnotation.kind != nnkEmpty:
-        quote do: newContextVar[`typAnnotation`](`nameStr`, `value`, private = `private`)
-      else:
-        quote do: newContextVar(`nameStr`, `value`, private = `private`)
+  result = newNimNode(nnkLetSection)
+  result.add newIdentDefs(nameNode, newEmptyNode(), ctorCall)
 
-    result = newNimNode(nnkLetSection)
-    result.add newIdentDefs(nameNode, newEmptyNode(), ctorCall)
+macro contextVar*(def: untyped): untyped =
+  ## Default form: `dumpContext` privacy is derived from the declaration's
+  ## own export marker (star -> `private = false`, no star -> `private =
+  ## true`). See docs/src/contextvars.md, "The `{.contextVar.}` pragma".
+  contextVarImpl(def, hasPrivateOverride = false, overridePrivate = false)
 
-  macro contextVar*(def: untyped): untyped =
-    ## Default form: `dumpContext` privacy is derived from the declaration's
-    ## own export marker (star -> `private = false`, no star -> `private =
-    ## true`). See docs/src/contextvars.md, "The `{.contextVar.}` pragma".
-    contextVarImpl(def, hasPrivateOverride = false, overridePrivate = false)
-
-  macro contextVar*(opts, def: untyped): untyped =
-    ## Override form: `{.contextVar: (private: true|false).}` decouples
-    ## `dumpContext` visibility from the export marker for this one
-    ## declaration — e.g. an exported key that should still be
-    ## dump-private, or an unexported key surfaced for cross-module
-    ## debugging. See docs/src/contextvars.md, "The `{.contextVar.}`
-    ## pragma", "Overriding dump-visibility".
-    contextVarImpl(def, hasPrivateOverride = true,
-                    overridePrivate = parsePrivateOverride(opts))
+macro contextVar*(opts, def: untyped): untyped =
+  ## Override form: `{.contextVar: (private: true|false).}` decouples
+  ## `dumpContext` visibility from the export marker for this one
+  ## declaration — e.g. an exported key that should still be
+  ## dump-private, or an unexported key surfaced for cross-module
+  ## debugging. See docs/src/contextvars.md, "The `{.contextVar.}`
+  ## pragma", "Overriding dump-visibility".
+  contextVarImpl(def, hasPrivateOverride = true,
+                  overridePrivate = parsePrivateOverride(opts))
