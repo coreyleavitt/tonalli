@@ -32,6 +32,7 @@ when defined(chronosSimulation) and compileOption("threads") and
   import ../tonalli
   import ../tonalli/simulation
   import ../tonalli/streams/asyncstream
+  import ./simfixtures
 
   type
     ProbeOutcome = object
@@ -49,43 +50,19 @@ when defined(chronosSimulation) and compileOption("threads") and
     outcome
 
   const
-    chunkSize = 8
-    messages = ["message1", "message2", "message3"]
+    chunkSize = simnetFixtureChunkSize
+    messages = simnetFixtureMessages
 
   proc toStr(b: seq[byte]): string =
-    result = newString(b.len)
-    if b.len > 0:
-      copyMem(addr result[0], unsafeAddr b[0], b.len)
+    simnetFixtureToStr(b)
 
   proc runPipelinedEcho(client, server: StreamTransport):
       Future[seq[string]] {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
-    ## The parametrized echo body (RFC 0003 6, S11a's RED criterion):
-    ## the client pipelines every write before awaiting any of them,
-    ## the server echoes each fixed-size chunk back in arrival order,
-    ## and the client reads every echo. Fixed-size chunks plus
-    ## `readExactly` keep the scenario robust to how many actual
-    ## deliveries the underlying transport makes (coalesced or split),
-    ## so sim and a real byte stream can be held to the same body
-    ## without message-framing becoming the thing under test.
-    proc serverLoop() {.async: (raises: [TransportError, CancelledError, SimBarrierError, SimEngineError]).} =
-      for _ in messages:
-        var buf = newSeq[byte](chunkSize)
-        await server.readExactly(addr buf[0], chunkSize)
-        discard await server.write(buf)
-    let serverFut = serverLoop()
-
-    var writeFuts: seq[Future[int].Raising([TransportError, CancelledError])]
-    for m in messages:
-      writeFuts.add client.write(m)
-    for f in writeFuts:
-      discard await f
-
-    result = @[]
-    for _ in messages:
-      var buf = newSeq[byte](chunkSize)
-      await client.readExactly(addr buf[0], chunkSize)
-      result.add toStr(buf)
-    await serverFut
+    ## The parametrized echo body itself now lives in
+    ## `tests/simfixtures.nim` (RFC 0012 stage 6), shared with
+    ## `tests/simreplay.nim`; this stays a thin same-signature wrapper
+    ## so every other probe below keeps calling it by its original name.
+    await simnetFixtureRunPipelinedEcho(client, server)
 
   proc probeSimPipelinedEcho() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
@@ -382,19 +359,7 @@ when defined(chronosSimulation) and compileOption("threads") and
     var outcome = ProbeOutcome(ok: true)
     try:
       let outcomes = sweepSeeds(0'u64 .. 15'u64):
-        let net = simNet()
-        let address = initTAddress("127.0.0.1:0")
-        let server = net.listenStream(address)
-        let acceptFut = server.accept()
-        let client = await net.connectStream(address)
-        let serverTransp = await acceptFut
-        let echoes = await runPipelinedEcho(client, serverTransp)
-        if echoes != @messages:
-          raise newException(ValueError,
-            "sweep echo mismatch: got " & $echoes & ", expected " &
-              $(@messages))
-        await client.closeWait()
-        await serverTransp.closeWait()
+        simnetPipelinedEchoUnderPartialCompletionsFixture()
       for o in outcomes:
         if not o.passed:
           outcome = ProbeOutcome(ok: false,

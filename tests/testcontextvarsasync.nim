@@ -1169,8 +1169,8 @@ when defined(chronosSimulation) and compileOption("threads"):
   ## excludes from simulation by construction. Every probe runs on its
   ## own OS thread, the isolation `tests/testsimulation.nim` and
   ## `tests/testcallbackqueue.nim`'s sweep-proof suite use.
-  import std/strutils
   import ../tonalli/simulation
+  import ./simfixtures
 
   type
     SimContextProbeOutcome = object
@@ -1190,18 +1190,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeBindingSurvivesSequentialAwaitsAcrossSweep() {.thread.} =
     var outcome = SimContextProbeOutcome(ok: true)
     let outcomes = sweepSeeds(0'u64 .. 9'u64):
-      asyncInt.withValue(11):
-        if asyncInt.value != 11:
-          raise newException(ValueError,
-            "wrong binding before first await: " & $asyncInt.value)
-        await sleepAsync(1.milliseconds)
-        if asyncInt.value != 11:
-          raise newException(ValueError,
-            "wrong binding after first await: " & $asyncInt.value)
-        await sleepAsync(1.milliseconds)
-        if asyncInt.value != 11:
-          raise newException(ValueError,
-            "wrong binding after second await: " & $asyncInt.value)
+      contextvarsBindingSurvivesSequentialAwaitsFixture()
     for o in outcomes:
       if not o.passed:
         outcome = SimContextProbeOutcome(ok: false,
@@ -1211,33 +1200,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeConcurrentTasksStayIsolatedAcrossSweep() {.thread.} =
     var outcome = SimContextProbeOutcome(ok: true)
     let outcomes = sweepSeeds(0'u64 .. 9'u64):
-      var tickA = newFuture[void]("tickA")
-      var tickB = newFuture[void]("tickB")
-
-      proc taskA(): Future[int] {.async: (raises: [CatchableError]).} =
-        asyncInt.withValue(100):
-          await tickA
-          if asyncInt.value != 100:
-            raise newException(ValueError,
-              "task A saw " & $asyncInt.value & " instead of 100")
-          return asyncInt.value
-
-      proc taskB(): Future[int] {.async: (raises: [CatchableError]).} =
-        asyncInt.withValue(200):
-          await tickB
-          if asyncInt.value != 200:
-            raise newException(ValueError,
-              "task B saw " & $asyncInt.value & " instead of 200")
-          return asyncInt.value
-
-      let fa = taskA()
-      let fb = taskB()
-      tickA.complete()
-      tickB.complete()
-      let a = await fa
-      let b = await fb
-      if a != 100 or b != 200:
-        raise newException(ValueError, "wrong results: a=" & $a & " b=" & $b)
+      contextvarsConcurrentTasksStayIsolatedFixture()
     for o in outcomes:
       if not o.passed:
         outcome = SimContextProbeOutcome(ok: false,
@@ -1247,24 +1210,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeChildInheritsAndDoesNotLeakBackAcrossSweep() {.thread.} =
     var outcome = SimContextProbeOutcome(ok: true)
     let outcomes = sweepSeeds(0'u64 .. 9'u64):
-      proc child(): Future[void] {.async: (raises: [CancelledError, ValueError]).} =
-        if asyncInt.value != 42:
-          raise newException(ValueError,
-            "child did not inherit parent's binding: saw " & $asyncInt.value)
-        asyncInt.withValue(999):
-          await sleepAsync(1.milliseconds)
-          if asyncInt.value != 999:
-            raise newException(ValueError,
-              "child's own binding lost across await: saw " & $asyncInt.value)
-        if asyncInt.value != 42:
-          raise newException(ValueError,
-            "child did not revert to parent's binding: saw " & $asyncInt.value)
-
-      asyncInt.withValue(42):
-        await child()
-        if asyncInt.value != 42:
-          raise newException(ValueError,
-            "child's binding leaked back into parent: saw " & $asyncInt.value)
+      contextvarsChildInheritsNoLeakBackFixture()
     for o in outcomes:
       if not o.passed:
         outcome = SimContextProbeOutcome(ok: false,
@@ -1274,23 +1220,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeExceptionAcrossAwaitRevertsBindingAcrossSweep() {.thread.} =
     var outcome = SimContextProbeOutcome(ok: true)
     let outcomes = sweepSeeds(0'u64 .. 9'u64):
-      proc work(): Future[void] {.async: (raises: [CancelledError, ValueError]).} =
-        await sleepAsync(1.milliseconds)
-        raise newException(ValueError, "boom across await")
-
-      var reachedUnreachable = false
-      try:
-        asyncInt.withValue(77):
-          await work()
-          reachedUnreachable = true
-      except ValueError as exc:
-        if "boom across await" notin exc.msg:
-          raise newException(ValueError, "wrong exception propagated: " & exc.msg)
-      if reachedUnreachable:
-        raise newException(ValueError, "expected exception did not propagate")
-      if asyncInt.value != 0:
-        raise newException(ValueError,
-          "binding not reverted after exception: saw " & $asyncInt.value)
+      contextvarsExceptionAcrossAwaitRevertsBindingFixture()
     for o in outcomes:
       if not o.passed:
         outcome = SimContextProbeOutcome(ok: false,
@@ -1300,25 +1230,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeCancelledErrorViaTimerRevertsBindingAcrossSweep() {.thread.} =
     var outcome = SimContextProbeOutcome(ok: true)
     let outcomes = sweepSeeds(0'u64 .. 9'u64):
-      proc longSleep(): Future[void] {.async: (raises: [CancelledError]).} =
-        await sleepAsync(1.seconds)
-
-      let f = longSleep()
-      var reachedUnreachable = false
-      var observed = -1
-      try:
-        asyncInt.withValue(55):
-          discard setTimer(Moment.now() + 1.milliseconds,
-            proc(_: pointer) {.gcsafe, raises: [].} = f.cancelSoon())
-          await f
-          reachedUnreachable = true
-      except CancelledError:
-        observed = asyncInt.value
-      if reachedUnreachable:
-        raise newException(ValueError, "cancellation did not propagate")
-      if observed != 0:
-        raise newException(ValueError,
-          "binding not reverted after cancellation: saw " & $observed)
+      contextvarsCancelledErrorViaTimerRevertsBindingFixture()
     for o in outcomes:
       if not o.passed:
         outcome = SimContextProbeOutcome(ok: false,

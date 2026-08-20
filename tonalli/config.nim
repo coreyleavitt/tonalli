@@ -20,8 +20,8 @@
 ## also - you can use `when declared(tonalliHasXxx): when tonalliHasXxx >= N:`
 ## to require a particular version.
 
-when (NimMajor, NimMinor, NimPatch) < (2, 2, 2):
-  {.error: "tonalli requires Nim >= 2.2.2 (RFC 0012)".}
+when (NimMajor, NimMinor, NimPatch) < (2, 2, 10):
+  {.error: "tonalli requires Nim >= 2.2.10 (RFC 0012)".}
 
 const
   tonalliHandleException* {.booldefine.}: bool = false
