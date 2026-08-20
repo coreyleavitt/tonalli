@@ -6,13 +6,19 @@ on:
       - docs
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     timeout-minutes: 20
 
     name: "Generate & upload documentation"
     runs-on: "ubuntu-latest"
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -30,19 +36,19 @@ jobs:
             mdbook-admonish@1.20.0 \
             mdbook-shiftinclude@0.1.0
 
-      - uses: jiro4989/setup-nim-action@v1
+      - uses: jiro4989/setup-nim-action@v2
         with:
-          nim-version: "1.6.20"
+          nim-version: "2.2.10"
 
       - name: Generate doc
         run: |
           nim --version
           nimble --version
           nimble install -dy
-          nimble docs || true
+          nimble docs
 
       - name: Deploy
-        uses: peaceiris/actions-gh-pages@v3
+        uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./docs/book
