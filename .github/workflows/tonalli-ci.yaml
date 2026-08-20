@@ -75,11 +75,9 @@ jobs:
             nim: "2.2.10"
             platform: x86
             nimflags: "--cpu:i386"
-            setup-canary: true
           - builder: ubuntu-24.04-arm
             nim: "2.2.10"
             platform: arm64
-            setup-canary: true
     name: test (${{ matrix.builder }}, ${{ matrix.platform }}, ${{ matrix.nim }})
     runs-on: ${{ matrix.builder }}
     continue-on-error: ${{ matrix.canary == true }}
@@ -130,12 +128,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/nim-nightly"
           tar xJf "$RUNNER_TEMP/nim-nightly.tar.xz" -C "$RUNNER_TEMP/nim-nightly" --strip-components=1
           echo "$RUNNER_TEMP/nim-nightly/bin" >> "$GITHUB_PATH"
-
-      - name: Setup canary (temporary RED gate)
-        if: matrix.setup-canary
-        run: |
-          echo "RED canary: proving this leg's setup path executes"
-          exit 1
 
       - name: Install dependencies
         run: nimble install -y --depsOnly
