@@ -18,6 +18,3 @@ jobs:
     uses: ./.github/workflows/tonalli-ci.yaml
     with:
       sim: true
-      test-command: |
-        echo "RED canary: this leg must report failure"
-        exit 1
