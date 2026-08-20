@@ -5,9 +5,9 @@
 #    Licensed under the Apache License, Version 2.0
 #               (LICENSE-APACHEv2)
 
-## Tests for `tests/simreplay.nim`'s `runReplay` dispatch (RFC 0012
-## stage 6): a downloaded failing-seed trace replays through its named
-## fixture and reproduces the same failure, and an unknown fixture name
+## Tests for `tests/simreplay.nim`'s `runReplay` dispatch: a downloaded
+## failing-seed trace replays through its named fixture and reproduces
+## the same failure, and an unknown fixture name
 ## or an unreadable trace path comes back as a clean typed outcome
 ## rather than a raise.
 

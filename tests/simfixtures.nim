@@ -5,7 +5,7 @@
 #    Licensed under the Apache License, Version 2.0
 #               (LICENSE-APACHEv2)
 
-## RFC 0012 stage 6: the shared registry of replayable simulation
+## The shared registry of replayable simulation
 ## fixture bodies. Every entry here is a `sweepSeeds`/`sweepSeedsWith`
 ## body extracted verbatim out of a sim test suite, as a named template,
 ## so `tests/simreplay.nim` can drive it from a downloaded failing-seed
