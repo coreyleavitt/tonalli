@@ -928,6 +928,73 @@ when defined(chronosSimulation) and compileOption("threads"):
              "expected 1")
     probeChan.send(outcome)
 
+  proc probeStepSummaryWritesFailingSeedRows() {.thread.} =
+    var outcome = ProbeOutcome(ok: true)
+    let hadOriginal = existsEnv("GITHUB_STEP_SUMMARY")
+    let original = getEnv("GITHUB_STEP_SUMMARY")
+    let summaryPath = getTempDir() / "chronos-sim-step-summary-failing.md"
+    removeFile(summaryPath)
+    putEnv("GITHUB_STEP_SUMMARY", summaryPath)
+    let outcomes = sweepSeeds(9800'u64 .. 9801'u64):
+      raise newException(ValueError, "boom from step summary probe")
+    if hadOriginal: putEnv("GITHUB_STEP_SUMMARY", original)
+    else: delEnv("GITHUB_STEP_SUMMARY")
+    if not fileExists(summaryPath):
+      outcome = ProbeOutcome(ok: false,
+        msg: "no step summary file was written for a failing sweep")
+    else:
+      let content = readFile(summaryPath)
+      for o in outcomes:
+        let seedHex = "0x" & toLowerAscii(toHex(o.seed))
+        if seedHex notin content:
+          outcome = ProbeOutcome(ok: false,
+            msg: "seed " & seedHex & " missing from the step summary:\n" &
+                 content)
+        elif "BodyError" notin content:
+          outcome = ProbeOutcome(ok: false,
+            msg: "failure kind missing from the step summary:\n" & content)
+        elif extractFilename(o.tracePath) notin content:
+          outcome = ProbeOutcome(ok: false,
+            msg: "trace artifact name missing from the step summary:\n" &
+                 content)
+    removeFile(summaryPath)
+    probeChan.send(outcome)
+
+  proc probeStepSummaryWritesNothingForAllGreenSweep() {.thread.} =
+    var outcome = ProbeOutcome(ok: true)
+    let hadOriginal = existsEnv("GITHUB_STEP_SUMMARY")
+    let original = getEnv("GITHUB_STEP_SUMMARY")
+    let summaryPath = getTempDir() / "chronos-sim-step-summary-green.md"
+    removeFile(summaryPath)
+    putEnv("GITHUB_STEP_SUMMARY", summaryPath)
+    discard sweepSeeds(9802'u64 .. 9803'u64):
+      discard
+    if hadOriginal: putEnv("GITHUB_STEP_SUMMARY", original)
+    else: delEnv("GITHUB_STEP_SUMMARY")
+    if fileExists(summaryPath):
+      outcome = ProbeOutcome(ok: false,
+        msg: "a step summary file was written for an all-green sweep")
+    removeFile(summaryPath)
+    probeChan.send(outcome)
+
+  proc probeStepSummaryUntouchedWhenEnvUnset() {.thread.} =
+    var outcome = ProbeOutcome(ok: true)
+    let hadOriginal = existsEnv("GITHUB_STEP_SUMMARY")
+    let original = getEnv("GITHUB_STEP_SUMMARY")
+    delEnv("GITHUB_STEP_SUMMARY")
+    let summaryPath = getTempDir() / "chronos-sim-step-summary-unset.md"
+    writeFile(summaryPath, "sentinel content\n")
+    discard sweepSeeds(9804'u64 .. 9805'u64):
+      raise newException(ValueError, "boom from step summary probe")
+    let content = readFile(summaryPath)
+    if hadOriginal: putEnv("GITHUB_STEP_SUMMARY", original)
+    if content != "sentinel content\n":
+      outcome = ProbeOutcome(ok: false,
+        msg: "a file unrelated to GITHUB_STEP_SUMMARY changed while it " &
+             "was unset: " & content)
+    removeFile(summaryPath)
+    probeChan.send(outcome)
+
   suite "simulate() harness core":
     test "an empty body round-trips the real dispatcher":
       let outcome = runProbe(probeEmptyBodyRoundTrips)
@@ -1091,3 +1158,19 @@ when defined(chronosSimulation) and compileOption("threads"):
       ## zero-fill `timeBudget`, tripping `TimeBudgetExhausted` on the
       ## first time advance instead of running under a real budget.
       check not compiles(SimRunOptions(decisionBudget: 500))
+
+  suite "reportSweep GitHub Actions step summary":
+    test "appends a table row per failing seed, from the structured outcomes":
+      let outcome = runProbe(probeStepSummaryWritesFailingSeedRows)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "an all-green sweep writes nothing to the step summary":
+      let outcome = runProbe(probeStepSummaryWritesNothingForAllGreenSweep)
+      checkpoint outcome.msg
+      check outcome.ok
+
+    test "GITHUB_STEP_SUMMARY unset leaves other files untouched":
+      let outcome = runProbe(probeStepSummaryUntouchedWhenEnvUnset)
+      checkpoint outcome.msg
+      check outcome.ok

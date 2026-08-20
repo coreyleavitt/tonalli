@@ -8,15 +8,15 @@ description   = "Networking framework with async/await support"
 license       = "MIT or Apache License 2.0"
 skipDirs      = @["tests"]
 
-requires "nim >= 2.2.0",
+requires "nim >= 2.2.2",
          "results",
          "stew >= 0.5.0",
          "bearssl >= 0.2.8",
          "httputils",
          "unittest2"
 
-when (NimMajor, NimMinor) < (2, 2):
-  {.error: "tonalli requires Nim >= 2.2.0 (RFC 0012)".}
+when (NimMajor, NimMinor, NimPatch) < (2, 2, 2):
+  {.error: "tonalli requires Nim >= 2.2.2 (RFC 0012)".}
 
 import os, strutils
 
@@ -158,6 +158,13 @@ task test_simulation, "Run the deterministic simulation suites":
   run simArgs & " --mm:orc", "tests/testall"
   for t in simLeafTests:
     run simArgs & " --mm:orc", t
+
+task simulation_identity, "Run the fixed-seed identity fixture, producing build/identity-trace.ndjson":
+  let simArgs =
+    "-d:debug -d:tonalliDebug -d:useSysAssert -d:useGcAssert " &
+    "-d:chronosSimulation -d:tonalliFutureTracking --threads:on --mm:refc"
+
+  run simArgs, "tests/simidentity"
 
 task check_windows, "Windows parity: semantic-check the library surface (fork issue #20)":
   # The dev container has no mingw (fork issue #20 gap 4), so this

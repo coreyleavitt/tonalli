@@ -51,7 +51,8 @@ simulate(seed = identitySeed):
       "identity fixture: expected both readiness callbacks to fire, got " &
       $fired)
 
-# `simTracePath` (chronos/simulation.nim) is private; this reproduces its
-# formula exactly rather than exporting it solely for this fixture's sake.
-let tracePath = getTempDir() / "chronos-sim" / ("seed-" & $identitySeed & ".ndjson")
-echo "IDENTITY_TRACE_PATH=" & tracePath
+let tracePath = simTracePath(identitySeed)
+let fixedTracePath = "build" / "identity-trace.ndjson"
+createDir(fixedTracePath.parentDir)
+copyFile(tracePath, fixedTracePath)
+echo "IDENTITY_TRACE_PATH=" & fixedTracePath

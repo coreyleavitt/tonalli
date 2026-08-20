@@ -755,6 +755,41 @@ proc collectSweepSeeds*(seeds: Slice[uint64], decisionBudget: int,
     result.add runSweepSeed(seed, decisionBudget, timeBudget, ledger,
                              body)
 
+proc sweepFailureKindDesc(outcome: SimSeedOutcome): string =
+  case outcome.failureKind
+  of SimSeedFailureKind.Engine: $outcome.kind
+  of SimSeedFailureKind.Ledger: "LedgerViolation"
+
+proc writeStepSummary(outcomes: seq[SimSeedOutcome]) =
+  ## Appends a Markdown table of the sweep's failing seeds to
+  ## `$GITHUB_STEP_SUMMARY` when GitHub Actions sets it, straight from
+  ## the same `SimSeedOutcome` fields `reportSweep`'s own checkpoints
+  ## use - never by parsing those checkpoints back out. A no-op with
+  ## the variable unset, and with no failing seed to report.
+  let summaryPath = getEnv("GITHUB_STEP_SUMMARY")
+  if summaryPath.len == 0:
+    return
+  var rows: seq[string]
+  for outcome in outcomes:
+    if not outcome.passed:
+      rows.add "| 0x" & toLowerAscii(toHex(outcome.seed)) & " | " &
+        sweepFailureKindDesc(outcome) & " | " &
+        extractFilename(outcome.tracePath) & " | `simulateReplay(\"" &
+        outcome.tracePath & "\")` |"
+  if rows.len == 0:
+    return
+  let summaryFile = open(summaryPath, fmAppend)
+  try:
+    summaryFile.writeLine("")
+    summaryFile.writeLine("## chronos-sim sweep failures")
+    summaryFile.writeLine("")
+    summaryFile.writeLine("| Seed | Failure kind | Trace artifact | Re-run |")
+    summaryFile.writeLine("| --- | --- | --- | --- |")
+    for row in rows:
+      summaryFile.writeLine(row)
+  finally:
+    summaryFile.close()
+
 proc reportSweep(outcomes: seq[SimSeedOutcome]) =
   ## The `checkLeaks` idiom (`chronos/unittest2/asynctests.nim`): a
   ## `checkpoint` per failing seed, so a green sweep of a hundred seeds
@@ -764,13 +799,11 @@ proc reportSweep(outcomes: seq[SimSeedOutcome]) =
   for outcome in outcomes:
     if not outcome.passed:
       inc failedCount
-      let kindDesc = case outcome.failureKind
-        of SimSeedFailureKind.Engine: $outcome.kind
-        of SimSeedFailureKind.Ledger: "LedgerViolation"
       checkpoint "[chronos-sim] seed=0x" & toLowerAscii(toHex(outcome.seed)) &
-        " FAILED (" & kindDesc & "): " & outcome.msg &
+        " FAILED (" & sweepFailureKindDesc(outcome) & "): " & outcome.msg &
         " trace=" & outcome.tracePath
   check failedCount == 0
+  writeStepSummary(outcomes)
 
 template sweepSeedsCore(seeds: Slice[uint64], decisionBudget: int,
                          timeBudget: Duration, enableLedger: bool,
