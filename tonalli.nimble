@@ -159,6 +159,13 @@ task test_simulation, "Run the deterministic simulation suites":
   for t in simLeafTests:
     run simArgs & " --mm:orc", t
 
+task simulation_identity, "Run the fixed-seed identity fixture, producing build/identity-trace.ndjson":
+  let simArgs =
+    "-d:debug -d:tonalliDebug -d:useSysAssert -d:useGcAssert " &
+    "-d:chronosSimulation -d:tonalliFutureTracking --threads:on --mm:refc"
+
+  run simArgs, "tests/simidentity"
+
 task check_windows, "Windows parity: semantic-check the library surface (fork issue #20)":
   # The dev container has no mingw (fork issue #20 gap 4), so this
   # substitutes `nim check`'s full semantic analysis - no C compiler
