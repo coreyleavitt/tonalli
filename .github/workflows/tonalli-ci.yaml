@@ -62,17 +62,16 @@ jobs:
           - builder: ubuntu-latest
             nim: "2.2.0"
             platform: x64
-            setup-canary: true
           - builder: ubuntu-latest
-            nim: "2.4.x"
+            nim: "version-2-4"
             platform: x64
             canary: true
+            nightly: true
             setup-canary: true
           - builder: ubuntu-latest
             nim: "devel"
             platform: x64
             canary: true
-            setup-canary: true
     name: test (${{ matrix.builder }}, ${{ matrix.nim }})
     runs-on: ${{ matrix.builder }}
     continue-on-error: ${{ matrix.canary == true }}
@@ -87,10 +86,23 @@ jobs:
           submodules: true
 
       - name: Setup Nim
+        if: '!matrix.nightly'
         uses: jiro4989/setup-nim-action@v2
         with:
           nim-version: ${{ matrix.nim }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Nim (nightlies branch build)
+        if: matrix.nightly
+        run: |
+          url=$(curl -sSf -H "Authorization: Bearer ${{ github.token }}" \
+            "https://api.github.com/repos/nim-lang/nightlies/releases/tags/latest-${{ matrix.nim }}" \
+            | jq -r '.assets[] | select(.name | endswith("linux_x64.tar.xz")) | .browser_download_url' | head -n1)
+          test -n "$url"
+          curl -sSfL "$url" -o "$RUNNER_TEMP/nim-nightly.tar.xz"
+          mkdir -p "$RUNNER_TEMP/nim-nightly"
+          tar xJf "$RUNNER_TEMP/nim-nightly.tar.xz" -C "$RUNNER_TEMP/nim-nightly" --strip-components=1
+          echo "$RUNNER_TEMP/nim-nightly/bin" >> "$GITHUB_PATH"
 
       - name: Setup canary (temporary RED gate)
         if: matrix.setup-canary
@@ -127,11 +139,6 @@ jobs:
         with:
           nim-version: "2.2.10"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup canary (temporary RED gate)
-        run: |
-          echo "RED canary: proving this job's setup path executes"
-          exit 1
 
       - name: Install dependencies
         run: nimble install -y --depsOnly
