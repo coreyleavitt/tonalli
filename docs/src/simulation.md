@@ -706,6 +706,4 @@ test drives its probes from a freshly spawned OS thread
 (`tests/testsimnet.nim`'s pattern),
 isolating each scenario's own sim dispatcher from `testall`'s shared
 real one. `nimble test_simulation` runs the full set under both
-`--mm:refc` and `--mm:orc`, pinned to Nim 2.x (the sim substrate is
-fork-only test infrastructure and does not carry the 1.6 design
-constraints the contextvars series had to fight).
+`--mm:refc` and `--mm:orc`.
