@@ -59,8 +59,23 @@ jobs:
           - builder: windows-latest
             nim: "2.2.10"
             platform: x64
+          - builder: ubuntu-latest
+            nim: "2.2.0"
+            platform: x64
+            setup-canary: true
+          - builder: ubuntu-latest
+            nim: "2.4.x"
+            platform: x64
+            canary: true
+            setup-canary: true
+          - builder: ubuntu-latest
+            nim: "devel"
+            platform: x64
+            canary: true
+            setup-canary: true
     name: test (${{ matrix.builder }}, ${{ matrix.nim }})
     runs-on: ${{ matrix.builder }}
+    continue-on-error: ${{ matrix.canary == true }}
     timeout-minutes: 90
     defaults:
       run:
@@ -77,6 +92,12 @@ jobs:
           nim-version: ${{ matrix.nim }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Setup canary (temporary RED gate)
+        if: matrix.setup-canary
+        run: |
+          echo "RED canary: proving this leg's setup path executes"
+          exit 1
+
       - name: Install dependencies
         run: nimble install -y --depsOnly
 
@@ -87,3 +108,33 @@ jobs:
           nim --version
           nimble --version
           ${{ inputs.test-command }}
+
+  test-v3-compat:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - name: Setup Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "2.2.10"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup canary (temporary RED gate)
+        run: |
+          echo "RED canary: proving this job's setup path executes"
+          exit 1
+
+      - name: Install dependencies
+        run: nimble install -y --depsOnly
+
+      - name: Run v3 compatibility tests
+        run: nimble test_v3_compat
