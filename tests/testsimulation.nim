@@ -26,6 +26,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   import std/options
   import ../tonalli
   import ../tonalli/simulation
+  import ./simfixtures
 
   type
     ProbeOutcome = object
@@ -157,7 +158,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeSweepRunsEverySeedAndPasses() {.thread.} =
     var outcome = ProbeOutcome(ok: true)
     let outcomes = sweepSeeds(0'u64 .. 4'u64):
-      discard
+      simulationSweepRunsEverySeedEmptyBodyFixture()
     if outcomes.len != 5:
       outcome = ProbeOutcome(ok: false,
         msg: "expected 5 outcomes, got " & $outcomes.len)
@@ -572,13 +573,9 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## `SimSeedFailureKind.Ledger`, never a process-ending raise, and its
     ## non-violating siblings must still pass alongside it.
     var outcome = ProbeOutcome(ok: true)
-    var runIndex = 0
-    let outcomes = sweepSeedsWith(100'u64 .. 102'u64, simOptions(ledger = true)):
-      await sleepAsync(0.milliseconds)
-      inc runIndex
-      if runIndex == 2:
-        simLedgerDebugPlantDroppedEnqueue(SimLedgerQueueKind.Callbacks)
-      await sleepAsync(0.milliseconds)
+    simulationLedgerFixtureRunIndex = 0
+    let outcomes = sweepSeedsWith(100'u64 .. 102'u64, simulationLedgerFixtureOpts()):
+      simulationSweepWithLedgerClassifiesViolatingSeedFixture()
     if outcomes.len != 3:
       outcome = ProbeOutcome(ok: false,
         msg: "expected 3 outcomes, got " & $outcomes.len)

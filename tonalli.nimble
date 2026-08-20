@@ -149,6 +149,7 @@ task test_simulation, "Run the deterministic simulation suites":
     "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
     "tests/testsimstream", "tests/testsimnet", "tests/testsimdatagram",
     "tests/testsimproducer", "tests/testsimledger", "tests/testsimhttp",
+    "tests/testsimreplay",
   ]
 
   run simArgs & " --mm:refc", "tests/testall"
@@ -165,6 +166,30 @@ task simulation_identity, "Run the fixed-seed identity fixture, producing build/
     "-d:chronosSimulation -d:tonalliFutureTracking --threads:on --mm:refc"
 
   run simArgs, "tests/simidentity"
+
+proc nimbleTaskArgs(taskName: string): seq[string] =
+  ## A nimble task has no ordinary parameter list for its own extra
+  ## command-line words - they arrive as part of the raw argv nimble
+  ## hands this NimScript (`paramStr`/`paramCount`), after the compiler
+  ## flags nimble itself prepends. Scanning for `taskName` and taking
+  ## everything after it is the conventional way a task recovers them.
+  var found = false
+  for i in 0 .. paramCount():
+    if found:
+      result.add paramStr(i)
+    elif paramStr(i) == taskName:
+      found = true
+
+task replay, "Replay a downloaded failing-seed trace: nimble replay <fixture-name> <trace-path>":
+  let simArgs =
+    "-d:debug -d:tonalliDebug -d:useSysAssert -d:useGcAssert " &
+    "-d:chronosSimulation -d:tonalliFutureTracking --threads:on --mm:refc"
+
+  build simArgs, "tests/simreplay"
+  var cmd = quoteShell("build" / "simreplay")
+  for arg in nimbleTaskArgs("replay"):
+    cmd &= " " & quoteShell(arg)
+  exec cmd
 
 task check_windows, "Windows parity: semantic-check the library surface (fork issue #20)":
   # The dev container has no mingw (fork issue #20 gap 4), so this
@@ -205,6 +230,7 @@ task check_windows, "Windows parity: semantic-check the library surface (fork is
     "tests/testsimoracle", "tests/testsimtrace", "tests/testsimulation",
     "tests/testsimstream", "tests/testsimnet", "tests/testsimdatagram",
     "tests/testsimproducer", "tests/testsimledger", "tests/testsimhttp",
+    "tests/testsimreplay",
   ]
   for t in simLeafTests:
     exec nimc & " check " & winCfg &

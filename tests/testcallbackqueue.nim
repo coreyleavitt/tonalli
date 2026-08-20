@@ -261,6 +261,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   ## own OS thread, the isolation `tests/testsimulation.nim` uses.
   import ../tonalli
   import ../tonalli/simulation
+  import ./simfixtures
 
   type
     SweepProbeOutcome = object
@@ -280,19 +281,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeCallSoonFifoOrderHoldsAcrossSweep() {.thread.} =
     var outcome = SweepProbeOutcome(ok: true)
     let outcomes = sweepSeeds(0'u64 .. 9'u64):
-      var order: seq[int]
-      for i in 0 ..< 16:
-        callSoon(proc(arg: pointer) {.gcsafe, raises: [].} =
-          order.add(cast[int](arg)), cast[pointer](i))
-      # `poll()` cannot be called directly from async code (illegal
-      # `NestedPoll` effect); yielding once drains the already-queued
-      # callbacks, since `processCallbacks` always runs to completion
-      # each poll iteration regardless of the timer that wakes it.
-      await sleepAsync(0.milliseconds)
-      var expected: seq[int]
-      for i in 0 ..< 16: expected.add i
-      if order != expected:
-        raise newException(ValueError, "FIFO order violated: " & $order)
+      callbackqueueCallSoonFifoOrderFixture()
     for o in outcomes:
       if not o.passed:
         outcome = SweepProbeOutcome(ok: false,
@@ -302,11 +291,7 @@ when defined(chronosSimulation) and compileOption("threads"):
   proc probeIdlerFiresOnEmptyBatchAcrossSweep() {.thread.} =
     var outcome = SweepProbeOutcome(ok: true)
     let outcomes = sweepSeeds(0'u64 .. 9'u64):
-      var idlerFired = false
-      callIdle(proc(arg: pointer) {.gcsafe, raises: [].} = idlerFired = true)
-      await sleepAsync(0.milliseconds)
-      if not idlerFired:
-        raise newException(ValueError, "idler did not fire on an empty batch")
+      callbackqueueIdlerFiresOnEmptyBatchFixture()
     for o in outcomes:
       if not o.passed:
         outcome = SweepProbeOutcome(ok: false,
