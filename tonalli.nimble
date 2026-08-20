@@ -8,12 +8,15 @@ description   = "Networking framework with async/await support"
 license       = "MIT or Apache License 2.0"
 skipDirs      = @["tests"]
 
-requires "nim >= 1.6.16",
+requires "nim >= 2.2.0",
          "results",
          "stew >= 0.5.0",
          "bearssl >= 0.2.8",
          "httputils",
          "unittest2"
+
+when (NimMajor, NimMinor) < (2, 2):
+  {.error: "tonalli requires Nim >= 2.2.0 (RFC 0012)".}
 
 import os, strutils
 

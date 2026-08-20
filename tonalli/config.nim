@@ -19,6 +19,10 @@
 ## in a backwards-incompatible way), the feature flag will be removed or renamed
 ## also - you can use `when declared(tonalliHasXxx): when tonalliHasXxx >= N:`
 ## to require a particular version.
+
+when (NimMajor, NimMinor) < (2, 2):
+  {.error: "tonalli requires Nim >= 2.2.0 (RFC 0012)".}
+
 const
   tonalliHandleException* {.booldefine.}: bool = false
     ## Remap `Exception` to `AsyncExceptionError` for all `async` functions.
