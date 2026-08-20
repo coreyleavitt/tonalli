@@ -1,0 +1,89 @@
+name: Tonalli CI
+
+on:
+  workflow_call:
+    inputs:
+      sim:
+        description: "Run the simulation jobs"
+        default: true
+        required: false
+        type: boolean
+      test-command:
+        description: "Test command(s) run by every test-matrix leg"
+        default: |
+          nimble install -y libbacktrace
+          nimble test
+          nimble test_libbacktrace
+          nimble examples
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+      - name: Setup Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "2.2.10"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: nimble check
+        run: nimble check
+
+  test:
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - builder: ubuntu-latest
+            nim: "2.2.10"
+            platform: x64
+          - builder: macos-latest
+            nim: "2.2.10"
+            platform: arm64
+          - builder: windows-latest
+            nim: "2.2.10"
+            platform: x64
+    name: test (${{ matrix.builder }}, ${{ matrix.nim }})
+    runs-on: ${{ matrix.builder }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - name: Setup Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: ${{ matrix.nim }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: nimble install -y --depsOnly
+
+      - name: Run tests
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          nim --version
+          nimble --version
+          ${{ inputs.test-command }}
