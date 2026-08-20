@@ -685,16 +685,13 @@ suite "Exception/effect tracking":
       called
 
   test "detect poll reentrancy at compile-time in macro":
-    when (NimMajor, NimMinor) >= (2, 2):
-      check:
-        not(compiles do:
-          proc callPoll() {.async.} =
-            poll())
-        not(compiles do:
-          proc callWaitFor() {.async.} =
-            waitFor(sleepAsync(1.millis)))
-    else:
-      skip()
+    check:
+      not(compiles do:
+        proc callPoll() {.async.} =
+          poll())
+      not(compiles do:
+        proc callWaitFor() {.async.} =
+          waitFor(sleepAsync(1.millis)))
 
   test "detect poll reentrance at runtime for other cases":
     when tonalliStrictReentrancy:

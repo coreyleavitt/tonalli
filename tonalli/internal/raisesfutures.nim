@@ -4,14 +4,6 @@ import
 
 {.push raises: [].}
 
-template errorReturnWorkaround(body) =
-  when NimMajor < 2:
-    body
-    raiseAssert "never hit"
-  else:
-    body
-
-
 type
   InternalRaisesFuture*[T, E] = ref object of Future[T]
     ## Future with a tuple of possible exception types
@@ -86,8 +78,7 @@ macro Raising*[T](F: typedesc[Future[T]], E: typed): untyped =
             error("Expected typedesc, got " & repr(x), x)
         E.mapIt(it)
       else:
-        errorReturnWorkaround:
-          error("Expected typedesc, got " & repr(E), E)
+        error("Expected typedesc, got " & repr(E), E)
 
   let raises = if e.len == 0:
     makeNoRaises()
@@ -202,9 +193,8 @@ macro checkRaises*[T: CatchableError](
 
 
   if isNoRaises(raises):
-    errorReturnWorkaround:
-      error(
-        "`fail`: `" & repr(toMatch) & "` incompatible with `raises: []`", future)
+    error(
+      "`fail`: `" & repr(toMatch) & "` incompatible with `raises: []`", future)
 
   var
     typeChecker = ident"false"

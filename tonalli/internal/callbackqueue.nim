@@ -155,21 +155,6 @@ proc prependNoGrow*[T](q: var CallbackQueue[T], item: tonalliSink T) =
   let idx = slotIndex(q.head, q.data.len)
   q.data[idx] = item
 
-when defined(tonalliDebug) and tonalliUseSink:
-  # Gated on tonalliUseSink, not just tonalliDebug: on the no-sink
-  # codepath `tonalliMoveSink` is an identity passthrough, so no move
-  # ever clears the slot and this check would fail unconditionally.
-  proc checkVacatedSlot[T](item: T) {.inline.} =
-    ## Debug-only guardrail: every slot `popFirst` vacates must end up
-    ## default-valued, catching a path that bypasses the fused-move
-    ## discipline below. A standalone proc, not inlined into `popFirst`'s
-    ## `when` body: Nim 1.6 fails to resolve `default(T)`'s `T` when the
-    ## call sits inside a `when` nested in a generic `template`.
-    doAssert item == default(T),
-      "CallbackQueue.checkVacatedSlot(): a vacated slot retained a " &
-      "non-nil ghost value after popFirst() — a slot-vacating path " &
-      "bypassed the fused-move discipline"
-
 template popFirst*[T](q: var CallbackQueue[T]): T =
   ## Fused dequeue. A `template`, not a `proc`: a proc returning `T` by
   ## value pays refc's hidden-return-slot reset-then-assign lowering
@@ -185,7 +170,13 @@ template popFirst*[T](q: var CallbackQueue[T]): T =
   inc q.head
   when defined(tonalliDebug) and tonalliUseSink:
     let internalPopped = tonalliMoveSink(q.data[queueIdx])
-    checkVacatedSlot(q.data[queueIdx])
+    # Gated on tonalliUseSink, not just tonalliDebug: on the no-sink
+    # codepath `tonalliMoveSink` is an identity passthrough, so no move
+    # ever clears the slot and this check would fail unconditionally.
+    doAssert q.data[queueIdx] == default(T),
+      "CallbackQueue.popFirst(): a vacated slot retained a " &
+      "non-nil ghost value after popFirst() — a slot-vacating path " &
+      "bypassed the fused-move discipline"
     internalPopped
   else:
     tonalliMoveSink(q.data[queueIdx])

@@ -13,13 +13,6 @@ import
   ../[futures, config],
   ./raisesfutures
 
-template errorReturnWorkaround(body) =
-  when NimMajor < 2:
-    body
-    raiseAssert "never hit"
-  else:
-    body
-
 proc processBody(node, setResultSym: NimNode): (NimNode, bool) {.compileTime.} =
   case node.kind
   of nnkReturnStmt:
@@ -290,9 +283,8 @@ proc asyncSingleProc(prc, params: NimNode): NimNode {.compileTime.} =
     elif not (
         returnType.kind == nnkBracketExpr and
         (eqIdent(returnType[0], "Future") or eqIdent(returnType[0], "InternalRaisesFuture"))):
-      errorReturnWorkaround:
-        error(
-          "Expected return type of 'Future' got '" & repr(returnType) & "'", prc)
+      error(
+        "Expected return type of 'Future' got '" & repr(returnType) & "'", prc)
 
     else:
       returnType[1]
@@ -357,10 +349,7 @@ proc asyncSingleProc(prc, params: NimNode): NimNode {.compileTime.} =
       not isEmpty(prc.body):
     let
       (setResultSym, assignResultSym) =
-        when NimMajor >= 2:
-          (genSym(nskTemplate, "setResult"), genSym(nskTemplate, "assignResult"))
-        else:
-          (ident("assignResult"), ident("setResult"))
+        (genSym(nskTemplate, "setResult"), genSym(nskTemplate, "assignResult"))
       (procBody, assignUsed) = prc.body.processBody(assignResultSym)
       resultIdent = ident "result"
       fakeResult = quote do:
@@ -498,10 +487,9 @@ proc asyncSingleProc(prc, params: NimNode): NimNode {.compileTime.} =
     # `forbids: [NestedPoll]` on the iterator catches calls to `poll` inside
     # {.async.} functions - since async functions end up being called from
     # within a poll context, they should not call `poll` themselves
-    when (NimMajor, NimMinor) >= (2, 2):
-      closureIterator.addPragma(
-        newColonExpr(ident "forbids", nnkBracket.newTree(ident "NestedPoll"))
-      )
+    closureIterator.addPragma(
+      newColonExpr(ident "forbids", nnkBracket.newTree(ident "NestedPoll"))
+    )
 
     # Exceptions are caught inside the iterator and stored in the future
     closureIterator.addPragma(nnkExprColonExpr.newTree(
