@@ -54,20 +54,63 @@ let cfg =
 proc build(args, path: string) =
   exec nimc & " " & lang & " " & cfg & " " & flags & " " & args & " " & path
 
+proc execTest(executable: string, args: varargs[string]) =
+  # Cross-compiled tests need adb or simctl instead of direct host execution;
+  # this is the one place that indirection is applied.
+  var cmd =
+    if testRunner.len == 0: quoteShell(executable)
+    else: testRunner & " " & quoteShell(executable)
+  for a in args:
+    cmd &= " " & quoteShell(a)
+  exec cmd
+
 proc run(args, path: string) =
   build args, path
-  let executable = "build/" & path.splitPath[1]
-  if testRunner.len == 0:
-    exec executable
-  else:
-    # Cross-compiled tests need adb or simctl instead of direct host execution.
-    exec testRunner & " " & quoteShell(executable)
+  execTest("build/" & path.splitPath[1])
 
 proc tryExec(cmd: string) =
   try:
     exec cmd
   except Exception as e:
     echo e.msg
+
+# Kept in sync with the suite-name consts referenced from
+# tests/testcontextvarsstandalone.nim; the binary's own `list` argument
+# lets the desktop test legs catch drift between the two.
+const contextVarsSuiteNames = [
+  "contextvars: tonalliDebug context-corruption detection net",
+  "contextvars (raw key): cross-thread construction detection",
+  "contextvars (raw key): guard against a dead recording thread",
+  "contextvars (raw key): tonalliDebug construction lock",
+]
+
+proc runContextVarsStandalone(args: string) =
+  # testcontextvarsstandalone cannot run as a single `run` step: its
+  # suites need process isolation from each other (see the binary's
+  # doc comment), so each is dispatched as its own unittest2 filter,
+  # routed through the same runner indirection as every other test.
+  build args, "tests/testcontextvarsstandalone"
+  if testRunner.len == 0:
+    # Cross-compiled binaries cannot run on the host, so this drift
+    # check only applies to the desktop legs, which always run it.
+    # unittest2 prints its own suite headers as a side effect of
+    # importing the four suites, ahead of the binary's own `list`
+    # handling, so the output is these four names plus surrounding
+    # unittest2 noise rather than the four lines alone - a containment
+    # check is what's actually verifiable here, not output equality.
+    let (output, code) = gorgeEx("build/testcontextvarsstandalone list")
+    doAssert code == 0, "testcontextvarsstandalone list failed: " & output
+    var missing: seq[string]
+    for suiteName in contextVarsSuiteNames:
+      if suiteName notin output:
+        missing.add suiteName
+    if missing.len > 0:
+      echo "testcontextvarsstandalone suite list drifted from tonalli.nimble:"
+      echo "  tonalli.nimble expects   : ", contextVarsSuiteNames
+      echo "  missing from binary list : ", missing
+      quit(1)
+  for suiteName in contextVarsSuiteNames:
+    execTest("build/testcontextvarsstandalone", suiteName & "::*")
 
 proc buildChapter(chapterDir: string) =
   # Resolve the engine dependency against this checkout, not the registry.
@@ -111,14 +154,10 @@ task test, "Run all tests":
     # covers the contextvars suites that cannot share testall's binary
     # (testcontextvarsleakguard deliberately lets an AssertionDefect
     # escape poll() under tonalliDebug; testcontextvarslock's tonalliDebug
-    # construction lock is one-way for the process's lifetime). The
-    # `orchestrate` argument runs each suite in its own subprocess, so
-    # isolation holds by construction rather than by import order.
-    build args & " --mm:refc", "tests/testcontextvarsstandalone"
-    exec "build/testcontextvarsstandalone orchestrate"
+    # construction lock is one-way for the process's lifetime).
+    runContextVarsStandalone(args & " --mm:refc")
     run args & " --mm:orc", "tests/testall"
-    build args & " --mm:orc", "tests/testcontextvarsstandalone"
-    exec "build/testcontextvarsstandalone orchestrate"
+    runContextVarsStandalone(args & " --mm:orc")
 
   # Make sure benchmarks compile.
   for f in walkDirRec("benchmarks"):

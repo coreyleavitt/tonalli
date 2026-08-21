@@ -2,7 +2,8 @@
 
 set -euo pipefail
 
-binary="${1:?usage: run-ios-tests.sh <test-binary>}"
+binary="${1:?usage: run-ios-tests.sh <test-binary> [args...]}"
+shift
 device_udid="${IOS_SIMULATOR_UDID:-}"
 
 if [[ -z "$device_udid" ]]; then
@@ -39,4 +40,4 @@ fi
 xcrun simctl boot "$device_udid" 2>/dev/null || true
 xcrun simctl bootstatus "$device_udid" -b
 codesign --force --sign - "$binary"
-xcrun simctl spawn "$device_udid" "$(cd "$(dirname "$binary")" && pwd)/$(basename "$binary")"
+xcrun simctl spawn "$device_udid" "$(cd "$(dirname "$binary")" && pwd)/$(basename "$binary")" "$@"
