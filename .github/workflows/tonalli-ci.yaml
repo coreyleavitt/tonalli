@@ -175,6 +175,13 @@ jobs:
           nimble --version
           ${{ inputs.test-command }}
 
+      - name: Surface canary failure
+        if: failure() && matrix.canary == true
+        env:
+          NIM_BRANCH: ${{ matrix.nim }}
+        run: |
+          echo "Non-gating canary leg for Nim branch $NIM_BRANCH failed. It does not block the run, but should be investigated." >> "$GITHUB_STEP_SUMMARY"
+
   test-v3-compat:
     if: inputs.suite && inputs.v3-compat
     runs-on: ubuntu-latest
