@@ -36,7 +36,9 @@ on:
         required: false
         type: boolean
       nim-version:
-        description: "The pinned Nim release used by every non-canary job"
+        description: >-
+          The pinned Nim release used by every job and by test-matrix
+          legs that do not set nim themselves.
         default: "2.2.10"
         required: false
         type: string
@@ -54,15 +56,13 @@ on:
         type: string
       test-command:
         description: >-
-          Test command(s) run by every test-matrix leg. Spliced verbatim
-          into a shell script, so callers must pass only static, trusted
-          strings, never content derived from pull-request titles, branch
-          names, or other user-controlled data.
-        default: |
-          nimble install -y libbacktrace
-          nimble test
-          nimble test_libbacktrace
-          nimble examples
+          Test command(s) run by every test-matrix leg. Callers are
+          expected to state their own recipe; the default is the bare
+          nimble convention. Spliced verbatim into a shell script, so
+          callers must pass only static, trusted strings, never content
+          derived from pull-request titles, branch names, or other
+          user-controlled data.
+        default: "nimble test"
         required: false
         type: string
       test-matrix:
@@ -157,6 +157,10 @@ jobs:
         with:
           submodules: true
 
+      - name: Repository setup
+        if: inputs.setup-command != ''
+        run: ${{ inputs.setup-command }}
+
       - name: Install i386 toolchain
         if: matrix.platform == 'x86'
         run: |
@@ -176,10 +180,6 @@ jobs:
           chmod 755 external/bin/gcc external/bin/g++
           echo "${{ github.workspace }}/external/bin" >> "$GITHUB_PATH"
 
-      - name: Repository setup
-        if: inputs.setup-command != ''
-        run: ${{ inputs.setup-command }}
-
       - name: Setup Nim
         if: '!matrix.nightly'
         uses: jiro4989/setup-nim-action@cb1fc1270b117457dd0d9f610ec981fad3369cec  # v2
@@ -192,14 +192,19 @@ jobs:
         env:
           NIM_BRANCH: ${{ matrix.nim }}
         run: |
+          if [ "$RUNNER_OS" != "Linux" ]; then
+            echo "nightly legs are linux_x64-only; this leg runs on $RUNNER_OS" >&2
+            exit 1
+          fi
           url=$(curl -sSf -H "Authorization: Bearer ${{ github.token }}" \
             "https://api.github.com/repos/nim-lang/nightlies/releases/tags/latest-${NIM_BRANCH}" \
             | jq -r '.assets[] | select(.name | endswith("linux_x64.tar.xz")) | .browser_download_url' | head -n1)
           if [ -z "$url" ]; then
-            echo "no linux_x64 nightly asset for Nim branch ${NIM_BRANCH}; nightly legs are linux_x64-only" >&2
+            echo "no linux_x64 nightly asset for Nim branch ${NIM_BRANCH}" >&2
             exit 1
           fi
           curl -sSfL "$url" -o "$RUNNER_TEMP/nim-nightly.tar.xz"
+          sha256sum "$RUNNER_TEMP/nim-nightly.tar.xz"
           mkdir -p "$RUNNER_TEMP/nim-nightly"
           tar xJf "$RUNNER_TEMP/nim-nightly.tar.xz" -C "$RUNNER_TEMP/nim-nightly" --strip-components=1
           echo "$RUNNER_TEMP/nim-nightly/bin" >> "$GITHUB_PATH"
@@ -290,10 +295,18 @@ jobs:
         # rather than re-deriving one precedence order.
         run: |
           mkdir -p sim-traces
-          for dir in "${TMPDIR:-}" "${TMP:-}" "${TEMP:-}" "${TEMPDIR:-}" /tmp; do
-            if [ -n "$dir" ] && [ -d "$dir/chronos-sim" ]; then
-              cp "$dir/chronos-sim/"*.ndjson sim-traces/ 2>/dev/null || true
-            fi
+          for dir in "${TMPDIR:-}" "${TMP:-}" "${TEMP:-}" "${TEMPDIR:-}" \
+                     "${USERPROFILE:-}" "${WINDIR:-}" /tmp; do
+            [ -n "$dir" ] || continue
+            for f in "$dir/chronos-sim/"*.ndjson; do
+              [ -e "$f" ] || continue
+              base=$(basename "$f")
+              if [ -e "sim-traces/$base" ]; then
+                echo "duplicate trace name $base under $dir skipped" >&2
+              else
+                cp "$f" sim-traces/
+              fi
+            done
           done
           echo "collected $(find sim-traces -name '*.ndjson' | wc -l) trace file(s)"
 
@@ -358,14 +371,23 @@ jobs:
           path: traces
 
       - name: Diff the decision logs
-        # Pairwise against the ubuntu trace is sufficient to prove all
-        # three identical: ubuntu == macos and ubuntu == windows implies
-        # macos == windows.
+        # Pairwise against one reference trace proves all traces
+        # identical by transitivity. Discover the set dynamically so the
+        # identity matrix can change without touching this job; the
+        # count guard keeps a shrunken download from passing vacuously.
         run: |
-          diff -u traces/simulation-identity-ubuntu-latest/identity-trace.ndjson \
-                  traces/simulation-identity-macos-latest/identity-trace.ndjson
-          diff -u traces/simulation-identity-ubuntu-latest/identity-trace.ndjson \
-                  traces/simulation-identity-windows-latest/identity-trace.ndjson
+          ref=traces/simulation-identity-ubuntu-latest/identity-trace.ndjson
+          test -f "$ref"
+          count=0
+          for trace in traces/simulation-identity-*/identity-trace.ndjson; do
+            diff -u "$ref" "$trace"
+            count=$((count + 1))
+          done
+          if [ "$count" -lt 2 ]; then
+            echo "expected at least two identity traces, found $count" >&2
+            exit 1
+          fi
+          echo "all $count identity traces identical"
 
   check-windows:
     # Fast, cheap complement to the `simulation` job's windows-latest
