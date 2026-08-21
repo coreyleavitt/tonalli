@@ -192,11 +192,6 @@ jobs:
       - name: Install dependencies
         run: nimble install -y --depsOnly
 
-      - name: Sweep canary (temporary RED gate)
-        run: |
-          echo "sim sweep canary: this step must fail before the fold goes green"
-          exit 1
-
       - name: Run the simulation suites
         run: nimble test_simulation
 
@@ -241,11 +236,6 @@ jobs:
 
       - name: Install dependencies
         run: nimble install -y --depsOnly
-
-      - name: Identity canary (temporary RED gate)
-        run: |
-          echo "identity canary: this step must fail before the fold goes green"
-          exit 1
 
       - name: Run the fixed-seed identity fixture
         run: nimble simulation_identity
@@ -301,11 +291,6 @@ jobs:
 
       - name: Install dependencies
         run: nimble install -y --depsOnly
-
-      - name: Parity canary (temporary RED gate)
-        run: |
-          echo "check-windows canary: this step must fail before the fold goes green"
-          exit 1
 
       - name: Windows parity check
         run: nimble check_windows
