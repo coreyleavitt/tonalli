@@ -162,3 +162,150 @@ jobs:
 
       - name: Run v3 compatibility tests
         run: nimble test_v3_compat
+
+  simulation:
+    # The deterministic simulation substrate is Nim 2.x-only test
+    # infrastructure, and hermeticity's premise is that it is
+    # platform-independent, so sweeping it on every Nim/MM leg buys
+    # nothing a single job doesn't already cover. The OS axis is real,
+    # though: the sim poll loop has a Windows (IOCP) branch, and
+    # `check-windows` (below) only proves it type-checks, not that it
+    # runs, so this matrix is where it actually executes.
+    if: inputs.sim && github.event_name != 'schedule'
+    name: "Simulation sweep (${{ matrix.os }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "2.2.10"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: nimble install -y --depsOnly
+
+      - name: Sweep canary (temporary RED gate)
+        run: |
+          echo "sim sweep canary: this step must fail before the fold goes green"
+          exit 1
+
+      - name: Run the simulation suites
+        run: nimble test_simulation
+
+      - name: Upload failing-seed traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulation-traces-${{ matrix.os }}
+          path: >-
+            ${{ runner.os == 'Windows' &&
+                format('{0}\chronos-sim\*.ndjson', env.TEMP) ||
+                '/tmp/chronos-sim/*.ndjson' }}
+          if-no-files-found: ignore
+
+  simulation-identity:
+    # Invariant 2's cross-platform check: the same seed must produce
+    # the same decision log on every platform that can run the sim
+    # dispatcher, POSIX and Windows (IOCP) alike. Runs on manual
+    # dispatch and on the weekly schedule, not on every push.
+    if: >-
+      inputs.sim && (github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule')
+    name: "Simulation identity (${{ matrix.os }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "2.2.10"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: nimble install -y --depsOnly
+
+      - name: Identity canary (temporary RED gate)
+        run: |
+          echo "identity canary: this step must fail before the fold goes green"
+          exit 1
+
+      - name: Run the fixed-seed identity fixture
+        run: nimble simulation_identity
+
+      - name: Upload trace
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulation-identity-${{ matrix.os }}
+          path: build/identity-trace.ndjson
+
+  simulation-identity-compare:
+    if: >-
+      inputs.sim && (github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule')
+    name: "Simulation identity: compare"
+    needs: simulation-identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download traces
+        uses: actions/download-artifact@v4
+        with:
+          pattern: simulation-identity-*
+          path: traces
+
+      - name: Diff the decision logs
+        # Pairwise against the ubuntu trace is sufficient to prove all
+        # three identical: ubuntu == macos and ubuntu == windows implies
+        # macos == windows.
+        run: |
+          diff -u traces/simulation-identity-ubuntu-latest/identity-trace.ndjson \
+                  traces/simulation-identity-macos-latest/identity-trace.ndjson
+          diff -u traces/simulation-identity-ubuntu-latest/identity-trace.ndjson \
+                  traces/simulation-identity-windows-latest/identity-trace.ndjson
+
+  check-windows:
+    # Fast, cheap complement to the `simulation` job's windows-latest
+    # leg: semantic-only, so it runs on ubuntu on every push instead of
+    # waiting on a Windows runner.
+    if: inputs.sim && github.event_name != 'schedule'
+    name: "Windows parity: semantic check"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "2.2.10"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: nimble install -y --depsOnly
+
+      - name: Parity canary (temporary RED gate)
+        run: |
+          echo "check-windows canary: this step must fail before the fold goes green"
+          exit 1
+
+      - name: Windows parity check
+        run: nimble check_windows

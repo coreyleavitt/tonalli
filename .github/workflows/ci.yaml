@@ -5,6 +5,10 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Weekly cross-platform simulation-identity run; every other job
+    # skips the schedule event inside tonalli-ci.yaml.
+    - cron: "30 6 * * 1"
 
 permissions:
   contents: read
