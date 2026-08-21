@@ -47,10 +47,11 @@ on:
           Optional shell command that runs before toolchain setup in the
           lint job and in every test-matrix leg, for OS-level
           dependencies. Applied identically everywhere; it cannot express
-          per-leg setup. Spliced verbatim into a shell script, so callers
-          must pass only static, trusted strings, never content derived
-          from pull-request titles, branch names, or other user-controlled
-          data, the same trust contract as test-command.
+          per-leg setup. Executed as a trusted shell script (through the
+          nimble exit-code guard), so callers must pass only static,
+          trusted strings, never content derived from pull-request
+          titles, branch names, or other user-controlled data, the same
+          trust contract as test-command.
         default: ""
         required: false
         type: string
@@ -58,10 +59,11 @@ on:
         description: >-
           Test command(s) run by every test-matrix leg. Callers are
           expected to state their own recipe; the default is the bare
-          nimble convention. Spliced verbatim into a shell script, so
-          callers must pass only static, trusted strings, never content
-          derived from pull-request titles, branch names, or other
-          user-controlled data.
+          nimble convention. Executed as a trusted shell script (through
+          the nimble exit-code guard, since nimble's own exit code does
+          not carry script failures), so callers must pass only static,
+          trusted strings, never content derived from pull-request
+          titles, branch names, or other user-controlled data.
         default: "nimble test"
         required: false
         type: string
@@ -127,7 +129,9 @@ jobs:
 
       - name: Repository setup
         if: inputs.setup-command != ''
-        run: ${{ inputs.setup-command }}
+        env:
+          SETUP_COMMAND: ${{ inputs.setup-command }}
+        run: bash .github/scripts/nimble-guard.sh bash -e -c "$SETUP_COMMAND"
 
       - name: Setup Nim
         uses: jiro4989/setup-nim-action@cb1fc1270b117457dd0d9f610ec981fad3369cec  # v2
@@ -136,7 +140,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: nimble check
-        run: nimble check
+        run: bash .github/scripts/nimble-guard.sh nimble check
 
   test:
     if: inputs.suite
@@ -159,7 +163,9 @@ jobs:
 
       - name: Repository setup
         if: inputs.setup-command != ''
-        run: ${{ inputs.setup-command }}
+        env:
+          SETUP_COMMAND: ${{ inputs.setup-command }}
+        run: bash .github/scripts/nimble-guard.sh bash -e -c "$SETUP_COMMAND"
 
       - name: Install i386 toolchain
         if: matrix.platform == 'x86'
@@ -210,16 +216,17 @@ jobs:
           echo "$RUNNER_TEMP/nim-nightly/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
-        run: nimble install -y --depsOnly
+        run: bash .github/scripts/nimble-guard.sh nimble install -y --depsOnly
 
       - name: Run tests
         env:
           PLATFORM: ${{ matrix.platform }}
           NIMFLAGS: ${{ matrix.nimflags }}
+          TEST_COMMAND: ${{ inputs.test-command }}
         run: |
           nim --version
           nimble --version
-          ${{ inputs.test-command }}
+          bash .github/scripts/nimble-guard.sh bash -e -c "$TEST_COMMAND"
 
       - name: Surface canary failure
         if: failure() && matrix.canary == true
@@ -248,10 +255,10 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
-        run: nimble install -y --depsOnly
+        run: bash .github/scripts/nimble-guard.sh nimble install -y --depsOnly
 
       - name: Run v3 compatibility tests
-        run: nimble test_v3_compat
+        run: bash .github/scripts/nimble-guard.sh nimble test_v3_compat
 
   simulation:
     # The deterministic simulation substrate is Nim 2.x-only test
@@ -280,10 +287,12 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
-        run: nimble install -y --depsOnly
+        shell: bash
+        run: bash .github/scripts/nimble-guard.sh nimble install -y --depsOnly
 
       - name: Run the simulation suites
-        run: nimble test_simulation
+        shell: bash
+        run: bash .github/scripts/nimble-guard.sh nimble test_simulation
 
       - name: Collect failing-seed traces
         if: failure()
@@ -354,10 +363,10 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
-        run: nimble install -y --depsOnly
+        run: bash .github/scripts/nimble-guard.sh nimble install -y --depsOnly
 
       - name: Run the fixed-seed identity fixture
-        run: nimble simulation_identity
+        run: bash .github/scripts/nimble-guard.sh nimble simulation_identity
 
       - name: Upload trace
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
@@ -419,7 +428,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
-        run: nimble install -y --depsOnly
+        run: bash .github/scripts/nimble-guard.sh nimble install -y --depsOnly
 
       - name: Windows parity check
-        run: nimble check_windows
+        run: bash .github/scripts/nimble-guard.sh nimble check_windows
