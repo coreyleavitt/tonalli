@@ -66,11 +66,16 @@ jobs:
           run_jobs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" --paginate \
             | jq -s '[.[].jobs] | add | map(select(.name != "assert-shape"))')
 
-          # a) lint concluded success
+          # a) lint concluded success, and its Repository setup step ran
           lint=$(jq -c '.[] | select(.name == "satellite-call / lint")' <<<"$run_jobs")
           [ -n "$lint" ] || fail "no job named satellite-call / lint"
           [ "$(jq -r '.conclusion' <<<"$lint")" = "success" ] || fail "satellite-call / lint did not conclude success"
           pass "satellite-call / lint concluded success"
+
+          lint_setup=$(jq -c '.steps[]? | select(.name == "Repository setup")' <<<"$lint")
+          [ -n "$lint_setup" ] || fail "lint has no Repository setup step"
+          [ "$(jq -r '.conclusion' <<<"$lint_setup")" = "success" ] || fail "lint's Repository setup step did not conclude success"
+          pass "lint's Repository setup step concluded success"
 
           # b) exactly one test-matrix leg, named for the 2.2.10 ubuntu leg, concluded success
           test_legs=$(jq -c '[.[] | select(.name | startswith("satellite-call / test ("))]' <<<"$run_jobs")
@@ -104,4 +109,4 @@ jobs:
           [ "$(jq -r '.conclusion' <<<"$setup_step")" = "success" ] || fail "Repository setup step did not conclude success"
           pass "test leg's Repository setup step concluded success"
 
-          echo "assert-shape: $checks/5 checks passed"
+          echo "assert-shape: $checks/6 checks passed"
