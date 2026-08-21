@@ -7,13 +7,19 @@ name: Contract probe
 # workflow, since tonalli's own caller never uses these input paths.
 # Expected shape of a green run: lint plus a single test leg execute,
 # with a "Repository setup" step present; every sim, identity, and
-# v3-compat job is skipped.
+# v3-compat job is skipped. The assert-shape job asserts this shape
+# rather than just documenting it.
+#
+# The probe deliberately does not exercise the defaults path: a
+# satellite that forgets its sim/v3-compat overrides fails on missing
+# nimble tasks by design.
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -33,3 +39,69 @@ jobs:
         [
           { "builder": "ubuntu-latest", "platform": "x64" }
         ]
+
+  assert-shape:
+    needs: satellite-call
+    if: always() && needs.satellite-call.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Assert the satellite contract shape
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          fail() {
+            echo "FAIL: $1" >&2
+            exit 1
+          }
+          checks=0
+          pass() {
+            checks=$((checks + 1))
+            echo "PASS: $1"
+          }
+
+          # Exclude this job itself: its conclusion is null while running.
+          run_jobs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" --paginate \
+            | jq -s '[.[].jobs] | add | map(select(.name != "assert-shape"))')
+
+          # a) lint concluded success
+          lint=$(jq -c '.[] | select(.name == "satellite-call / lint")' <<<"$run_jobs")
+          [ -n "$lint" ] || fail "no job named satellite-call / lint"
+          [ "$(jq -r '.conclusion' <<<"$lint")" = "success" ] || fail "satellite-call / lint did not conclude success"
+          pass "satellite-call / lint concluded success"
+
+          # b) exactly one test-matrix leg, named for the 2.2.10 ubuntu leg, concluded success
+          test_legs=$(jq -c '[.[] | select(.name | startswith("satellite-call / test ("))]' <<<"$run_jobs")
+          leg_count=$(jq 'length' <<<"$test_legs")
+          [ "$leg_count" -eq 1 ] || fail "expected exactly one test-matrix leg job, found $leg_count"
+          test_leg=$(jq -c '.[0]' <<<"$test_legs")
+          leg_name=$(jq -r '.name' <<<"$test_leg")
+          [ "$leg_name" = "satellite-call / test (ubuntu-latest, x64, 2.2.10)" ] || fail "test leg has unexpected name: $leg_name"
+          [ "$(jq -r '.conclusion' <<<"$test_leg")" = "success" ] || fail "test leg did not conclude success"
+          pass "exactly one test leg ran, named satellite-call / test (ubuntu-latest, x64, 2.2.10), concluded success"
+
+          # c) v3-compat and Windows parity concluded skipped
+          for name in "satellite-call / test-v3-compat" "satellite-call / Windows parity: semantic check"; do
+            job=$(jq -c --arg name "$name" '.[] | select(.name == $name)' <<<"$run_jobs")
+            [ -n "$job" ] || fail "no job named $name"
+            [ "$(jq -r '.conclusion' <<<"$job")" = "skipped" ] || fail "$name did not conclude skipped"
+          done
+          pass "test-v3-compat and Windows parity: semantic check concluded skipped"
+
+          # d) every simulation job concluded skipped
+          sim_jobs=$(jq -c '[.[] | select(.name | contains("Simulation"))]' <<<"$run_jobs")
+          sim_count=$(jq 'length' <<<"$sim_jobs")
+          [ "$sim_count" -gt 0 ] || fail "no jobs matched *Simulation*; the probe fixture may have changed"
+          non_skipped=$(jq '[.[] | select(.conclusion != "skipped")] | length' <<<"$sim_jobs")
+          [ "$non_skipped" -eq 0 ] || fail "$non_skipped simulation job(s) did not conclude skipped"
+          pass "all $sim_count simulation jobs concluded skipped"
+
+          # e) the test leg ran a Repository setup step that concluded success
+          setup_step=$(jq -c '.steps[]? | select(.name == "Repository setup")' <<<"$test_leg")
+          [ -n "$setup_step" ] || fail "test leg has no Repository setup step"
+          [ "$(jq -r '.conclusion' <<<"$setup_step")" = "success" ] || fail "Repository setup step did not conclude success"
+          pass "test leg's Repository setup step concluded success"
+
+          echo "assert-shape: $checks/5 checks passed"
