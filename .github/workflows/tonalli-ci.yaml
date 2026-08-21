@@ -93,6 +93,10 @@ jobs:
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/914e7df21a07ef503a81201c76d2b11c789d3fca/scripts/download-actionlint.bash) 1.7.12
           ./actionlint -color
 
+      - name: Repository setup
+        if: inputs.setup-command != ''
+        run: ${{ inputs.setup-command }}
+
       - name: Setup Nim
         uses: jiro4989/setup-nim-action@cb1fc1270b117457dd0d9f610ec981fad3369cec  # v2
         with:
@@ -153,11 +157,16 @@ jobs:
 
       - name: Setup Nim (nightlies branch build)
         if: matrix.nightly
+        env:
+          NIM_BRANCH: ${{ matrix.nim }}
         run: |
           url=$(curl -sSf -H "Authorization: Bearer ${{ github.token }}" \
-            "https://api.github.com/repos/nim-lang/nightlies/releases/tags/latest-${{ matrix.nim }}" \
+            "https://api.github.com/repos/nim-lang/nightlies/releases/tags/latest-${NIM_BRANCH}" \
             | jq -r '.assets[] | select(.name | endswith("linux_x64.tar.xz")) | .browser_download_url' | head -n1)
-          test -n "$url"
+          if [ -z "$url" ]; then
+            echo "no linux_x64 nightly asset for Nim branch ${NIM_BRANCH}; nightly legs are linux_x64-only" >&2
+            exit 1
+          fi
           curl -sSfL "$url" -o "$RUNNER_TEMP/nim-nightly.tar.xz"
           mkdir -p "$RUNNER_TEMP/nim-nightly"
           tar xJf "$RUNNER_TEMP/nim-nightly.tar.xz" -C "$RUNNER_TEMP/nim-nightly" --strip-components=1
