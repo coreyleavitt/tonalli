@@ -1,0 +1,35 @@
+name: Contract probe
+
+# Exercises tonalli-ci.yaml exactly the way a satellite repository
+# calls it: sim and v3-compat off, a caller-supplied test matrix and
+# setup/test commands. Manual dispatch only; its job is to prove the
+# workflow_call contract still holds after changes to the reusable
+# workflow, since tonalli's own caller never uses these input paths.
+# Expected shape of a green run: lint plus a single test leg execute,
+# with a "Repository setup" step present; every sim, identity, and
+# v3-compat job is skipped.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  satellite-call:
+    uses: ./.github/workflows/tonalli-ci.yaml
+    with:
+      sim: false
+      v3-compat: false
+      setup-command: |
+        echo "contract-probe: setup-command ran"
+      test-command: |
+        echo "contract-probe: test-command ran"
+      test-matrix: |
+        [
+          { "builder": "ubuntu-latest", "platform": "x64" }
+        ]
