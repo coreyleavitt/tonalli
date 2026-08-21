@@ -47,8 +47,9 @@
 ##   per suite, each child given `"<suite name>::*"` as its sole argument
 ##   — a unittest2 filter that runs only that suite — so isolation is by
 ##   construction (separate processes) rather than by import order. Kept
-##   as a dev convenience now that the nimble task dispatches suites
-##   itself. `orchestrate` also doubles as a unittest2 filter in the
+##   as a desktop-only dev convenience now that the nimble task
+##   dispatches suites itself; mobile builds exclude std/osproc and
+##   reject this mode. `orchestrate` also doubles as a unittest2 filter in the
 ##   parent's own process: no test is named "orchestrate" and it
 ##   contains neither `::` nor `*`, so it matches nothing, and the
 ##   parent's own exit-time test run is an empty no-op that leaves the
@@ -59,11 +60,17 @@
 ##   suites, rather than silently matching nothing. Any other argument
 ##   (not ending in `::*`) still passes straight through to unittest2
 ##   unchanged.
-import std/[os, osproc, strutils]
+import std/[os, strutils]
 import ./testcontextvarsleakguard
 import ./testcontextvarscrossthread
 import ./testcontextvarsrecorderdeath
 import ./testcontextvarslock
+
+when not (defined(android) or defined(ios)):
+  # Orchestrate mode is desktop-only: mobile targets run the per-suite
+  # dispatch, and std/osproc does not compile against the Android NDK's
+  # api-23 bionic (no posix_spawn).
+  import std/osproc
 
 const orchestrateArg = "orchestrate"
 const listArg = "list"
@@ -81,17 +88,23 @@ if paramCount() >= 1 and paramStr(1) == listArg:
   quit(0)
 
 if paramCount() >= 1 and paramStr(1) == orchestrateArg:
-  var allOk = true
-  for suiteName in suiteNames:
-    let child = startProcess(
-      getAppFilename(), args = [suiteName & "::*"], options = {poParentStreams}
-    )
-    let code = waitForExit(child)
-    close(child)
-    echo "[testcontextvarsstandalone] ", suiteName, ": exit ", code
-    if code != 0:
-      allOk = false
-  quit(if allOk: 0 else: 1)
+  when defined(android) or defined(ios):
+    stderr.writeLine(
+      "testcontextvarsstandalone: orchestrate mode is desktop-only; " &
+      "run the suites individually via their \"<suite name>::*\" filters")
+    quit(1)
+  else:
+    var allOk = true
+    for suiteName in suiteNames:
+      let child = startProcess(
+        getAppFilename(), args = [suiteName & "::*"], options = {poParentStreams}
+      )
+      let code = waitForExit(child)
+      close(child)
+      echo "[testcontextvarsstandalone] ", suiteName, ": exit ", code
+      if code != 0:
+        allOk = false
+    quit(if allOk: 0 else: 1)
 
 if paramCount() >= 1 and paramStr(1).endsWith("::*"):
   var known = false
