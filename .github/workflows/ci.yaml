@@ -6,15 +6,15 @@ on:
   pull_request:
   workflow_dispatch:
 
-# The deterministic-simulation jobs (sweep, identity, identity-compare,
-# Windows parity check) live in the standalone simulation.yaml workflow.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
-    uses: status-im/nimbus-common-workflow/.github/workflows/common.yml@main
+  ci:
+    uses: ./.github/workflows/tonalli-ci.yaml
     with:
-      nim-versions: '["version-2-2", "version-2-4", "devel"]'
-      test-command: |
-        nimble install -y libbacktrace
-        nimble test
-        nimble test_libbacktrace
-        nimble examples
+      sim: true

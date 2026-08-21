@@ -1,0 +1,164 @@
+name: Tonalli CI
+
+on:
+  workflow_call:
+    inputs:
+      sim:
+        description: "Run the simulation jobs"
+        default: true
+        required: false
+        type: boolean
+      test-command:
+        description: "Test command(s) run by every test-matrix leg"
+        default: |
+          nimble install -y libbacktrace
+          nimble test
+          nimble test_libbacktrace
+          nimble examples
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+      - name: Setup Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "2.2.10"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: nimble check
+        run: nimble check
+
+  test:
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - builder: ubuntu-latest
+            nim: "2.2.10"
+            platform: x64
+          - builder: macos-latest
+            nim: "2.2.10"
+            platform: arm64
+          - builder: windows-latest
+            nim: "2.2.10"
+            platform: x64
+          - builder: ubuntu-latest
+            nim: "version-2-4"
+            platform: x64
+            canary: true
+            nightly: true
+          - builder: ubuntu-latest
+            nim: "devel"
+            platform: x64
+            canary: true
+          - builder: ubuntu-latest
+            nim: "2.2.10"
+            platform: x86
+            nimflags: "--cpu:i386"
+          - builder: ubuntu-24.04-arm
+            nim: "2.2.10"
+            platform: arm64
+    name: test (${{ matrix.builder }}, ${{ matrix.platform }}, ${{ matrix.nim }})
+    runs-on: ${{ matrix.builder }}
+    continue-on-error: ${{ matrix.canary == true }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - name: Install i386 toolchain
+        if: matrix.platform == 'x86'
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND='noninteractive' apt-get install \
+            --no-install-recommends -yq gcc-multilib g++-multilib libssl-dev:i386
+          mkdir -p external/bin
+          cat << EOF > external/bin/gcc
+          #!/bin/bash
+          exec $(which gcc) -m32 -mno-adx "\$@"
+          EOF
+          cat << EOF > external/bin/g++
+          #!/bin/bash
+          exec $(which g++) -m32 -mno-adx "\$@"
+          EOF
+          chmod 755 external/bin/gcc external/bin/g++
+          echo "${{ github.workspace }}/external/bin" >> "$GITHUB_PATH"
+
+      - name: Setup Nim
+        if: '!matrix.nightly'
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: ${{ matrix.nim }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Nim (nightlies branch build)
+        if: matrix.nightly
+        run: |
+          url=$(curl -sSf -H "Authorization: Bearer ${{ github.token }}" \
+            "https://api.github.com/repos/nim-lang/nightlies/releases/tags/latest-${{ matrix.nim }}" \
+            | jq -r '.assets[] | select(.name | endswith("linux_x64.tar.xz")) | .browser_download_url' | head -n1)
+          test -n "$url"
+          curl -sSfL "$url" -o "$RUNNER_TEMP/nim-nightly.tar.xz"
+          mkdir -p "$RUNNER_TEMP/nim-nightly"
+          tar xJf "$RUNNER_TEMP/nim-nightly.tar.xz" -C "$RUNNER_TEMP/nim-nightly" --strip-components=1
+          echo "$RUNNER_TEMP/nim-nightly/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        run: nimble install -y --depsOnly
+
+      - name: Run tests
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          NIMFLAGS: ${{ matrix.nimflags }}
+        run: |
+          nim --version
+          nimble --version
+          ${{ inputs.test-command }}
+
+  test-v3-compat:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - name: Setup Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "2.2.10"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: nimble install -y --depsOnly
+
+      - name: Run v3 compatibility tests
+        run: nimble test_v3_compat
