@@ -283,11 +283,19 @@ jobs:
       - name: Collect failing-seed traces
         if: failure()
         shell: bash
-        # TEMP is process environment, invisible to the expression env
-        # context, so the path must resolve in the shell.
+        # The temp dir is process environment, invisible to the
+        # expression env context, so the path must resolve in the shell.
+        # Nim's getTempDir() consults TMPDIR/TEMP/TMP/TEMPDIR (POSIX) or
+        # GetTempPath (Windows, TMP first), so scan every candidate
+        # rather than re-deriving one precedence order.
         run: |
           mkdir -p sim-traces
-          cp "${TEMP:-/tmp}/chronos-sim/"*.ndjson sim-traces/ 2>/dev/null || true
+          for dir in "${TMPDIR:-}" "${TMP:-}" "${TEMP:-}" "${TEMPDIR:-}" /tmp; do
+            if [ -n "$dir" ] && [ -d "$dir/chronos-sim" ]; then
+              cp "$dir/chronos-sim/"*.ndjson sim-traces/ 2>/dev/null || true
+            fi
+          done
+          echo "collected $(find sim-traces -name '*.ndjson' | wc -l) trace file(s)"
 
       - name: Upload failing-seed traces
         if: failure()
