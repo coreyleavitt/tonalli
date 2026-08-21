@@ -13,7 +13,7 @@
 ## a hang.
 
 import unittest2
-import std/[os, strutils]
+import std/[exitprocs, os, strutils]
 
 {.used.}
 
@@ -43,10 +43,18 @@ when defined(chronosSimulation) and compileOption("threads"):
     ## side-effecting `seed`/`tracePath` argument expression.
 
   template runProbe(threadProc: typed): ProbeOutcome =
+    ## The enclosing test judges a probe solely by its `ProbeOutcome`.
+    ## A probe that deliberately drives a failing sweep through
+    ## `reportSweep` trips unittest2's `fail` on the probe thread, and
+    ## `fail` sets the process-wide program result even though the
+    ## probe's own test passes - restore the pre-probe value so an
+    ## expected in-probe check failure cannot leak into the exit code.
     var probeThread: Thread[void]
+    let savedResult = getProgramResult()
     createThread(probeThread, threadProc)
     let outcome = probeChan.recv()
     joinThread(probeThread)
+    setProgramResult(savedResult)
     outcome
 
   proc probeEmptyBodyRoundTrips() {.thread.} =
