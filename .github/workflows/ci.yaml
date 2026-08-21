@@ -25,3 +25,8 @@ jobs:
       sim: true
       suite: ${{ github.event_name != 'schedule' }}
       identity: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
+      test-command: |
+        nimble install -y libbacktrace
+        nimble test
+        nimble test_libbacktrace
+        nimble examples
