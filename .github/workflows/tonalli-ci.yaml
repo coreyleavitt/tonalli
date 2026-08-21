@@ -8,13 +8,71 @@ on:
         default: true
         required: false
         type: boolean
+      suite:
+        description: "Run the main suite (lint, test matrix, v3-compat, simulation sweep, Windows parity). Callers translate their events into this."
+        default: true
+        required: false
+        type: boolean
+      identity:
+        description: "Run the cross-platform simulation-identity group"
+        default: false
+        required: false
+        type: boolean
+      v3-compat:
+        description: "Run the v3-compat job. Requires the test_v3_compat nimble task; satellite callers should pass false."
+        default: true
+        required: false
+        type: boolean
+      nim-version:
+        description: "The pinned Nim release used by every non-canary job"
+        default: "2.2.10"
+        required: false
+        type: string
+      setup-command:
+        description: "Optional shell command run in test-matrix legs before toolchain setup, for OS-level dependencies"
+        default: ""
+        required: false
+        type: string
       test-command:
-        description: "Test command(s) run by every test-matrix leg"
+        description: >-
+          Test command(s) run by every test-matrix leg. Spliced verbatim
+          into a shell script, so callers must pass only static, trusted
+          strings, never content derived from pull-request titles, branch
+          names, or other user-controlled data.
         default: |
           nimble install -y libbacktrace
           nimble test
           nimble test_libbacktrace
           nimble examples
+        required: false
+        type: string
+      test-matrix:
+        description: "JSON array for the test job's matrix.include"
+        default: |
+          [
+            { "builder": "ubuntu-latest", "platform": "x64" },
+            { "builder": "macos-latest", "platform": "arm64" },
+            { "builder": "windows-latest", "platform": "x64" },
+            {
+              "builder": "ubuntu-latest",
+              "platform": "x64",
+              "nim": "version-2-4",
+              "canary": true,
+              "nightly": true
+            },
+            {
+              "builder": "ubuntu-latest",
+              "platform": "x64",
+              "nim": "devel",
+              "canary": true
+            },
+            {
+              "builder": "ubuntu-latest",
+              "platform": "x86",
+              "nimflags": "--cpu:i386"
+            },
+            { "builder": "ubuntu-24.04-arm", "platform": "arm64" }
+          ]
         required: false
         type: string
 
@@ -23,7 +81,7 @@ permissions:
 
 jobs:
   lint:
-    if: github.event_name != 'schedule'
+    if: inputs.suite
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -38,44 +96,19 @@ jobs:
       - name: Setup Nim
         uses: jiro4989/setup-nim-action@cb1fc1270b117457dd0d9f610ec981fad3369cec  # v2
         with:
-          nim-version: "2.2.10"
+          nim-version: ${{ inputs.nim-version }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: nimble check
         run: nimble check
 
   test:
-    if: github.event_name != 'schedule'
+    if: inputs.suite
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - builder: ubuntu-latest
-            nim: "2.2.10"
-            platform: x64
-          - builder: macos-latest
-            nim: "2.2.10"
-            platform: arm64
-          - builder: windows-latest
-            nim: "2.2.10"
-            platform: x64
-          - builder: ubuntu-latest
-            nim: "version-2-4"
-            platform: x64
-            canary: true
-            nightly: true
-          - builder: ubuntu-latest
-            nim: "devel"
-            platform: x64
-            canary: true
-          - builder: ubuntu-latest
-            nim: "2.2.10"
-            platform: x86
-            nimflags: "--cpu:i386"
-          - builder: ubuntu-24.04-arm
-            nim: "2.2.10"
-            platform: arm64
-    name: test (${{ matrix.builder }}, ${{ matrix.platform }}, ${{ matrix.nim }})
+        include: ${{ fromJSON(inputs.test-matrix) }}
+    name: test (${{ matrix.builder }}, ${{ matrix.platform }}, ${{ matrix.nim || inputs.nim-version }})
     runs-on: ${{ matrix.builder }}
     continue-on-error: ${{ matrix.canary == true }}
     timeout-minutes: 90
@@ -107,11 +140,15 @@ jobs:
           chmod 755 external/bin/gcc external/bin/g++
           echo "${{ github.workspace }}/external/bin" >> "$GITHUB_PATH"
 
+      - name: Repository setup
+        if: inputs.setup-command != ''
+        run: ${{ inputs.setup-command }}
+
       - name: Setup Nim
         if: '!matrix.nightly'
         uses: jiro4989/setup-nim-action@cb1fc1270b117457dd0d9f610ec981fad3369cec  # v2
         with:
-          nim-version: ${{ matrix.nim }}
+          nim-version: ${{ matrix.nim || inputs.nim-version }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Nim (nightlies branch build)
@@ -139,7 +176,7 @@ jobs:
           ${{ inputs.test-command }}
 
   test-v3-compat:
-    if: github.event_name != 'schedule'
+    if: inputs.suite && inputs.v3-compat
     runs-on: ubuntu-latest
     timeout-minutes: 90
     defaults:
@@ -154,7 +191,7 @@ jobs:
       - name: Setup Nim
         uses: jiro4989/setup-nim-action@cb1fc1270b117457dd0d9f610ec981fad3369cec  # v2
         with:
-          nim-version: "2.2.10"
+          nim-version: ${{ inputs.nim-version }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
@@ -171,7 +208,7 @@ jobs:
     # though: the sim poll loop has a Windows (IOCP) branch, and
     # `check-windows` (below) only proves it type-checks, not that it
     # runs, so this matrix is where it actually executes.
-    if: inputs.sim && github.event_name != 'schedule'
+    if: inputs.sim && inputs.suite
     name: "Simulation sweep (${{ matrix.os }})"
     strategy:
       fail-fast: false
@@ -186,7 +223,7 @@ jobs:
       - name: Setup Nim
         uses: jiro4989/setup-nim-action@cb1fc1270b117457dd0d9f610ec981fad3369cec  # v2
         with:
-          nim-version: "2.2.10"
+          nim-version: ${{ inputs.nim-version }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
@@ -209,11 +246,10 @@ jobs:
   simulation-identity:
     # Invariant 2's cross-platform check: the same seed must produce
     # the same decision log on every platform that can run the sim
-    # dispatcher, POSIX and Windows (IOCP) alike. Runs on manual
-    # dispatch and on the weekly schedule, not on every push.
-    if: >-
-      inputs.sim && (github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule')
+    # dispatcher, POSIX and Windows (IOCP) alike. Gated by inputs.sim
+    # and inputs.identity; the caller decides when this group runs
+    # (manual dispatch, weekly schedule, or otherwise), not this job.
+    if: inputs.sim && inputs.identity
     name: "Simulation identity (${{ matrix.os }})"
     strategy:
       fail-fast: false
@@ -231,7 +267,7 @@ jobs:
       - name: Setup Nim
         uses: jiro4989/setup-nim-action@cb1fc1270b117457dd0d9f610ec981fad3369cec  # v2
         with:
-          nim-version: "2.2.10"
+          nim-version: ${{ inputs.nim-version }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
@@ -247,9 +283,7 @@ jobs:
           path: build/identity-trace.ndjson
 
   simulation-identity-compare:
-    if: >-
-      inputs.sim && (github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule')
+    if: inputs.sim && inputs.identity
     name: "Simulation identity: compare"
     needs: simulation-identity
     runs-on: ubuntu-latest
@@ -275,7 +309,7 @@ jobs:
     # Fast, cheap complement to the `simulation` job's windows-latest
     # leg: semantic-only, so it runs on ubuntu on every push instead of
     # waiting on a Windows runner.
-    if: inputs.sim && github.event_name != 'schedule'
+    if: inputs.sim && inputs.suite
     name: "Windows parity: semantic check"
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -286,7 +320,7 @@ jobs:
       - name: Setup Nim
         uses: jiro4989/setup-nim-action@cb1fc1270b117457dd0d9f610ec981fad3369cec  # v2
         with:
-          nim-version: "2.2.10"
+          nim-version: ${{ inputs.nim-version }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies

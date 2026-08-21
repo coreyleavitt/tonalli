@@ -6,8 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    # Weekly cross-platform simulation-identity run; every other job
-    # skips the schedule event inside tonalli-ci.yaml.
+    # Weekly cross-platform simulation-identity run; the schedule event
+    # runs only the identity group, per the sim/suite/identity mapping
+    # in the `with:` block below.
     - cron: "30 6 * * 1"
 
 permissions:
@@ -22,3 +23,5 @@ jobs:
     uses: ./.github/workflows/tonalli-ci.yaml
     with:
       sim: true
+      suite: ${{ github.event_name != 'schedule' }}
+      identity: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
