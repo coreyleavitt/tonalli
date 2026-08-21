@@ -33,7 +33,15 @@ or add a dependency to your `.nimble` file:
 requires "tonalli"
 ```
 
-and start using it:
+Tonalli requires Nim 2.2.10 or newer; the requirement is enforced at
+compile time. Continuous integration tests Nim 2.2.10 on Linux (x64,
+x86, arm64), macOS (arm64), and Windows (x64), with non-gating canary
+coverage of the version-2-4 and devel branches. Earlier 2.2.x releases
+are excluded deliberately: each miscompiles this codebase (a codegen
+regression in closure iterators in 2.2.0, a compiler crash on an
+idiomatic async pattern in 2.2.2 through 2.2.8).
+
+Start using it:
 
 ```nim
 import tonalli/apps/http/httpclient

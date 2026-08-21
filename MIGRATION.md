@@ -7,6 +7,16 @@ of runtime identity strings; it does not change any behavior. This document
 is the closed reference for consumers updating an existing dependency. It
 supersedes any `chronos*` name not listed as a deliberate exception below.
 
+## Supported Nim versions
+
+Chronos supports Nim 1.6 and newer. Tonalli requires Nim 2.2.10 or
+newer, enforced at compile time: 1.x and 2.0.x are out of scope by
+design, and the earlier 2.2.x releases are excluded because each
+miscompiles this codebase (a closure-iterator codegen regression in
+2.2.0, a compiler crash on an idiomatic async pattern in 2.2.2
+through 2.2.8). A consumer migrating from chronos on an older
+toolchain must update Nim before updating the dependency.
+
 ## Import path and package name
 
 | Old | New |
