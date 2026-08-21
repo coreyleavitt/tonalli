@@ -295,14 +295,22 @@ jobs:
         # rather than re-deriving one precedence order.
         run: |
           mkdir -p sim-traces
+          seen=""
           for dir in "${TMPDIR:-}" "${TMP:-}" "${TEMP:-}" "${TEMPDIR:-}" \
                      "${USERPROFILE:-}" "${WINDIR:-}" /tmp; do
             [ -n "$dir" ] || continue
-            for f in "$dir/chronos-sim/"*.ndjson; do
+            # Windows aliases TMP and TEMP to one directory; dedupe on
+            # the canonical path so one file is not reported twice.
+            canon=$(realpath "$dir" 2>/dev/null) || continue
+            if printf '%s\n' "$seen" | grep -Fxq "$canon"; then
+              continue
+            fi
+            seen="${seen}${canon}"$'\n'
+            for f in "$canon/chronos-sim/"*.ndjson; do
               [ -e "$f" ] || continue
               base=$(basename "$f")
               if [ -e "sim-traces/$base" ]; then
-                echo "duplicate trace name $base under $dir skipped" >&2
+                echo "duplicate trace name $base under $canon skipped" >&2
               else
                 cp "$f" sim-traces/
               fi
@@ -377,7 +385,10 @@ jobs:
         # count guard keeps a shrunken download from passing vacuously.
         run: |
           ref=traces/simulation-identity-ubuntu-latest/identity-trace.ndjson
-          test -f "$ref"
+          if [ ! -f "$ref" ]; then
+            echo "reference trace $ref is missing; the ubuntu identity leg did not upload one" >&2
+            exit 1
+          fi
           count=0
           for trace in traces/simulation-identity-*/identity-trace.ndjson; do
             diff -u "$ref" "$trace"
