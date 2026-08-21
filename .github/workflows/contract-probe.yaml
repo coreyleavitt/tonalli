@@ -109,4 +109,4 @@ jobs:
           [ "$(jq -r '.conclusion' <<<"$setup_step")" = "success" ] || fail "Repository setup step did not conclude success"
           pass "test leg's Repository setup step concluded success"
 
-          echo "assert-shape: $checks/6 checks passed"
+          echo "assert-shape: all $checks checks passed"
