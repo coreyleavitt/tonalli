@@ -4,22 +4,34 @@ on:
   workflow_call:
     inputs:
       sim:
-        description: "Run the simulation jobs"
+        description: >-
+          Gates the simulation jobs, which require tonalli's simulation
+          nimble tasks. Satellite callers should pass false.
         default: true
         required: false
         type: boolean
       suite:
-        description: "Run the main suite (lint, test matrix, v3-compat, simulation sweep, Windows parity). Callers translate their events into this."
+        description: >-
+          Run the main suite (lint, test matrix, v3-compat, simulation
+          sweep, Windows parity). Callers translate their events into
+          this. With suite false, only the identity group can run; suite
+          false with identity false yields a run with no jobs at all,
+          which GitHub reports as passing.
         default: true
         required: false
         type: boolean
       identity:
-        description: "Run the cross-platform simulation-identity group"
+        description: >-
+          Run the cross-platform simulation-identity group. The group
+          also requires sim true.
         default: false
         required: false
         type: boolean
       v3-compat:
-        description: "Run the v3-compat job. Requires the test_v3_compat nimble task; satellite callers should pass false."
+        description: >-
+          Run the v3-compat job. Requires the test_v3_compat nimble
+          task; satellite callers should pass false. The job runs only
+          when suite is also true.
         default: true
         required: false
         type: boolean
@@ -29,7 +41,14 @@ on:
         required: false
         type: string
       setup-command:
-        description: "Optional shell command run in test-matrix legs before toolchain setup, for OS-level dependencies"
+        description: >-
+          Optional shell command that runs before toolchain setup in the
+          lint job and in every test-matrix leg, for OS-level
+          dependencies. Applied identically everywhere; it cannot express
+          per-leg setup. Spliced verbatim into a shell script, so callers
+          must pass only static, trusted strings, never content derived
+          from pull-request titles, branch names, or other user-controlled
+          data, the same trust contract as test-command.
         default: ""
         required: false
         type: string
@@ -47,7 +66,20 @@ on:
         required: false
         type: string
       test-matrix:
-        description: "JSON array for the test job's matrix.include"
+        description: >-
+          JSON array for the test job's matrix.include. Each leg is an
+          object: builder (required, the runner label) and platform
+          (required, exported as PLATFORM) are mandatory; nim (optional,
+          a version or branch name) selects the toolchain, and legs that
+          omit it use nim-version instead; nimflags (optional, exported
+          as NIMFLAGS) is passed through to the test command; canary
+          (optional) marks the leg non-gating; nightly (optional)
+          installs the nim-lang nightlies release build for the leg's
+          nim branch and is linux x64 only. canary and nightly must be
+          JSON booleans, not strings. Leg values are reachable from
+          shell scripts, so the test-command trust contract applies to
+          them as well. An empty array is invalid; disable testing with
+          suite false instead.
         default: |
           [
             { "builder": "ubuntu-latest", "platform": "x64" },
