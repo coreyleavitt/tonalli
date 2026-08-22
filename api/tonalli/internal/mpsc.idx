@@ -1,0 +1,6 @@
+nimTitle	mpsc	tonalli/internal/mpsc.html	module tonalli/internal/mpsc		0
+nim	MpscNode	tonalli/internal/mpsc.html#MpscNode	object MpscNode		21
+nim	MpscQueue	tonalli/internal/mpsc.html#MpscQueue	object MpscQueue		27
+nim	init	tonalli/internal/mpsc.html#init,MpscQueue[T]	proc init[T](q: var MpscQueue[T])		42
+nim	push	tonalli/internal/mpsc.html#push,MpscQueue[T],ptr.T	proc push[T](q: var MpscQueue[T]; node: ptr T)		49
+nim	pop	tonalli/internal/mpsc.html#pop,MpscQueue[T]	proc pop[T](q: var MpscQueue[T]): ptr T		57

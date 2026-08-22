@@ -1,0 +1,49 @@
+nimTitle	futures	tonalli/futures.html	module tonalli/futures		0
+nim	LocationKind	tonalli/futures.html#LocationKind	enum LocationKind		22
+nim	CallbackFunc	tonalli/futures.html#CallbackFunc	type CallbackFunc		28
+nim	InternalAsyncCallback	tonalli/futures.html#InternalAsyncCallback	object InternalAsyncCallback		31
+nim	InternalCancelCallback	tonalli/futures.html#InternalCancelCallback	object InternalCancelCallback		47
+nim	FutureState	tonalli/futures.html#FutureState	enum FutureState		55
+nim	FutureFlag	tonalli/futures.html#FutureFlag	enum FutureFlag		58
+nim	FutureFlags	tonalli/futures.html#FutureFlags	type FutureFlags		74
+nim	InternalFutureBase	tonalli/futures.html#InternalFutureBase	object InternalFutureBase		76
+nim	FutureBase	tonalli/futures.html#FutureBase	type FutureBase		107
+nim	Future	tonalli/futures.html#Future	type Future		110
+nim	FutureDefect	tonalli/futures.html#FutureDefect	object FutureDefect		114
+nim	FutureError	tonalli/futures.html#FutureError	object FutureError		117
+nim	CancelledError	tonalli/futures.html#CancelledError	object CancelledError		120
+nim	function	tonalli/futures.html#function,InternalAsyncCallback	proc function(acb: InternalAsyncCallback): CallbackFunc		133
+nim	udata	tonalli/futures.html#udata,InternalAsyncCallback	proc udata(acb: InternalAsyncCallback): pointer		136
+nim	context	tonalli/futures.html#context,InternalAsyncCallback	proc context(acb: InternalAsyncCallback): ContextNodeBase		139
+nim	function	tonalli/futures.html#function,InternalCancelCallback	proc function(acb: InternalCancelCallback): CallbackFunc		148
+nim	context	tonalli/futures.html#context,InternalCancelCallback	proc context(acb: InternalCancelCallback): ContextNodeBase		151
+nim	currentAsyncContext	tonalli/futures.html#currentAsyncContext	var currentAsyncContext		162
+nim	captureContextInto	tonalli/futures.html#captureContextInto.t,ContextNodeBase	template captureContextInto(dest: var ContextNodeBase)		166
+nim	capturingCallback	tonalli/futures.html#capturingCallback.t,CallbackFunc,pointer	template capturingCallback(fn: CallbackFunc; ud: pointer = nil): InternalAsyncCallback		174
+nim	bareCallback	tonalli/futures.html#bareCallback.t,CallbackFunc,pointer	template bareCallback(fn: CallbackFunc; ud: pointer = nil): InternalAsyncCallback		194
+nim	contextCallback	tonalli/futures.html#contextCallback.t,CallbackFunc,pointer,ContextNodeBase	template contextCallback(fn: CallbackFunc; ud: pointer; ctx: ContextNodeBase): InternalAsyncCallback		206
+nim	capturingCancelCallback	tonalli/futures.html#capturingCancelCallback.t,CallbackFunc	template capturingCancelCallback(fn: CallbackFunc): InternalCancelCallback		216
+nim	withRestoredContext	tonalli/futures.html#withRestoredContext.t,ContextNodeBase,untyped	template withRestoredContext(newCtx: ContextNodeBase; body: untyped)		226
+nim	pinContext	tonalli/futures.html#pinContext.t,untyped	template pinContext(body: untyped)		242
+nim	id	tonalli/futures.html#id.t,FutureBase	template id(fut: FutureBase): uint		253
+nim	internalInitFutureBase	tonalli/futures.html#internalInitFutureBase,FutureBase,ptr.SrcLoc,FutureState,FutureFlags	proc internalInitFutureBase(fut: FutureBase; loc: ptr SrcLoc; state: FutureState;\n                       flags: FutureFlags)		289
+nim	init	tonalli/futures.html#init.t,typeFuture[T],static[string]	template init[T](F: type Future[T]; fromProc: static[string] = ""): Future[T]		344
+nim	init	tonalli/futures.html#init.t,typeFuture[T],static[string],static[FutureFlags]	template init[T](F: type Future[T]; fromProc: static[string] = "";\n        flags: static[FutureFlags]): Future[T]		353
+nim	completed	tonalli/futures.html#completed.t,typeFuture,static[string]	template completed(F: type Future; fromProc: static[string] = ""): Future[void]		364
+nim	completed	tonalli/futures.html#completed.t,typeFuture,T,static[string]	template completed[T: not void](F: type Future; valueParam: T;\n                       fromProc: static[string] = ""): Future[T]		372
+nim	failed	tonalli/futures.html#failed.t,typeFuture[T],ref.CatchableError,static[string]	template failed[T](F: type Future[T]; errorParam: ref CatchableError;\n          fromProc: static[string] = ""): Future[T]		380
+nim	state	tonalli/futures.html#state,FutureBase	proc state(future: FutureBase): FutureState		394
+nim	flags	tonalli/futures.html#flags,FutureBase	proc flags(future: FutureBase): FutureFlags		397
+nim	finished	tonalli/futures.html#finished,FutureBase	proc finished(future: FutureBase): bool		400
+nim	cancelled	tonalli/futures.html#cancelled,FutureBase	proc cancelled(future: FutureBase): bool		406
+nim	failed	tonalli/futures.html#failed,FutureBase	proc failed(future: FutureBase): bool		410
+nim	completed	tonalli/futures.html#completed,FutureBase	proc completed(future: FutureBase): bool		414
+nim	location	tonalli/futures.html#location,FutureBase	proc location(future: FutureBase): array[LocationKind, ptr SrcLoc]		418
+nim	value	tonalli/futures.html#value,Future[T: not void]	proc value[T: not void](future: Future[T]): lent T		421
+nim	value	tonalli/futures.html#value,Future[void]	proc value(future: Future[void])		433
+nim	error	tonalli/futures.html#error,FutureBase	proc error(future: FutureBase): ref CatchableError		443
+nimgrp	context	tonalli/futures.html#context-procs-all	proc		139
+nimgrp	value	tonalli/futures.html#value-procs-all	proc		421
+nimgrp	function	tonalli/futures.html#function-procs-all	proc		133
+nimgrp	completed	tonalli/futures.html#completed-templates-all	template		364
+nimgrp	init	tonalli/futures.html#init-templates-all	template		344

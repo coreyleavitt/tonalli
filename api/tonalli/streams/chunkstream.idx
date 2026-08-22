@@ -1,0 +1,18 @@
+nimTitle	chunkstream	tonalli/streams/chunkstream.html	module tonalli/streams/chunkstream		0
+nim	ChunkedStreamReader	tonalli/streams/chunkstream.html#ChunkedStreamReader	type ChunkedStreamReader		29
+nim	ChunkedStreamWriter	tonalli/streams/chunkstream.html#ChunkedStreamWriter	type ChunkedStreamWriter		33
+nim	ChunkedStreamError	tonalli/streams/chunkstream.html#ChunkedStreamError	object ChunkedStreamError		36
+nim	ChunkedStreamProtocolError	tonalli/streams/chunkstream.html#ChunkedStreamProtocolError	object ChunkedStreamProtocolError		37
+nim	ChunkedStreamIncompleteError	tonalli/streams/chunkstream.html#ChunkedStreamIncompleteError	object ChunkedStreamIncompleteError		38
+nim	hexValue	tonalli/streams/chunkstream.html#hexValue,byte	proc hexValue(c: byte): int		47
+nim	init	tonalli/streams/chunkstream.html#init,ChunkedStreamReader,AsyncStreamReader,ref.T	proc init[T](child: ChunkedStreamReader; rsource: AsyncStreamReader;\n        bufferSize = ChunkBufferSize; udata: ref T)		190
+nim	init	tonalli/streams/chunkstream.html#init,ChunkedStreamReader,AsyncStreamReader	proc init(child: ChunkedStreamReader; rsource: AsyncStreamReader;\n     bufferSize = ChunkBufferSize)		196
+nim	newChunkedStreamReader	tonalli/streams/chunkstream.html#newChunkedStreamReader,AsyncStreamReader,ref.T	proc newChunkedStreamReader[T](rsource: AsyncStreamReader;\n                          bufferSize = AsyncStreamDefaultBufferSize;\n                          udata: ref T): ChunkedStreamReader		203
+nim	newChunkedStreamReader	tonalli/streams/chunkstream.html#newChunkedStreamReader,AsyncStreamReader	proc newChunkedStreamReader(rsource: AsyncStreamReader;\n                       bufferSize = AsyncStreamDefaultBufferSize): ChunkedStreamReader		211
+nim	init	tonalli/streams/chunkstream.html#init,ChunkedStreamWriter,AsyncStreamWriter,ref.T	proc init[T](child: ChunkedStreamWriter; wsource: AsyncStreamWriter;\n        queueSize = AsyncStreamDefaultQueueSize; udata: ref T)		290
+nim	init	tonalli/streams/chunkstream.html#init,ChunkedStreamWriter,AsyncStreamWriter	proc init(child: ChunkedStreamWriter; wsource: AsyncStreamWriter;\n     queueSize = AsyncStreamDefaultQueueSize)		297
+nim	newChunkedStreamWriter	tonalli/streams/chunkstream.html#newChunkedStreamWriter,AsyncStreamWriter,ref.T	proc newChunkedStreamWriter[T](wsource: AsyncStreamWriter;\n                          queueSize = AsyncStreamDefaultQueueSize; udata: ref T): ChunkedStreamWriter		303
+nim	newChunkedStreamWriter	tonalli/streams/chunkstream.html#newChunkedStreamWriter,AsyncStreamWriter	proc newChunkedStreamWriter(wsource: AsyncStreamWriter;\n                       queueSize = AsyncStreamDefaultQueueSize): ChunkedStreamWriter		311
+nimgrp	newchunkedstreamwriter	tonalli/streams/chunkstream.html#newChunkedStreamWriter-procs-all	proc		303
+nimgrp	init	tonalli/streams/chunkstream.html#init-procs-all	proc		190
+nimgrp	newchunkedstreamreader	tonalli/streams/chunkstream.html#newChunkedStreamReader-procs-all	proc		203

@@ -1,0 +1,8 @@
+nimTitle	asyncmacro	tonalli/internal/asyncmacro.html	module tonalli/internal/asyncmacro		0
+nim	await	tonalli/internal/asyncmacro.html#await.t,Future[T]	template await[T](f: Future[T]): T		559
+nim	await	tonalli/internal/asyncmacro.html#await.t,InternalRaisesFuture[T,E]	template await[T, E](fut: InternalRaisesFuture[T, E]): T		581
+nim	awaitne	tonalli/internal/asyncmacro.html#awaitne.t,Future[T]	template awaitne[T](f: Future[T]): Future[T]		604
+nim	async	tonalli/internal/asyncmacro.html#async.m,untyped,untyped	macro async(params, prc: untyped): untyped		612
+nim	async	tonalli/internal/asyncmacro.html#async.m,untyped	macro async(prc: untyped): untyped		622
+nimgrp	async	tonalli/internal/asyncmacro.html#async-macros-all	macro		612
+nimgrp	await	tonalli/internal/asyncmacro.html#await-templates-all	template		559

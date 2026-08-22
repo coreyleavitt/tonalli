@@ -1,0 +1,59 @@
+nimTitle	ipnet	tonalli/transports/ipnet.html	module tonalli/transports/ipnet		0
+nim	IpMask	tonalli/transports/ipnet.html#IpMask	object IpMask		20
+nim	IpNet	tonalli/transports/ipnet.html#IpNet	object IpNet		29
+nim	`==`	tonalli/transports/ipnet.html#==,IpMask,IpMask	proc `==`(m1, m2: IpMask): bool		33
+nim	init	tonalli/transports/ipnet.html#init,typedesc[IpMask],AddressFamily,int	proc init(t: typedesc[IpMask]; family: AddressFamily; prefix: int): IpMask		47
+nim	init	tonalli/transports/ipnet.html#init,typedesc[IpMask],TransportAddress	proc init(t: typedesc[IpMask]; netmask: TransportAddress): IpMask		78
+nim	initIp	tonalli/transports/ipnet.html#initIp,typedesc[IpMask],string	proc initIp(t: typedesc[IpMask]; netmask: string): IpMask		92
+nim	init	tonalli/transports/ipnet.html#init,typedesc[IpMask],string	proc init(t: typedesc[IpMask]; netmask: string): IpMask		104
+nim	toIPv6	tonalli/transports/ipnet.html#toIPv6,TransportAddress	proc toIPv6(address: TransportAddress): TransportAddress		158
+nim	isV4Mapped	tonalli/transports/ipnet.html#isV4Mapped,TransportAddress	proc isV4Mapped(address: TransportAddress): bool		178
+nim	toIPv4	tonalli/transports/ipnet.html#toIPv4,TransportAddress	proc toIPv4(address: TransportAddress): TransportAddress		193
+nim	mask	tonalli/transports/ipnet.html#mask,TransportAddress,IpMask	proc mask(a: TransportAddress; m: IpMask): TransportAddress		213
+nim	prefix	tonalli/transports/ipnet.html#prefix,IpMask	proc prefix(mask: IpMask): int		266
+nim	subnetMask	tonalli/transports/ipnet.html#subnetMask,IpMask	proc subnetMask(mask: IpMask): TransportAddress		306
+nim	`$`	tonalli/transports/ipnet.html#$,IpMask	proc `$`(mask: IpMask; include0x = false): string		320
+nim	ip	tonalli/transports/ipnet.html#ip,IpMask	proc ip(mask: IpMask): string		353
+nim	init	tonalli/transports/ipnet.html#init,typedesc[IpNet],TransportAddress,int	proc init(t: typedesc[IpNet]; host: TransportAddress; prefix: int): IpNet		366
+nim	init	tonalli/transports/ipnet.html#init,typedesc[IpNet],TransportAddress,TransportAddress	proc init(t: typedesc[IpNet]; host, mask: TransportAddress): IpNet		372
+nim	init	tonalli/transports/ipnet.html#init,typedesc[IpNet],TransportAddress,IpMask	proc init(t: typedesc[IpNet]; host: TransportAddress; mask: IpMask): IpNet		380
+nim	init	tonalli/transports/ipnet.html#init,typedesc[IpNet],string	proc init(t: typedesc[IpNet]; network: string): IpNet		386
+nim	`==`	tonalli/transports/ipnet.html#==,IpNet,IpNet	proc `==`(n1, n2: IpNet): bool		438
+nim	contains	tonalli/transports/ipnet.html#contains,IpNet,TransportAddress	proc contains(net: IpNet; address: TransportAddress): bool		451
+nim	broadcast	tonalli/transports/ipnet.html#broadcast,IpNet	proc broadcast(net: IpNet): TransportAddress		460
+nim	subnetMask	tonalli/transports/ipnet.html#subnetMask,IpNet	proc subnetMask(net: IpNet): TransportAddress		482
+nim	network	tonalli/transports/ipnet.html#network,IpNet	proc network(net: IpNet): TransportAddress		486
+nim	`and`	tonalli/transports/ipnet.html#and,TransportAddress,TransportAddress	proc `and`(address1, address2: TransportAddress): TransportAddress		491
+nim	`or`	tonalli/transports/ipnet.html#or,TransportAddress,TransportAddress	proc `or`(address1, address2: TransportAddress): TransportAddress		517
+nim	`not`	tonalli/transports/ipnet.html#not,TransportAddress	proc `not`(address: TransportAddress): TransportAddress		543
+nim	`+`	tonalli/transports/ipnet.html#+,TransportAddress,	proc `+`(address: TransportAddress; v: int | uint): TransportAddress		560
+nim	`-`	tonalli/transports/ipnet.html#-,TransportAddress,	proc `-`(address: TransportAddress; v: int | uint): TransportAddress		610
+nim	inc	tonalli/transports/ipnet.html#inc,TransportAddress,int	proc inc(address: var TransportAddress; v: int = 1)		660
+nim	dec	tonalli/transports/ipnet.html#dec,TransportAddress,int	proc dec(address: var TransportAddress; v: int = 1)		664
+nim	`$`	tonalli/transports/ipnet.html#$,IpNet	proc `$`(net: IpNet): string		668
+nim	isNone	tonalli/transports/ipnet.html#isNone,TransportAddress	proc isNone(address: TransportAddress): bool		696
+nim	isZero	tonalli/transports/ipnet.html#isZero,TransportAddress	proc isZero(address: TransportAddress): bool		701
+nim	isUnspecified	tonalli/transports/ipnet.html#isUnspecified,TransportAddress	proc isUnspecified(address: TransportAddress): bool		715
+nim	isMulticast	tonalli/transports/ipnet.html#isMulticast,TransportAddress	proc isMulticast(address: TransportAddress): bool		719
+nim	isUnicast	tonalli/transports/ipnet.html#isUnicast,TransportAddress	proc isUnicast(address: TransportAddress): bool		733
+nim	isInterfaceLocalMulticast	tonalli/transports/ipnet.html#isInterfaceLocalMulticast,TransportAddress	proc isInterfaceLocalMulticast(address: TransportAddress): bool		744
+nim	isLinkLocalMulticast	tonalli/transports/ipnet.html#isLinkLocalMulticast,TransportAddress	proc isLinkLocalMulticast(address: TransportAddress): bool		756
+nim	isUniqueLocal	tonalli/transports/ipnet.html#isUniqueLocal,TransportAddress	proc isUniqueLocal(address: TransportAddress): bool		768
+nim	isUnicastLinkLocal	tonalli/transports/ipnet.html#isUnicastLinkLocal,TransportAddress	proc isUnicastLinkLocal(address: TransportAddress): bool		780
+nim	isLoopback	tonalli/transports/ipnet.html#isLoopback,TransportAddress	proc isLoopback(address: TransportAddress): bool		798
+nim	isAnyLocal	tonalli/transports/ipnet.html#isAnyLocal,TransportAddress	proc isAnyLocal(address: TransportAddress): bool		813
+nim	isLinkLocal	tonalli/transports/ipnet.html#isLinkLocal,TransportAddress	proc isLinkLocal(address: TransportAddress): bool		828
+nim	isLinkLocalUnicast	tonalli/transports/ipnet.html#isLinkLocalUnicast,TransportAddress	proc isLinkLocalUnicast(address: TransportAddress): bool		842
+nim	isSiteLocal	tonalli/transports/ipnet.html#isSiteLocal,TransportAddress	proc isSiteLocal(address: TransportAddress): bool		845
+nim	isPrivate	tonalli/transports/ipnet.html#isPrivate,TransportAddress	proc isPrivate(address: TransportAddress): bool		861
+nim	isGlobalMulticast	tonalli/transports/ipnet.html#isGlobalMulticast,TransportAddress	proc isGlobalMulticast(address: TransportAddress): bool		865
+nim	isShared	tonalli/transports/ipnet.html#isShared,TransportAddress	proc isShared(address: TransportAddress): bool		880
+nim	isBroadcast	tonalli/transports/ipnet.html#isBroadcast,TransportAddress	proc isBroadcast(address: TransportAddress): bool		893
+nim	isBenchmarking	tonalli/transports/ipnet.html#isBenchmarking,TransportAddress	proc isBenchmarking(address: TransportAddress): bool		905
+nim	isDocumentation	tonalli/transports/ipnet.html#isDocumentation,TransportAddress	proc isDocumentation(address: TransportAddress): bool		924
+nim	isReserved	tonalli/transports/ipnet.html#isReserved,TransportAddress	proc isReserved(address: TransportAddress): bool		943
+nim	isGlobal	tonalli/transports/ipnet.html#isGlobal,TransportAddress	proc isGlobal(address: TransportAddress): bool		960
+nimgrp	==	tonalli/transports/ipnet.html#==-procs-all	proc		33
+nimgrp	$	tonalli/transports/ipnet.html#$-procs-all	proc		320
+nimgrp	init	tonalli/transports/ipnet.html#init-procs-all	proc		47
+nimgrp	subnetmask	tonalli/transports/ipnet.html#subnetMask-procs-all	proc		306

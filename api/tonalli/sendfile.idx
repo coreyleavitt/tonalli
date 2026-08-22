@@ -1,0 +1,2 @@
+nimTitle	sendfile	tonalli/sendfile.html	module tonalli/sendfile		0
+nim	sendfile	tonalli/sendfile.html#sendfile,int,int,int,int	proc sendfile(outfd, infd: int; offset: int; count: var int): int		15

@@ -1,0 +1,63 @@
+nimTitle	asyncengine	tonalli/internal/asyncengine.html	module tonalli/internal/asyncengine		0
+nim	MaxEventsCount	tonalli/internal/asyncengine.html#MaxEventsCount	const MaxEventsCount		70
+nim	ThreadCallbackFunc	tonalli/internal/asyncengine.html#ThreadCallbackFunc	type ThreadCallbackFunc		90
+nim	AsyncCallback	tonalli/internal/asyncengine.html#AsyncCallback	type AsyncCallback		101
+nim	TimerCallback	tonalli/internal/asyncengine.html#TimerCallback	type TimerCallback		103
+nim	TrackerBase	tonalli/internal/asyncengine.html#TrackerBase	type TrackerBase		107
+nim	TrackerCounter	tonalli/internal/asyncengine.html#TrackerCounter	object TrackerCounter		112
+nim	getAsyncTimestamp	tonalli/internal/asyncengine.html#getAsyncTimestamp,Duration	proc getAsyncTimestamp(a: Duration): auto		245
+nim	raiseAsDefect	tonalli/internal/asyncengine.html#raiseAsDefect,ref.Exception,string	proc raiseAsDefect(exc: ref Exception; msg: string)		439
+nim	raiseOsDefect	tonalli/internal/asyncengine.html#raiseOsDefect,OSErrorCode,string	proc raiseOsDefect(error: OSErrorCode; msg = "")		446
+nim	toException	tonalli/internal/asyncengine.html#toException,OSErrorCode	proc toException(v: OSErrorCode): ref OSError		453
+nim	PDispatcher	tonalli/internal/asyncengine.html#PDispatcher	type PDispatcher		513
+nim	AsyncFD	tonalli/internal/asyncengine.html#AsyncFD	type AsyncFD		514
+nim	newDispatcher	tonalli/internal/asyncengine.html#newDispatcher	proc newDispatcher(): PDispatcher		518
+nim	poll	tonalli/internal/asyncengine.html#poll	proc poll()		519
+nim	register2	tonalli/internal/asyncengine.html#register2,AsyncFD	proc register2(fd: AsyncFD): Result[void, OSErrorCode]		526
+nim	unregister2	tonalli/internal/asyncengine.html#unregister2,AsyncFD	proc unregister2(fd: AsyncFD): Result[void, OSErrorCode]		527
+nim	addReader2	tonalli/internal/asyncengine.html#addReader2,AsyncFD,CallbackFunc,pointer	proc addReader2(fd: AsyncFD; cb: CallbackFunc; udata: pointer = nil): Result[void,\n    OSErrorCode]		528
+nim	removeReader2	tonalli/internal/asyncengine.html#removeReader2,AsyncFD	proc removeReader2(fd: AsyncFD): Result[void, OSErrorCode]		530
+nim	addWriter2	tonalli/internal/asyncengine.html#addWriter2,AsyncFD,CallbackFunc,pointer	proc addWriter2(fd: AsyncFD; cb: CallbackFunc; udata: pointer = nil): Result[void,\n    OSErrorCode]		531
+nim	removeWriter2	tonalli/internal/asyncengine.html#removeWriter2,AsyncFD	proc removeWriter2(fd: AsyncFD): Result[void, OSErrorCode]		533
+nim	closeHandle	tonalli/internal/asyncengine.html#closeHandle,AsyncFD,CallbackFunc	proc closeHandle(fd: AsyncFD; aftercb: CallbackFunc = nil)		534
+nim	closeSocket	tonalli/internal/asyncengine.html#closeSocket,AsyncFD,CallbackFunc	proc closeSocket(fd: AsyncFD; aftercb: CallbackFunc = nil)		535
+nim	unregisterAndCloseFd	tonalli/internal/asyncengine.html#unregisterAndCloseFd,AsyncFD	proc unregisterAndCloseFd(fd: AsyncFD): Result[void, OSErrorCode]		536
+nim	contains	tonalli/internal/asyncengine.html#contains,PDispatcher,AsyncFD	proc contains(disp: PDispatcher; fd: AsyncFD): bool		537
+nim	`==`	tonalli/internal/asyncengine.html#==,AsyncFD,AsyncFD	proc `==`(x: AsyncFD; y: AsyncFD): bool		539
+nim	setThreadDispatcher	tonalli/internal/asyncengine.html#setThreadDispatcher,PDispatcher	proc setThreadDispatcher(disp: PDispatcher)		2326
+nim	getThreadDispatcher	tonalli/internal/asyncengine.html#getThreadDispatcher	proc getThreadDispatcher(): PDispatcher		2332
+nim	setGlobalDispatcher	tonalli/internal/asyncengine.html#setGlobalDispatcher,PDispatcher	proc setGlobalDispatcher(disp: PDispatcher)		2397
+nim	getGlobalDispatcher	tonalli/internal/asyncengine.html#getGlobalDispatcher	proc getGlobalDispatcher(): PDispatcher		2401
+nim	setTimer	tonalli/internal/asyncengine.html#setTimer,Moment,CallbackFunc,pointer	proc setTimer(at: Moment; cb: CallbackFunc; udata: pointer = nil): TimerCallback		2405
+nim	clearTimer	tonalli/internal/asyncengine.html#clearTimer,TimerCallback	proc clearTimer(timer: TimerCallback)		2416
+nim	addTimer	tonalli/internal/asyncengine.html#addTimer,Moment,CallbackFunc,pointer	proc addTimer(at: Moment; cb: CallbackFunc; udata: pointer = nil)		2421
+nim	addTimer	tonalli/internal/asyncengine.html#addTimer,int64,CallbackFunc,pointer	proc addTimer(at: int64; cb: CallbackFunc; udata: pointer = nil)		2427
+nim	addTimer	tonalli/internal/asyncengine.html#addTimer,uint64,CallbackFunc,pointer	proc addTimer(at: uint64; cb: CallbackFunc; udata: pointer = nil)		2431
+nim	removeTimer	tonalli/internal/asyncengine.html#removeTimer,Moment,CallbackFunc,pointer	proc removeTimer(at: Moment; cb: CallbackFunc; udata: pointer = nil)		2435
+nim	removeTimer	tonalli/internal/asyncengine.html#removeTimer,int64,CallbackFunc,pointer	proc removeTimer(at: int64; cb: CallbackFunc; udata: pointer = nil)		2457
+nim	removeTimer	tonalli/internal/asyncengine.html#removeTimer,uint64,CallbackFunc,pointer	proc removeTimer(at: uint64; cb: CallbackFunc; udata: pointer = nil)		2461
+nim	callSoon	tonalli/internal/asyncengine.html#callSoon,InternalAsyncCallback	proc callSoon(acb: AsyncCallback)		2465
+nim	callSoon	tonalli/internal/asyncengine.html#callSoon,CallbackFunc,pointer	proc callSoon(cbproc: CallbackFunc; udata: pointer = nil)		2474
+nim	DispatcherHandle	tonalli/internal/asyncengine.html#DispatcherHandle	type DispatcherHandle		2481
+nim	handle	tonalli/internal/asyncengine.html#handle,PDispatcher	proc handle(disp: PDispatcher): DispatcherHandle		2494
+nim	callSoon	tonalli/internal/asyncengine.html#callSoon,DispatcherHandle,ThreadCallbackFunc,pointer	proc callSoon(disp: DispatcherHandle; cbproc: ThreadCallbackFunc;\n         udata: pointer = nil)		2583
+nim	callIdle	tonalli/internal/asyncengine.html#callIdle,InternalAsyncCallback	proc callIdle(acb: AsyncCallback)		2594
+nim	callIdle	tonalli/internal/asyncengine.html#callIdle,CallbackFunc,pointer	proc callIdle(cbproc: CallbackFunc; data: pointer)		2606
+nim	callIdle	tonalli/internal/asyncengine.html#callIdle,CallbackFunc	proc callIdle(cbproc: CallbackFunc)		2616
+nim	internalCallTick	tonalli/internal/asyncengine.html#internalCallTick,InternalAsyncCallback	proc internalCallTick(acb: AsyncCallback)		2619
+nim	internalCallTick	tonalli/internal/asyncengine.html#internalCallTick,CallbackFunc,pointer	proc internalCallTick(cbproc: CallbackFunc; data: pointer)		2629
+nim	internalCallTick	tonalli/internal/asyncengine.html#internalCallTick,CallbackFunc	proc internalCallTick(cbproc: CallbackFunc)		2637
+nim	runForever	tonalli/internal/asyncengine.html#runForever	proc runForever()		2640
+nim	addTracker	tonalli/internal/asyncengine.html#addTracker,string,T	proc addTracker[T](id: string; tracker: T)		2646
+nim	getTracker	tonalli/internal/asyncengine.html#getTracker,string	proc getTracker(id: string): TrackerBase		2652
+nim	trackCounter	tonalli/internal/asyncengine.html#trackCounter,string	proc trackCounter(name: string)		2657
+nim	untrackCounter	tonalli/internal/asyncengine.html#untrackCounter,string	proc untrackCounter(name: string)		2662
+nim	getTrackerCounter	tonalli/internal/asyncengine.html#getTrackerCounter,string	proc getTrackerCounter(name: string): TrackerCounter		2667
+nim	isCounterLeaked	tonalli/internal/asyncengine.html#isCounterLeaked,string	proc isCounterLeaked(name: string): bool		2672
+nim	trackerCounters	tonalli/internal/asyncengine.html#trackerCounters.i,PDispatcher	iterator trackerCounters(loop: PDispatcher): tuple[name: string, value: TrackerCounter]		2679
+nim	trackerCounterKeys	tonalli/internal/asyncengine.html#trackerCounterKeys.i,PDispatcher	iterator trackerCounterKeys(loop: PDispatcher): string		2688
+nimgrp	removetimer	tonalli/internal/asyncengine.html#removeTimer-procs-all	proc		2435
+nimgrp	callsoon	tonalli/internal/asyncengine.html#callSoon-procs-all	proc		2465
+nimgrp	callidle	tonalli/internal/asyncengine.html#callIdle-procs-all	proc		2594
+nimgrp	internalcalltick	tonalli/internal/asyncengine.html#internalCallTick-procs-all	proc		2619
+nimgrp	addtimer	tonalli/internal/asyncengine.html#addTimer-procs-all	proc		2421

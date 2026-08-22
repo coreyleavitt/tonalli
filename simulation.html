@@ -1,0 +1,879 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Deterministic simulation - Tonalli</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="./open-in.css">
+        <link rel="stylesheet" href="./mdbook-admonish.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Tonalli</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/coreyleavitt/tonalli/" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="deterministic-simulation"><a class="header" href="#deterministic-simulation">Deterministic simulation</a></h1>
+<p>The simulation substrate lets a test run tonalli's event loop over a
+seeded, injectable source of nondeterminism instead of the real clock,
+selector, and network stack. A failing interleaving becomes a seed: one
+number that reproduces the same run, in milliseconds, on any machine,
+instead of an intermittent CI flake that takes days to corner.</p>
+<ul>
+<li><a href="#usage">Usage</a></li>
+<li><a href="#simulate-simulatewith-simulatereplay-simulatereplaywith"><code>simulate</code>, <code>simulateWith</code>, <code>simulateReplay</code>, <code>simulateReplayWith</code></a></li>
+<li><a href="#sweepseeds"><code>sweepSeeds</code></a></li>
+<li><a href="#oracles">Oracles</a></li>
+<li><a href="#simnet-and-datagram-pairs"><code>SimNet</code> and datagram pairs</a></li>
+<li><a href="#simproducer-arrival-actors-without-threads"><code>simProducer</code>: arrival actors without threads</a></li>
+<li><a href="#faults">Faults</a></li>
+<li><a href="#ghost-ledgers">Ghost ledgers</a></li>
+<li><a href="#barrier-list">Barrier list</a></li>
+<li><a href="#performance">Performance</a></li>
+<li><a href="#surfaces-that-need-no-seam">Surfaces that need no seam</a></li>
+<li><a href="#tests">Tests</a></li>
+</ul>
+<blockquote>
+<p><strong>Fork-only, experimental API.</strong> This substrate is not part of
+upstream chronos and is not intended to be upstreamed: it is
+infrastructure for testing tonalli itself and the projects built on
+this fork, gated entirely behind the <code>chronosSimulation</code> define. With
+the define undefined, none of it exists in a compiled binary --
+<code>tonalli.nim</code>'s export surface, every real-mode call site, and every
+benchmark are unaffected (see <a href="#performance">Performance</a>). With the
+define on, the API is still young: it grew slice by slice against the
+tests that needed it (RFC 0003), several corners named throughout this
+page are honest gaps rather than oversights, and shapes here can still
+change between fork releases without a deprecation cycle. Nothing here
+is a stability promise the way the rest of this book's user guide is.</p>
+</blockquote>
+<h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
+<pre><code class="language-nim">import tonalli
+import tonalli/simulation
+
+test "a byte written on one side of a sim pair reaches the other":
+  simulate(seed = 1'u64):
+    let net = simNet()
+    let server = net.listenStream(initTAddress("127.0.0.1:1"))
+    let clientFut = net.connectStream(initTAddress("127.0.0.1:1"))
+    let serverSide = await server.accept()
+    let client = await clientFut
+    discard await client.write(@[1'u8, 2, 3])
+    var buf: array[3, byte]
+    await serverSide.readExactly(addr buf[0], 3)
+    check buf == [1'u8, 2, 3]
+</code></pre>
+<p><code>readExactly</code>, not a single <code>read</code>, is deliberate here: <code>RandomOracle</code>
+can complete <code>write</code>/<code>read</code> short (the same sim analogue of a real
+partial socket operation <code>decideIo</code> models, see
+<a href="#oracles">Oracles</a>), so a fixed seed's single <code>read</code> call is not
+guaranteed to return all three bytes in one step. <code>readExactly</code> already
+retries until it has what it asked for, the same as it does against a
+real socket, so the example holds for any seed. This is also why the
+top-level example above uses a stream pair rather than a datagram pair:
+a live datagram endpoint's write can draw a partial byte count under
+<code>RandomOracle</code> too, a recorded gap (<a href="#faults">Faults</a>'s neighboring
+section notes it), and unlike a stream read there is no <code>readExactly</code>
+equivalent for a message-oriented datagram - a short datagram read is
+simply a truncated message, matching what a real <code>recvfrom()</code> into an
+undersized buffer would do.</p>
+<p>A <code>simulate</code> body is ordinary async tonalli code: <code>await</code>, combinators,
+<code>AsyncQueue</code>/<code>AsyncLock</code>/etc. (see <a href="#surfaces-that-need-no-seam">Surfaces that need no
+seam</a>), and any transport built on top of a
+<code>SimNet</code> endpoint all work unmodified. What changes underneath is where
+nondeterminism comes from: the clock, the readiness/arrival delivery
+order, and I/O outcomes are all decided by an oracle instead of the real
+OS, and every decision is logged.</p>
+<h2 id="simulate-simulatewith-simulatereplay-simulatereplaywith"><a class="header" href="#simulate-simulatewith-simulatereplay-simulatereplaywith"><code>simulate</code>, <code>simulateWith</code>, <code>simulateReplay</code>, <code>simulateReplayWith</code></a></h2>
+<pre><code class="language-nim">type
+  SimRunOptions* = object
+    decisionBudget: int
+    timeBudget: Duration
+    ledger: bool
+    oracle: Option[SimOracle]
+
+proc simOptions*(decisionBudget = simulateDefaultDecisionBudget,
+                  timeBudget = simulateDefaultTimeBudget,
+                  ledger = false,
+                  oracle = none(SimOracle)): SimRunOptions
+
+template simulate*(seed: uint64, body: untyped): untyped
+template simulateWith*(seed: uint64, opts: SimRunOptions,
+                        body: untyped): untyped
+template simulateReplay*(tracePath: string, body: untyped): untyped
+template simulateReplayWith*(tracePath: string, opts: SimRunOptions,
+                              body: untyped): untyped
+</code></pre>
+<p><code>simulate</code> runs <code>body</code> to completion on a fresh, hermetic simulated
+dispatcher driven by <code>RandomOracle(seed)</code>, then restores the calling
+thread's real dispatcher, whether <code>body</code> completed, raised, or the
+simulation itself failed. It nests inside an existing <code>test</code>/<code>asyncTest</code>
+block, or runs bare in a script to replay one seed's trace by hand.</p>
+<p>Every run carries a decision budget (<code>simulateDefaultDecisionBudget</code>,
+10 000: every oracle <code>decide*</code> call counts, which also bounds a
+partial-write retry spin inside one callback) and a virtual-time budget
+(<code>simulateDefaultTimeBudget</code>, one hour of virtual time). Exhausting
+either is a distinct, named failure ("livelock: decision budget
+exhausted..." / "livelock: virtual-time budget exhausted..."), separate
+from quiescence deadlock ("deadlock: no runnable work" -- a body
+awaiting a future nothing will ever complete).</p>
+<p><code>simulateWith(seed, opts): body</code> is <code>simulate</code> with every optional knob
+<code>opts</code> carries: <code>decisionBudget</code>/<code>timeBudget</code> override the defaults,
+<code>ledger</code> additionally checks the D8 ghost-ledger conservation laws
+(callback, future, contextvar, timer, and waiter conservation -- see
+<a href="#ghost-ledgers">Ghost ledgers</a>) at every step boundary and at teardown,
+and <code>oracle</code>, if <code>some</code>, drives the run with a caller-scripted
+<code>SimOracle</code> (<a href="#oracles">Oracles</a>) instead of <code>RandomOracle(seed)</code> --
+the harness-level escape hatch for a test that scripts a specific
+interleaving or fault, still getting every harness guarantee (restore-
+on-any-outcome, decision/time budgets, trace recording, typed
+<code>SimulationError</code> classification) instead of hand-rolling a throwaway
+<code>newSimDispatcher</code>/<code>setThreadDispatcher</code> pair on its own thread and
+losing all of them. <code>opts</code> comes from <code>simOptions</code>, an ordinary proc
+that resolves its own defaults -- <code>simOptions</code> is <code>SimRunOptions</code>'s sole
+constructor, its fields private outside <code>tonalli/simulation.nim</code>, so a
+caller cannot bypass it and construct a <code>SimRunOptions</code> literal with
+some fields silently zero-filled -- <code>simulateWith(1'u64, simOptions( decisionBudget = 500)): body</code> overrides one field and leaves the rest
+at their defaults. <code>simOptions</code>/<code>SimRunOptions</code> fold what used to be
+five separate templates (<code>simulateWithBudget</code>/<code>simulateWithLedger</code>/
+<code>simulateWithBudgetAndLedger</code>/<code>simulateWithOracle</code>, plus the
+<code>sweepSeedsWith*</code> siblings below) into one: a review round found the
+split family left six of the budget/ledger/oracle matrix's twelve cells
+unreachable (only <code>RandomOracle</code> ever got budget <em>and</em> ledger <em>and</em> a
+choice of oracle together), because <code>simulateWithOracle</code>/<code>simulateReplay</code>
+each hardcoded the plain defaults with no way to also override a budget
+or turn on the ledger. <code>simulateWith</code> is not an overload of <code>simulate</code>
+sharing its name, and <code>opts</code> is a single pre-resolved value rather than
+<code>decisionBudget</code>/<code>timeBudget</code>/<code>ledger</code>/<code>oracle</code> as <code>simulateWith</code>'s own
+defaulted parameters: on the pinned Nim 2.2.10 toolchain, both a same-
+named overload and <em>any</em> defaulted parameter ahead of a trailing
+<code>untyped</code> body miscompile <code>await</code> inside <code>body</code> the moment a caller
+omits it (standalone-reproduced, not specific to this module) -- which
+is why every <code>simulate*</code>/<code>sweepSeeds*</code> template has its own fixed arity,
+and why the family's only defaulted parameters live on <code>simOptions</code>, a
+plain proc that resolves every default before the surrounding template
+call ever sees the result.</p>
+<p>A failing run raises <code>SimulationError</code>, carrying <code>kind: SimFailureKind</code>
+(<code>BodyError</code>, <code>BarrierHit</code>, <code>Deadlock</code>, <code>OracleDeferral</code>,
+<code>ProtocolViolation</code>, <code>DecisionBudgetExhausted</code>, <code>TimeBudgetExhausted</code>),
+<code>seed</code>, and <code>tracePath</code> -- the decision log's path under
+<code>getTempDir() / "chronos-sim" / "seed-&lt;seed&gt;.ndjson"</code>. A raising body's
+own exception is unwrapped as <code>.parent</code>. The seed banner
+(<code>[chronos-sim] seed=... trace=...</code>) is written and flushed before the
+body runs, so even a process-fatal <code>Defect</code> escaping a run is
+attributable to its seed from stray output alone. <code>opts.ledger</code>
+additionally raises <code>SimLedgerError</code> on a conservation-law violation, a
+distinct type from <code>SimulationError</code>, so a caller distinguishes a
+ledger violation from a body failure, an oracle error, or a barrier hit
+by type, never by string-matching a message; ledger checking is opt-in,
+not <code>simulate</code>'s default behavior, because it depends on instrumentation
+coverage that is not exhaustive over every producer in the codebase
+(see <a href="#ghost-ledgers">Ghost ledgers</a>).</p>
+<p><code>simulateReplay</code> replays a previously recorded trace (see
+<a href="#oracles">Oracles</a>'s <code>ReplayOracle</code> for what "replay" means): <code>body</code>
+must be the same code that produced the trace, and the run is
+attributed to the seed recorded in the trace's own header, not any
+seed the caller has to hand -- a replay has no seed of its own to
+offer, and the header's is the only honest answer. The decision/time
+budgets default to the ones <em>recorded in the trace's own header</em>, not
+this module's global defaults: a trace recorded under a tighter budget
+replays under that same tighter budget. This matters because the
+budget-tripping decision itself is never in the trace -- the run
+raised before recording one more line -- so a replay driven by the
+wrong (looser, global-default) budget runs past where the recording
+stopped, exhausts the trace's own recorded decisions, and misreports
+the true <code>DecisionBudgetExhausted</code>/<code>TimeBudgetExhausted</code> as a
+<code>ProtocolViolation</code> (replay exhaustion is itself an oracle error,
+converted the same way any other oracle error is). Ledger checking is
+off by default for a replay, the same as for <code>simulate</code>; see
+<code>simulateReplayWith</code> below to enable it. <code>simulateReplayWith (tracePath, opts): body</code> overrides this default the same way
+<code>simulateWith</code> overrides <code>simulate</code>'s: an explicit <code>opts.decisionBudget</code>/
+<code>opts.timeBudget</code>/<code>opts.ledger</code> always wins over the recorded header.
+<code>opts.oracle</code> must stay <code>none</code> for a replay -- the run always drives
+from the trace's own <code>ReplayOracle</code>, never a caller-supplied one, so a
+<code>some</code> here is refused with a <code>doAssert</code> rather than silently ignored.
+A divergent decision sequence surfaces the same way any other oracle
+error does: a <code>SimulationError</code> with <code>kind == SimFailureKind.ProtocolViolation</code>.</p>
+<p><strong>Trace format and version.</strong> The ndjson header (<code>tonalli/internal/ simtrace.nim</code>'s <code>renderHeaderLine</code>/<code>parseSimTraceHeader</code>) is versioned
+(<code>simTraceVersion</code>); <code>readSimTrace</code> refuses a trace whose header version
+does not match the reading build's, rather than guessing at a schema it
+was not built against. The header carries <code>decisionBudget</code>/
+<code>timeBudgetNanoseconds</code> alongside the seed, commit, and config fields --
+added at version 2, the source <code>simulateReplay</code> reads the recorded
+budgets from. Bumping the version changes the header's required keys
+only; the decision-record digest grammar (RFC 0003 3.3) is unchanged, so
+a version bump never invalidates a recorded digest's meaning, only a
+trace's readability by an older/newer build. A pre-version-2 trace is
+refused outright rather than read with an assumed default budget -- an
+accepted pre-release break (the format has no external readers yet),
+not a migration this fork carries.</p>
+<h2 id="sweepseeds"><a class="header" href="#sweepseeds"><code>sweepSeeds</code></a></h2>
+<pre><code class="language-nim">template sweepSeeds*(seeds: Slice[uint64], body: untyped): seq[SimSeedOutcome]
+template sweepSeedsWith*(seeds: Slice[uint64], opts: SimRunOptions,
+                          body: untyped): seq[SimSeedOutcome]
+proc collectSweepSeeds*(seeds: Slice[uint64], decisionBudget: int,
+                         timeBudget: Duration,
+                         body: proc(): Future[void] {.gcsafe.},
+                         ledger: bool = false):
+    seq[SimSeedOutcome]
+</code></pre>
+<p><code>sweepSeeds</code> runs <code>body</code> once per seed in <code>seeds</code>, each on its own fresh
+hermetic dispatcher, and reports the aggregate the way
+<code>unittest2</code>/<code>asynctests.nim</code>'s <code>checkLeaks</code> idiom does: a <code>checkpoint</code>
+per failing seed (seed, kind, message, trace path), so a green sweep of
+a hundred seeds stays quiet, then one <code>check</code> at the end that fails the
+enclosing test once -- never once per seed -- if any seed did. Every
+seed in the range runs regardless of its siblings' outcomes, so a
+multi-seed bug never hides behind the first failure. <code>sweepSeedsWith (seeds, opts): body</code> is <code>sweepSeeds</code> with <code>opts.decisionBudget</code>/
+<code>opts.timeBudget</code> (<code>simOptions</code>, as <code>simulateWith</code>'s) overriding the
+per-seed defaults, and <code>opts.ledger</code> checking RFC 0003 3.9's ghost-
+ledger conservation laws over every seed in the sweep, the same laws
+<code>simulateWith(seed, simOptions(ledger = true))</code> checks for a single
+run: a violating seed's <code>SimSeedOutcome</code> is that seed's own failure,
+classified <code>SimSeedFailureKind.Ledger</code>, never a process-ending raise --
+its non-violating siblings still pass alongside it. <code>opts.oracle</code> must
+stay <code>none</code>: each seed in a sweep drives its own <code>RandomOracle(seed)</code>,
+so a single caller-supplied oracle shared across every seed is refused
+with a <code>doAssert</code> rather than silently ignored, the same discipline
+<code>simulateReplayWith</code> applies to its own oracle field.</p>
+<p><code>SimSeedOutcome</code> is a plain value the sweep produces, never parsed back
+out of a message string:</p>
+<pre><code class="language-nim">type
+  SimSeedFailureKind* {.pure.} = enum
+    Engine
+    Ledger
+
+  SimSeedOutcome* = object
+    seed*: uint64
+    tracePath*: string
+    case passed*: bool
+    of true:
+      discard
+    of false:
+      msg*: string
+      case failureKind*: SimSeedFailureKind
+      of SimSeedFailureKind.Engine:
+        kind*: SimFailureKind
+      of SimSeedFailureKind.Ledger:
+        discard
+</code></pre>
+<p><code>failureKind</code> distinguishes the two by type, the same way a raised
+<code>SimulationError</code>/<code>SimLedgerError</code> already is: <code>Engine</code> names a
+<code>SimulationError</code>-shaped failure and carries <code>kind</code>; <code>Ledger</code> names a
+<code>SimLedgerError</code> and carries no <code>kind</code> at all -- the field exists only
+under the <code>Engine</code> arm, so reading it on a <code>Ledger</code> outcome raises
+<code>FieldDefect</code> at the access instead of returning a stale zero value
+guarded by nothing but prose. Check <code>failureKind</code> first, the way
+<code>reportSweep</code> does.</p>
+<p><code>collectSweepSeeds</code> is the aggregation loop on its own, with no
+<code>unittest2</code> dependency, for a caller that wants the raw outcomes without
+<code>sweepSeeds</code>'s own reporting (or a different report entirely).
+<code>ledger</code> (default <code>false</code>, so every pre-existing caller is
+unaffected) turns on ghost-ledger checking for every seed, the same
+flag <code>runSimulation</code> threads through the single-run harness.</p>
+<h2 id="oracles"><a class="header" href="#oracles">Oracles</a></h2>
+<pre><code class="language-nim">proc RandomOracle*(seed: uint64): SimOracle
+proc newSimOracle*(decideBatch: proc(cp: SelectBatchPoint): ...,
+                    decideIo: proc(cp: IoOutcomePoint): ...,
+                    decideTime: proc(cp: TimeAdvancePoint): ...): SimOracle
+proc ReplayOracle*(path: string): SimOracle
+</code></pre>
+<p>An oracle answers exactly three choice points -- <code>decideBatch</code> (which
+pending readiness/arrival events to deliver, and in what order),
+<code>decideIo</code> (how one I/O operation resolves: full, partial, or a fault),
+and <code>decideTime</code> (how far to advance the virtual clock when nothing else
+is runnable) -- through <code>newSimOracle</code>'s constructor, the only way to
+build a <code>SimOracle</code>: partial construction would let an older wrapper
+compile with a new choice point silently nil, crashing at the first call
+instead of failing per-seed, so the constructor forces every field
+explicit.</p>
+<p>Each <code>IoOutcomePoint</code> a live <code>decideIo</code> call receives carries a
+<code>trigger: SimEventId</code> -- the readiness event whose delivery is firing
+the callback issuing this I/O, letting a decision log answer "which
+event caused this read or write" instead of only "what did it decide".
+<code>SimEventId(0)</code> is the honest "not triggered by a readiness delivery"
+value: I/O the body issues on its own, outside any delivered callback,
+carries it, and it can never collide with a real event id (the engine
+mints event ids starting at 1). The correlation is per fd and per direction,
+not per call stack: it names the last readiness delivery for that
+fd/direction, so an I/O call a callback makes for reasons other than the
+delivery that woke it (a retry loop, or code running outside the
+callback the delivery armed) still reports that delivery's id rather
+than losing the correlation.</p>
+<p><strong><code>RandomOracle(seed)</code></strong> is what <code>simulate</code>/<code>sweepSeeds</code> use: the same
+seed produces the same decisions on every run (a self-contained
+<code>splitmix64</code> generator, never <code>std/random</code>'s global state). It shuffles
+deliverable events into a random legal order, draws a uniform byte count
+in <code>1..maxBytes</code> for <code>decideIo</code> (full completion is one of the possible
+draws, not a separate case), and advances to the earliest armed deadline
+for <code>decideTime</code> -- randomizing among armed deadlines, or synthesizing
+faults, is exploration-oracle territory (tracker issue #10), out of
+scope here.</p>
+<p><strong>A scripted oracle</strong> is any <code>SimOracle</code> built from hand-written
+closures, typically fixing two of the three choice points to
+<code>defaultDecideBatch</code>/<code>defaultDecideIo</code>/<code>defaultDecideTime</code> (each
+exported for exactly this reuse) and overriding the third to script a
+specific interleaving or fault. This is how the sim substrate's own
+test suite exercises slices ahead of a live producer, and how a test
+targeting one specific bug (a reset at a specific point in a stream, an
+out-of-order datagram) scripts the exact conditions that reproduce it,
+without waiting on <code>RandomOracle</code> to find them by chance.
+<code>simulateWith(seed, simOptions(oracle = some(oracle))): body</code> drives one
+through the full harness -- restore-on-any-outcome, decision/time
+budgets, trace recording, typed <code>SimulationError</code> classification --
+instead of the scripted oracle's test having to hand-roll a throwaway
+<code>newSimDispatcher</code>/<code>setThreadDispatcher</code> pair on its own thread and
+lose all of them. With <code>opts.oracle</code> set, <code>seed</code> no longer drives any
+decision -- the scripted oracle owns every one -- and only selects the
+trace path (<code>simTracePath(seed)</code>) and the seed a <code>SimulationError</code>
+attributes the run to; two scripted-oracle tests sharing a seed share a
+trace file, so pick distinct seeds to keep each test's trace separate.</p>
+<p><strong><code>ReplayOracle(path)</code></strong>, constructed from a recorded trace, verifies
+each live choice point's digest against the next recorded one (the
+<code>digestOf</code> function shared with the trace writer, so "digest mismatch"
+cannot mean two different things between the two) and returns the
+recorded decision. A version-mismatched trace is refused at
+construction; a live digest diverging from the recording surfaces as a
+structured <code>SimOracleError</code> carrying the expected and actual digest,
+never a silent wrong decision. <code>simulateReplay(tracePath): body</code> (RFC
+0003 section 3.8's sketch) wires one through the full harness the same
+way <code>simulateWith(opts.oracle = some(...))</code> does, attributed to the
+seed recorded in the trace's own header rather than any seed the caller
+has to hand:</p>
+<pre><code class="language-nim">simulateReplay("build/simtraces/seed-0xC0FFEE.ndjson"):
+  ... # same body, driven by ReplayOracle over the recorded log instead
+      # of RandomOracle over a seed
+</code></pre>
+<p>A divergence surfaces through the harness the same way any other oracle
+error does: a <code>SimulationError</code> with <code>kind == SimFailureKind.ProtocolViolation</code>, never a silent wrong decision.</p>
+<h2 id="simnet-and-datagram-pairs"><a class="header" href="#simnet-and-datagram-pairs"><code>SimNet</code> and datagram pairs</a></h2>
+<pre><code class="language-nim">proc simNet*(): SimNet
+proc listenStream*(net: SimNet, address: TransportAddress): SimStreamServer
+proc accept*(server: SimStreamServer): Future[StreamTransport]
+proc connectStream*(net: SimNet, address: TransportAddress): Future[StreamTransport]
+proc datagramPair*(net: SimNet, addrA, addrB: TransportAddress,
+                    cbprocA, cbprocB: DatagramCallback,
+                    udataA: pointer = nil, udataB: pointer = nil):
+    tuple[a, b: DatagramTransport]
+</code></pre>
+<p><code>simNet()</code> attaches to the current run's sim network -- one per sim
+dispatcher, so every call against the same run's dispatcher sees the
+same listener bindings. Connection establishment is sim-native, not
+seamed: <code>listenStream</code>/<code>connectStream</code> mint an already-connected
+<code>StreamTransport</code> pair directly, so the real accept/connect/shutdown
+state machines are never exercised under simulation, a recorded
+coverage concession (RFC 0003 section 4). What <em>is</em> exercised, and
+proven identical to a real transport pair over the same body
+(<code>tests/testsimnet.nim</code>'s differential echo test), is everything above
+that seam: the <code>BipBuffer</code>, the vector write queue, and the transport
+state machine, including half-close (<code>closeWait</code>/<code>shutdownWait</code>
+deliver EOF to the peer, the same <code>res == 0</code> convention a real socket
+read uses).</p>
+<p><code>datagramPair</code> is the connectionless analogue: UDP has no handshake to
+mint sim-natively, so both sides of a pair are wired atomically in one
+call rather than a listener/dialer pair like the stream case.</p>
+<p><strong>POSIX only in this slice.</strong> Both the stream and datagram surfaces
+build on seams (<code>tonalli/transports/stream.nim</code>'s and <code>datagram.nim</code>'s
+raw I/O extraction) that exist only in each module's POSIX branch,
+matching RFC section 4's Windows IOCP-emulation non-goal. On Windows,
+<code>listenStream</code>/<code>connectStream</code>/<code>accept</code>/<code>datagramPair</code> compile and
+type-check (satisfying <code>nimble check_windows</code>) but <code>raiseAssert</code> if
+ever reached at runtime, naming the non-goal in the message rather than
+silently doing nothing.</p>
+<h2 id="simproducer-arrival-actors-without-threads"><a class="header" href="#simproducer-arrival-actors-without-threads"><code>simProducer</code>: arrival actors without threads</a></h2>
+<pre><code class="language-nim">proc simProducer*(): SimProducer
+proc post*(producer: SimProducer, cbproc: ThreadCallbackFunc, udata: pointer = nil)
+</code></pre>
+<p>A real cross-thread <code>callSoon</code> reaches a dispatcher through
+<code>DispatcherHandle</code>, and both <code>wake()</code> and minting a <code>DispatcherHandle</code>
+barrier under simulation (see <a href="#barrier-list">Barrier list</a>) --
+<code>simProducer()</code> is the sim-legal replacement, not a supplement. A
+<code>post()</code> call schedules <code>cbproc</code> for cross-thread-style delivery: it
+fires with <code>bareCallback</code> semantics (no captured continuation-local
+context), the same as a genuine cross-thread arrival, through the
+unmodified real drain path (<code>processThreadCallbacks</code>) over a simulated
+MPSC queue. The <code>hasThreadSupport</code> machinery this runs on exists only
+under <code>--threads:on</code>, matching real cross-thread <code>callSoon</code>'s own
+precondition.</p>
+<p>Posts are coalesced the same way the real wakeup protocol coalesces
+them: every post landing between two drains lands in one delivered
+<code>Arrival</code> event, and the oracle cannot split them into a schedule the
+real system could never produce. This is what makes <code>simProducer</code> able
+to reproduce genuine arrival-interleaving races (a callback outliving
+the frame that owned its captured state -- upstream issue #694's class)
+at poll-iteration granularity; it does not model the waking-flag
+protocol's own memory-order interleavings inside <code>mpsc.nim</code>, which is
+out of scope for an input-level simulator (RFC 0003 section 3.6).</p>
+<h2 id="faults"><a class="header" href="#faults">Faults</a></h2>
+<pre><code class="language-nim">type SimFault* {.pure.} = enum
+  Reset
+  Drop
+  Duplicate
+  Reorder
+</code></pre>
+<p>A scripted <code>decideIo</code> closure returns a fault instead of an <code>Ok</code>
+outcome to inject one of these into a live <code>SimNet</code> endpoint's I/O:</p>
+<ul>
+<li><strong><code>Reset</code></strong> is legal on stream reads and writes and on datagram
+reads: the local operation fails with the same <code>OSErrorCode</code> a real
+platform's ECONNRESET-after-ICMP-unreachable would surface
+(<code>simFaultToError</code>), reached through the exact same
+<code>isConnResetError</code>/<code>setReadError</code>/<code>handleError</code> path a real error
+takes (a stream write sees it as the real write-eof handling).</li>
+<li><strong><code>Drop</code></strong>, <strong><code>Duplicate</code></strong>, and <strong><code>Reorder</code></strong> are datagram-only,
+write-side faults: real UDP never fails a send over packet loss, so
+each is intercepted by name in <code>simDatagramIo</code>'s write branch before
+it would otherwise need an <code>OSErrorCode</code> translation (<code>Reset</code> is the
+only member <code>simFaultToError</code> actually translates; the other three
+raise if ever routed there, a deliberate "should never reach this"
+guard). <code>Drop</code> silently discards the message after the local send
+still succeeds; <code>Duplicate</code> delivers it to the peer twice;
+<code>Reorder</code> delivers it ahead of whatever the peer already had queued
+(a no-op back-of-queue delivery if nothing was pending yet).</li>
+</ul>
+<p>Every <code>IoOutcomePoint</code> carries the legal fault set for that specific
+operation (<code>{Reset}</code> for a stream read or write, <code>{Reset}</code> for a
+datagram read, <code>{Drop, Duplicate, Reorder}</code> for a datagram write), and
+<code>decideIo</code>'s answer is validated against that menu: a fault outside it
+is a <code>ProtocolViolation</code>, so a scripted oracle only ever needs to
+handle the faults that operation can actually raise.</p>
+<h2 id="ghost-ledgers"><a class="header" href="#ghost-ledgers">Ghost ledgers</a></h2>
+<p>Ghost ledgers (RFC 0003 section 3.9) are simulation-only conservation
+checks, opt-in via <code>simulateWith(seed, simOptions(ledger = true))</code>:
+every quantity they track
+either balances exactly, or the run fails loudly with the seed, a step
+index, and the specific object involved -- never a silent pass that
+only happened to avoid the bug this run.</p>
+<div class="table-wrapper"><table><thead><tr><th>law</th><th>conserved quantity</th><th>checked</th></tr></thead><tbody>
+<tr><td>callback conservation</td><td>enqueued = fired + explicitly dropped at teardown + nil-function pops, per queue (<code>Callbacks</code>/<code>Idlers</code>/<code>Ticks</code>)</td><td>every step boundary, and teardown</td></tr>
+<tr><td>future lifecycle</td><td>no future completes twice (identity-based, via <code>tonalliFutureTracking</code>)</td><td>every terminal transition</td></tr>
+<tr><td>contextvar accounting</td><td>captured = restored + still-queued-with-context</td><td><code>simulate()</code> teardown</td></tr>
+<tr><td>timer accounting</td><td>armed = fired + cancelled + pending (against the timer heap's own contents)</td><td>every step boundary, and teardown</td></tr>
+<tr><td>waiter conservation</td><td>every tracked primitive's live waiter count is zero</td><td><code>simulate()</code> teardown</td></tr>
+</tbody></table>
+</div>
+<p>A step is one outermost <code>fireWithContext</code> return; a reentrant <code>waitFor</code>
+inside a firing callback opens its own nested step that accounts to the
+enclosing one, never advancing the step index itself, and a synchronous
+cancellation cascade (<code>tryCancel</code> recursing through child futures)
+accounts to whichever step triggered it. A violation raises
+<code>SimLedgerError{seed, step, objectDesc}</code>, its message prefixed
+<code>"simulation invariant violation: "</code>, naming the law and the object,
+never the internal "ghost ledger" codename.</p>
+<p><strong>Contextvar and timer accounting</strong> are checked the same way callback
+conservation is: real hooks at the real capture/restore and
+arm/fire/cancel touchpoints in <code>asyncengine.nim</code>, independent counters
+that can only diverge if a real code path bypasses one of them.
+Contextvar accounting is evaluated only at teardown, not per-fire, for
+an interface reason rather than a design one: <code>DispatcherBase.callbacks</code>
+is a <code>CallbackQueue</code> (<code>tonalli/internal/callbackqueue.nim</code>) whose public
+interface is deliberately exactly five entry points with no iteration
+or random access, so there is no cheap way to read "how many queued
+callbacks carry a context" at an arbitrary mid-run checkpoint. Teardown
+already walks every resident callback via the queue's own <code>popFirst</code> for
+the callback-conservation check, so inspecting each one's context there
+is free; timer accounting has no such constraint (the timer heap's
+length is O(1)) and is checked on every fire.</p>
+<p><strong>Waiter conservation</strong> (added 2026-08-15, issue #9) is different in
+kind from the other four: <code>tonalli/asyncsync.nim</code> gains no seam for it
+at all. <code>AsyncLock</code>, <code>AsyncEvent</code>, <code>AsyncQueue</code>, <code>AsyncEventQueue</code>, and
+<code>AsyncSemaphore</code> are unmodified except for read-only accessors
+(<code>waitersCount</code>/<code>gettersCount</code>/<code>puttersCount</code>, from
+<code>feat/asyncsync-waiters-introspection</code>, plus this page's own
+<code>AsyncEventQueue.waitersCount</code> in the same style), each reporting how
+many futures are currently parked and not cancelled. A test opts a
+constructed primitive into the law explicitly:</p>
+<pre><code class="language-nim">simulateWith(seed = 0xC0FFEE'u64, simOptions(ledger = true)):
+  let lock = newAsyncLock()
+  simLedgerTrackWaiters(lock)
+  ...
+</code></pre>
+<p><code>simLedgerTrackWaiters</code> has an overload per primitive kind
+(<code>AsyncLock</code>, <code>AsyncEvent</code>, <code>AsyncQueue[T]</code> -- registering <code>getters</code> and
+<code>putters</code> as two separately-named lists -- <code>AsyncEventQueue[T]</code>, and
+<code>AsyncSemaphore</code>); <code>simLedgerRegisterWaiter(desc, countProc)</code> is the
+generic entry point underneath, for a primitive shape none of those
+overloads cover. This registration is test-side by design: the
+alternatives (a hook at construction, or a hook inside
+<code>acquire</code>/<code>release</code>/<code>wait</code>/etc.) would both require the seam the law is
+explicitly built to avoid, and test-side registration costs nothing for
+every caller that never uses it, matching the same opt-in discipline
+every other ledger law already follows.</p>
+<p>The law's only enforcement point is teardown, not every step boundary,
+which is a deliberate, recorded judgment call: a registered primitive's
+accessor reading "currently parked" is completely ordinary mid-run --
+most programs have another task legitimately waiting on a lock or a
+queue slot at any given moment -- so nothing short of the run actually
+ending can tell a legitimate in-flight wait apart from a leak. What the
+teardown reading catches is exactly the motivating case: a
+<code>race()</code>/<code>one()</code>-style abandoned wait. <code>race</code>/<code>one</code> complete on the
+first future to finish and only <code>removeCallback</code> the others -- they
+document that losing futures are never cancelled -- so a losing
+<code>AsyncLock.acquire()</code> (or any other primitive's wait) stays parked in
+its waiter list forever, neither woken nor cancelled, invisible to
+every other check in this table. A nonzero reading at teardown names
+exactly that primitive.</p>
+<h2 id="barrier-list"><a class="header" href="#barrier-list">Barrier list</a></h2>
+<p>Reached with a real fd, or from an API that inherently touches real OS
+resources, a provenance-guarded call fails loudly and catchably instead
+of touching a nil selector or a zero-initialized wakeup handle: it
+raises <code>SimBarrierError</code> directly, at the point of detection, via
+<code>raiseSimBarrier</code>. The table below is the verified set, by grep of
+<code>raiseSimBarrier</code>/<code>SimBarrierError</code> in <code>tonalli/internal/asyncengine.nim</code>
+against this page's own snapshot of the code -- not the RFC's
+design-section sketch, which names a slightly larger surface that has
+not all landed yet (see the note below the table).</p>
+<div class="table-wrapper"><table><thead><tr><th>surface</th><th>mechanism</th></tr></thead><tbody>
+<tr><td><code>register2</code>, <code>unregister2</code>, <code>addReader2</code>, <code>removeReader2</code>, <code>addWriter2</code>, <code>removeWriter2</code> (POSIX and Windows)</td><td>raises <code>SimBarrierError</code> directly, at the point of detection, through the otherwise-unchanged <code>Result</code> signature</td></tr>
+<tr><td><code>addSignal2</code>, <code>removeSignal2</code>, <code>addProcess2</code>, <code>removeProcess2</code> (POSIX and Windows)</td><td>same direct-raise mechanism</td></tr>
+<tr><td><code>unregisterAndCloseFd</code> (POSIX and Windows)</td><td>same direct-raise mechanism</td></tr>
+<tr><td><code>handle()</code> (minting a <code>DispatcherHandle</code>)</td><td>raises <code>SimBarrierError</code> directly rather than minting a handle for a sim dispatcher</td></tr>
+<tr><td><code>wake()</code></td><td>raises <code>SimBarrierError</code> directly rather than writing to a zero-valued wakeup fd/port</td></tr>
+<tr><td><code>callSoon(DispatcherHandle, ...)</code></td><td>raises <code>SimBarrierError</code> directly, the cross-thread entry <code>simProducer</code> replaces</td></tr>
+<tr><td><code>closeSocket</code>/<code>closeHandle</code></td><td>not a barrier raise -- routes by dispatcher identity (a sim dispatcher's own <code>simFlushCloseInterest</code> path, never a real <code>closeFd</code> call), since every fd a sim dispatcher holds is sim-minted by construction</td></tr>
+</tbody></table>
+</div>
+<p><code>SimBarrierError</code> is <code>object of CatchableError</code>, deliberately not a
+subtype of <code>AsyncError</code>, so an existing <code>except AsyncError</code> handler
+cannot silently swallow a hermeticity violation -- the same
+non-swallowing reasoning <code>SimLedgerError</code> follows. Its sibling
+<code>SimEngineError</code> (<code>kind: SimFailureKind</code>) is the type the engine and
+the sim poll loop raise directly for everything else they detect on
+their own: an oracle error, an out-of-range oracle answer, a decision-
+or virtual-time-budget exhaustion, a deadlock, or an oracle deferring
+all deliverable work with no fallback (see
+<a href="#simulate-simulatewith-simulatereplay-simulatereplaywith"><code>simulate</code></a>
+above).
+Classification is always by type -- <code>kind</code> for <code>SimEngineError</code>,
+<code>exc.parent of ...</code> for <code>SimulationError</code> -- never by parsing a
+message.</p>
+<p>A <code>SimBarrierError</code>/<code>SimEngineError</code> a call site raises does not always
+reach its caller unchanged. Three things can happen to it:</p>
+<ul>
+<li><strong>Propagation.</strong> Most call sites let it through unchanged, widening
+their own <code>raises</code> list under <code>chronosSimulation</code> (see the sim-widened
+<code>async</code> signatures throughout <code>tonalli/transports/stream.nim</code>,
+<code>tonalli/transports/datagram.nim</code>, <code>tonalli/threadsync.nim</code>, and
+<code>tonalli/asyncproc.nim</code>). <code>runSimulation</code> (<code>tonalli/simulation.nim</code>)
+is the ultimate boundary: it catches <code>SimEngineError</code> by type and
+converts it into <code>SimulationError</code>, catches a propagated
+<code>SimBarrierError</code> by type and classifies it <code>SimFailureKind.BarrierHit</code>
+-- a real hermeticity violation, distinct from an ordinary body bug
+even though both surface through <code>body</code> -- and treats any other
+<code>CatchableError</code> as <code>SimFailureKind.BodyError</code>.</li>
+<li><strong>Absorption.</strong> <code>tonalli/streams/asyncstream.nim</code>'s <code>tsource</code>-
+forwarding vtable procs absorb a <code>SimBarrierError</code>/<code>SimEngineError</code>
+the same way they already absorb <code>TransportError</code>: wrapped into
+<code>AsyncStreamReadError</code>/<code>AsyncStreamWriteError</code> rather than widening
+the vtable's declared <code>raises: [CancelledError, AsyncStreamError]</code>.
+The original still travels, as <code>.parent</code> on the wrapping error, so a
+caller that cares can still recover it by type; the identity never
+degrades below type, only the outer shape changes.</li>
+<li><strong>The Defect envelope.</strong> A handful of touch sites cross a <code>raises: []</code>-typed boundary no per-build pragma can widen: a <code>CallbackFunc</code>
+(the transport seam's I/O-callback wrap and its <code>register2</code>/
+<code>addReader2</code>/etc. teardown calls) or <code>finish()</code>'s unbounded reach
+(<code>tonalli/internal/asyncfutures.nim</code>'s <code>simLedgerNoteFutureFinish</code>).
+Each of these catches its own typed <code>SimBarrierError</code>/
+<code>SimEngineError</code>/<code>SimLedgerError</code> locally and re-raises it wrapped in
+a <code>Defect</code> via <code>raiseAsDefect</code> -- exempt from the raises effect
+system, the same mechanism <code>raiseOsDefect</code> already uses to cross an
+unwidenable boundary for an unrecoverable real-mode condition --
+instead of letting it propagate normally. <code>runSimulation</code> recovers
+the original by type (<code>exc.parent of SimLedgerError</code>/<code>SimEngineError</code>/
+<code>SimBarrierError</code>), never by parsing <code>exc.msg</code> -- a recovered
+<code>SimBarrierError</code> classifies <code>SimFailureKind.BarrierHit</code>, the same as
+the propagation case above. This is the one narrow, type-checked
+exception to typed-channel retirement, forced by those boundaries'
+reach rather than chosen for convenience; any other <code>Defect</code> reaching
+this boundary (a genuine unrecoverable condition, e.g. <code>raiseOsDefect</code>)
+is not this concern and re-raises unchanged.</li>
+</ul>
+<p><strong>Partially wired as of this page:</strong> <code>ThreadSignalPtr.fire</code>/<code>.wait</code>/
+<code>.close</code> (RFC 0003 section 3.2's typed-raises row) are barriered
+indirectly -- each carries the sim-widened raises and reaches
+<code>register2</code>/<code>addReader2</code>/<code>addWriter2</code>, which refuse a real fd under a
+sim dispatcher -- though no sim test exercises them yet. The blocking
+variants <code>threadsync.waitSync</code>/<code>fireSync</code> show no <code>chronosSimulation</code>
+awareness at all (their raw <code>select()</code> path never touches the
+dispatcher). <code>asyncproc</code> spawning is covered indirectly, through
+<code>addProcess2</code>, which is barriered; <code>waitSync</code>/<code>fireSync</code> use under
+simulation is an open gap, not a documented guarantee -- recorded here
+so a test relying on it does not discover the gap by surprise.</p>
+<h2 id="performance"><a class="header" href="#performance">Performance</a></h2>
+<p><code>chronosSimulation</code> undefined: <strong>zero cost, verified by inspection.</strong>
+Every touchpoint this page's underlying laws (contextvar accounting,
+timer accounting) and the waiter-conservation registration API add to
+<code>tonalli/internal/asyncengine.nim</code> sits inside an existing or newly
+added <code>when chronosSimulation:</code> block; none of it compiles when the
+define is off. The one unconditional addition is
+<code>tonalli/asyncsync.nim</code>'s new <code>AsyncEventQueue.waitersCount</code> accessor
+(alongside the cherry-picked <code>waitersCount</code>/<code>gettersCount</code>/
+<code>puttersCount</code> family) -- pure, additive, read-only procs that no
+existing call site invokes, so they add a symbol to the binary and
+nothing to any hot path. This matches invariant 1 and the bench-verdict
+discipline slices S1 and S10 established (a fresh cross-commit bench run
+was not repeated for this slice; the code-level argument -- no
+unconditional new code on any real-mode call site -- is the same kind
+of evidence a byte-identical generated-C diff would have given, and is
+exhaustive here since every edit is mechanically <code>when</code>-gated or
+additive).</p>
+<p><code>chronosSimulation</code> defined but a run either uses the plain
+<code>simulate</code>/<code>sweepSeeds</code> (no ledger) or isn't simulating at all (a real
+production dispatcher inside a sim-enabled test binary): each new
+touchpoint pays one extra <code>nil</code> check (<code>if not simLedgerHookHere.isNil</code>)
+beyond what slice S14 already paid for callback/future conservation --
+the same cost class slice S1's inactive clock seam measured as noise
+(one thread-local read plus one predicted branch). Per RFC section 3.4's
+own policy, sim-enabled builds are test builds nobody benchmarks, so
+this is not bench-gated either.</p>
+<p><code>opts.ledger = true</code> active (the real new cost, paid only by a test that
+opts in): O(1) counter increments per touchpoint for contextvar and
+timer accounting, matching callback conservation's existing cost; at
+<code>simulate()</code> teardown, one additional per-item context check folded
+into the callback-conservation drain that already walks every resident
+callback (no new big-O cost); and O(k) waiter-primitive accessor calls,
+where k is the number of primitives a test explicitly registered
+(typically single digits). This is squarely a verification-tool cost,
+exactly what RFC 0003 section 3.9 promises: "a verification tool, not a
+change to <code>simulate()</code>'s default behavior."</p>
+<h2 id="surfaces-that-need-no-seam"><a class="header" href="#surfaces-that-need-no-seam">Surfaces that need no seam</a></h2>
+<p><code>tonalli/asyncsync.nim</code> (locks, events, queues, semaphores, the event
+bus) is pure <code>Future</code> machinery with no OS coupling, so it runs
+unmodified under simulation with zero instrumentation beyond the
+read-only waiter-conservation accessors above. This is the same
+statement RFC 0003 section 3.1 makes about the coverage claim: every
+public surface is either driven by an oracle choice point, barriered,
+or listed here as OS-free.</p>
+<h2 id="tests"><a class="header" href="#tests">Tests</a></h2>
+<p>Sim substrate tests live under <code>tests/testsim*.nim</code> (registered in both
+the <code>test_simulation</code> nimble task and <code>nimble check_windows</code>, plus
+<code>tests/testall.nim</code>): <code>testsimclock</code>, <code>testsimengine</code>, <code>testsimloop</code>,
+<code>testsimoracle</code>, <code>testsimtrace</code>, <code>testsimulation</code>, <code>testsimstream</code>,
+<code>testsimnet</code>, <code>testsimdatagram</code>, <code>testsimproducer</code>, <code>testsimhttp</code>, and
+<code>testsimledger</code> (the ghost-ledger laws, including this page's
+contextvar, timer, and waiter-conservation additions). Every sim leaf
+test drives its probes from a freshly spawned OS thread
+(<code>tests/testsimnet.nim</code>'s pattern),
+isolating each scenario's own sim dispatcher from <code>testall</code>'s shared
+real one. <code>nimble test_simulation</code> runs the full set under both
+<code>--mm:refc</code> and <code>--mm:orc</code>.</p>
+<footer id="open-on-gh">Found a bug? <a href="https://github.com/coreyleavitt/tonalli//edit/main/docs/src/simulation.md">Edit this page on GitHub.</a></footer>
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="contextvars.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="threads.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="contextvars.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="threads.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

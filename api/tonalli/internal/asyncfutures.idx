@@ -1,0 +1,101 @@
+nimTitle	asyncfutures	tonalli/internal/asyncfutures.html	module tonalli/internal/asyncfutures		0
+nim	LocCreateIndex	tonalli/internal/asyncfutures.html#LocCreateIndex.t	template LocCreateIndex(): auto		47
+nim	LocFinishIndex	tonalli/internal/asyncfutures.html#LocFinishIndex.t	template LocFinishIndex(): auto		49
+nim	LocCompleteIndex	tonalli/internal/asyncfutures.html#LocCompleteIndex.t	template LocCompleteIndex(): untyped		51
+nim	`[]`	tonalli/internal/asyncfutures.html#[],array[LocationKind,ptr.SrcLoc],int	proc `[]`(loc: array[LocationKind, ptr SrcLoc]; v: int): ptr SrcLoc		54
+nim	FutureStr	tonalli/internal/asyncfutures.html#FutureStr	type FutureStr		62
+nim	FutureSeq	tonalli/internal/asyncfutures.html#FutureSeq	type FutureSeq		66
+nim	FuturePendingError	tonalli/internal/asyncfutures.html#FuturePendingError	object FuturePendingError		70
+nim	FutureCompletedError	tonalli/internal/asyncfutures.html#FutureCompletedError	object FutureCompletedError		72
+nim	Finished	tonalli/internal/asyncfutures.html#Finished.t	template Finished()		86
+nim	Finished	tonalli/internal/asyncfutures.html#Finished.t,typeFutureState	template Finished(T: type FutureState): FutureState		87
+nim	newFuture	tonalli/internal/asyncfutures.html#newFuture.t,static[string],static[FutureFlags]	template newFuture[T](fromProc: static[string] = ""; flags: static[FutureFlags] = {}): auto		112
+nim	newInternalRaisesFuture	tonalli/internal/asyncfutures.html#newInternalRaisesFuture.t,static[string]	template newInternalRaisesFuture[T, E](fromProc: static[string] = ""): auto		124
+nim	newFutureSeq	tonalli/internal/asyncfutures.html#newFutureSeq.t,static[string]	template newFutureSeq[A, B](fromProc: static[string] = ""): FutureSeq[A, B]		131
+nim	newFutureStr	tonalli/internal/asyncfutures.html#newFutureStr.t,static[string]	template newFutureStr[T](fromProc: static[string] = ""): FutureStr[T]		139
+nim	done	tonalli/internal/asyncfutures.html#done,FutureBase	proc done(future: FutureBase): bool		147
+nim	complete	tonalli/internal/asyncfutures.html#complete.t,Future[T: not void],template (T: typedesc): typedescT: not void	template complete[T: not void](future: Future[T]; val: tonalliSink T)		272
+nim	complete	tonalli/internal/asyncfutures.html#complete.t,Future[void]	template complete(future: Future[void])		280
+nim	internalFail	tonalli/internal/asyncfutures.html#internalFail.t,FutureBase,ref.CatchableError	template internalFail(future: FutureBase; error: ref CatchableError)		295
+nim	fail	tonalli/internal/asyncfutures.html#fail.t,Future[T],ref.CatchableError,staticbool	template fail[T](future: Future[T]; error: ref CatchableError; warn: static bool = false)		299
+nim	fail	tonalli/internal/asyncfutures.html#fail.t,InternalRaisesFuture[T,E],ref.CatchableError,staticbool	template fail[T, E](future: InternalRaisesFuture[T, E]; error: ref CatchableError;\n           warn: static bool = true)		306
+nim	cancelAndSchedule	tonalli/internal/asyncfutures.html#cancelAndSchedule.t,FutureBase	template cancelAndSchedule(future: FutureBase)		325
+nim	tryCancel	tonalli/internal/asyncfutures.html#tryCancel.t,FutureBase	template tryCancel(future: FutureBase): bool		369
+nim	addCallback	tonalli/internal/asyncfutures.html#addCallback,FutureBase,CallbackFunc,pointer	proc addCallback(future: FutureBase; cb: CallbackFunc; udata: pointer)		378
+nim	addCallback	tonalli/internal/asyncfutures.html#addCallback,FutureBase,CallbackFunc	proc addCallback(future: FutureBase; cb: CallbackFunc)		397
+nim	removeCallback	tonalli/internal/asyncfutures.html#removeCallback,FutureBase,CallbackFunc,pointer	proc removeCallback(future: FutureBase; cb: CallbackFunc; udata: pointer)		403
+nim	removeCallback	tonalli/internal/asyncfutures.html#removeCallback,FutureBase,CallbackFunc	proc removeCallback(future: FutureBase; cb: CallbackFunc)		416
+nim	callback=	tonalli/internal/asyncfutures.html#callback=,FutureBase,CallbackFunc,pointer	proc callback=(future: FutureBase; cb: CallbackFunc; udata: pointer)		419
+nim	callback=	tonalli/internal/asyncfutures.html#callback=,FutureBase,CallbackFunc	proc callback=(future: FutureBase; cb: CallbackFunc)		431
+nim	cancelCallback=	tonalli/internal/asyncfutures.html#cancelCallback=,FutureBase,CallbackFunc	proc cancelCallback=(future: FutureBase; cb: CallbackFunc)		440
+nim	futureContinue	tonalli/internal/asyncfutures.html#futureContinue,FutureBase	proc futureContinue(fut: FutureBase)		456
+nim	internalRaiseIfError	tonalli/internal/asyncfutures.html#internalRaiseIfError.m,FutureBase,typed	macro internalRaiseIfError(fut: FutureBase; info: typed)		594
+nim	internalRaiseIfError	tonalli/internal/asyncfutures.html#internalRaiseIfError.m,InternalRaisesFuture,typed,typed	macro internalRaiseIfError(fut: InternalRaisesFuture; raises, info: typed)		608
+nim	read	tonalli/internal/asyncfutures.html#read,Future[T: not void]	proc read[T: not void](fut: Future[T]): lent T		672
+nim	read	tonalli/internal/asyncfutures.html#read,Future[void]	proc read(fut: Future[void])		684
+nim	readError	tonalli/internal/asyncfutures.html#readError,FutureBase	proc readError(fut: FutureBase): ref CatchableError		696
+nim	waitFor	tonalli/internal/asyncfutures.html#waitFor,Future[T: not void]	proc waitFor[T: not void](fut: Future[T]): lent T		743
+nim	waitFor	tonalli/internal/asyncfutures.html#waitFor,Future[void]	proc waitFor(fut: Future[void])		755
+nim	asyncSpawn	tonalli/internal/asyncfutures.html#asyncSpawn,Future[void]	proc asyncSpawn(future: Future[void])		766
+nim	asyncCheck	tonalli/internal/asyncfutures.html#asyncCheck,Future[T]	proc asyncCheck[T](future: Future[T])		792
+nim	orImpl	tonalli/internal/asyncfutures.html#orImpl.t,Future[T],Future[Y]	template orImpl[T, Y](fut1: Future[T]; fut2: Future[Y]): untyped		814
+nim	`or`	tonalli/internal/asyncfutures.html#or,Future[T],Future[Y]	proc `or`[T, Y](fut1: Future[T]; fut2: Future[Y]): Future[void]		862
+nim	cancelSoon	tonalli/internal/asyncfutures.html#cancelSoon.t,FutureBase,CallbackFunc,pointer	template cancelSoon(fut: FutureBase; cb: CallbackFunc; udata: pointer)		945
+nim	cancelSoon	tonalli/internal/asyncfutures.html#cancelSoon.t,FutureBase,CallbackFunc	template cancelSoon(fut: FutureBase; cb: CallbackFunc)		948
+nim	cancelSoon	tonalli/internal/asyncfutures.html#cancelSoon.t,FutureBase,InternalAsyncCallback	template cancelSoon(fut: FutureBase; acb: AsyncCallback)		951
+nim	cancelSoon	tonalli/internal/asyncfutures.html#cancelSoon.t,FutureBase	template cancelSoon(fut: FutureBase)		954
+nim	cancel	tonalli/internal/asyncfutures.html#cancel.t,FutureBase	template cancel(future: FutureBase)		957
+nim	cancelAndWait	tonalli/internal/asyncfutures.html#cancelAndWait.t,FutureBase	template cancelAndWait(future: FutureBase): Future[void].Raising([])		996
+nim	cancelAndWait	tonalli/internal/asyncfutures.html#cancelAndWait.t,SomeFuture	template cancelAndWait(future: SomeFuture): Future[void].Raising([])		1005
+nim	cancelAndWait	tonalli/internal/asyncfutures.html#cancelAndWait.t,varargs[FutureBase]	template cancelAndWait(futs: varargs[FutureBase]): Future[void].Raising([])		1014
+nim	cancelAndWait	tonalli/internal/asyncfutures.html#cancelAndWait.t,openArray[SomeFuture]	template cancelAndWait(futs: openArray[SomeFuture]): Future[void].Raising([])		1029
+nim	noCancel	tonalli/internal/asyncfutures.html#noCancel,F	proc noCancel[F: SomeFuture](future: F): auto		1044
+nim	allFutures	tonalli/internal/asyncfutures.html#allFutures,varargs[FutureBase]	proc allFutures(futs: varargs[FutureBase]): InternalRaisesFuture[void,\n    (CancelledError,)]		1090
+nim	allFutures	tonalli/internal/asyncfutures.html#allFutures,varargs[Future[T]]	proc allFutures[T](futs: varargs[Future[T]]): InternalRaisesFuture[void,\n    (CancelledError,)]		1128
+nim	allFutures	tonalli/internal/asyncfutures.html#allFutures,varargs[InternalRaisesFuture[T,E]]	proc allFutures[T, E](futs: varargs[InternalRaisesFuture[T, E]]): InternalRaisesFuture[\n    void, (CancelledError,)]		1139
+nim	allFinished	tonalli/internal/asyncfutures.html#allFinished,varargs[F]	proc allFinished[F: SomeFuture](futs: varargs[F]): InternalRaisesFuture[seq[F],\n    (CancelledError,)]		1150
+nim	one	tonalli/internal/asyncfutures.html#one,SomeFuture,varargs[SomeFuture]	proc one(fut0: SomeFuture; futs: varargs[SomeFuture]): InternalRaisesFuture[\n    SomeFuture, (CancelledError,)]		1243
+nim	one	tonalli/internal/asyncfutures.html#one,openArray[SomeFuture]	proc one(futs: openArray[SomeFuture]): InternalRaisesFuture[SomeFuture,\n    (ValueError, CancelledError)]		1258
+nim	race	tonalli/internal/asyncfutures.html#race,FutureBase,varargs[FutureBase]	proc race(fut0: FutureBase; futs: varargs[FutureBase]): InternalRaisesFuture[\n    FutureBase, (CancelledError,)]		1279
+nim	one	tonalli/internal/asyncfutures.html#one	proc one(_: typeof([]))		1291
+nim	race	tonalli/internal/asyncfutures.html#race,openArray[FutureBase]	proc race(futs: openArray[FutureBase]): InternalRaisesFuture[FutureBase,\n    (ValueError, CancelledError)]		1294
+nim	race	tonalli/internal/asyncfutures.html#race,SomeFuture,openArray[SomeFuture]	proc race(fut0: SomeFuture; futs: openArray[SomeFuture]): InternalRaisesFuture[\n    SomeFuture, (CancelledError,)]		1313
+nim	race	tonalli/internal/asyncfutures.html#race,openArray[SomeFuture]	proc race(futs: openArray[SomeFuture]): InternalRaisesFuture[SomeFuture,\n    (ValueError, CancelledError)]		1326
+nim	race	tonalli/internal/asyncfutures.html#race	proc race(_: typeof([]))		1344
+nim	sleepAsync	tonalli/internal/asyncfutures.html#sleepAsync,Duration	proc sleepAsync(duration: Duration): InternalRaisesFuture[void, (CancelledError,)]		1408
+nim	sleepAsync	tonalli/internal/asyncfutures.html#sleepAsync,int	proc sleepAsync(ms: int): InternalRaisesFuture[void, (CancelledError,)]		1431
+nim	stepsAsync	tonalli/internal/asyncfutures.html#stepsAsync,int	proc stepsAsync(number: int): InternalRaisesFuture[void, (CancelledError,)]		1435
+nim	idleAsync	tonalli/internal/asyncfutures.html#idleAsync	proc idleAsync(): InternalRaisesFuture[void, (CancelledError,)]		1463
+nim	withTimeout	tonalli/internal/asyncfutures.html#withTimeout,Future[T],Duration	proc withTimeout[T](fut: Future[T]; timeout: Duration): InternalRaisesFuture[bool,\n    (CancelledError,)]		1485
+nim	withTimeout	tonalli/internal/asyncfutures.html#withTimeout,Future[T],int	proc withTimeout[T](fut: Future[T]; timeout: int): Future[bool]		1560
+nim	wait	tonalli/internal/asyncfutures.html#wait,Future[T]	proc wait[T](fut: Future[T]; timeout = InfiniteDuration): Future[T]		1685
+nim	wait	tonalli/internal/asyncfutures.html#wait,Future[T],int	proc wait[T](fut: Future[T]; timeout = -1): Future[T]		1702
+nim	wait	tonalli/internal/asyncfutures.html#wait,Future[T],SomeFuture	proc wait[T](fut: Future[T]; deadline: SomeFuture): Future[T]		1711
+nim	join	tonalli/internal/asyncfutures.html#join,FutureBase	proc join(future: FutureBase): InternalRaisesFuture[void, (CancelledError,)]		1734
+nim	join	tonalli/internal/asyncfutures.html#join,SomeFuture	proc join(future: SomeFuture): InternalRaisesFuture[void, (CancelledError,)]		1759
+nim	read	tonalli/internal/asyncfutures.html#read,InternalRaisesFuture[T: not void,E]	proc read[T: not void; E](fut: InternalRaisesFuture[T, E]): lent T		1832
+nim	read	tonalli/internal/asyncfutures.html#read,InternalRaisesFuture[void,E]	proc read[E](fut: InternalRaisesFuture[void, E])		1844
+nim	waitFor	tonalli/internal/asyncfutures.html#waitFor,InternalRaisesFuture[T: not void,E]	proc waitFor[T: not void; E](fut: InternalRaisesFuture[T, E]): lent T		1856
+nim	waitFor	tonalli/internal/asyncfutures.html#waitFor,InternalRaisesFuture[void,E]	proc waitFor[E](fut: InternalRaisesFuture[void, E])		1868
+nim	`or`	tonalli/internal/asyncfutures.html#or,InternalRaisesFuture[T,E1],InternalRaisesFuture[Y,E2]	proc `or`[T, Y, E1, E2](fut1: InternalRaisesFuture[T, E1];\n                   fut2: InternalRaisesFuture[Y, E2]): auto		1879
+nim	wait	tonalli/internal/asyncfutures.html#wait,InternalRaisesFuture	proc wait(fut: InternalRaisesFuture; timeout = InfiniteDuration): auto		1888
+nim	wait	tonalli/internal/asyncfutures.html#wait,InternalRaisesFuture,SomeFuture	proc wait(fut: InternalRaisesFuture; deadline: SomeFuture): auto		1901
+nimgrp	join	tonalli/internal/asyncfutures.html#join-procs-all	proc		1733
+nimgrp	one	tonalli/internal/asyncfutures.html#one-procs-all	proc		1242
+nimgrp	race	tonalli/internal/asyncfutures.html#race-procs-all	proc		1278
+nimgrp	removecallback	tonalli/internal/asyncfutures.html#removeCallback-procs-all	proc		403
+nimgrp	wait	tonalli/internal/asyncfutures.html#wait-procs-all	proc		1685
+nimgrp	waitfor	tonalli/internal/asyncfutures.html#waitFor-procs-all	proc		743
+nimgrp	sleepasync	tonalli/internal/asyncfutures.html#sleepAsync-procs-all	proc		1407
+nimgrp	read	tonalli/internal/asyncfutures.html#read-procs-all	proc		672
+nimgrp	allfutures	tonalli/internal/asyncfutures.html#allFutures-procs-all	proc		1089
+nimgrp	withtimeout	tonalli/internal/asyncfutures.html#withTimeout-procs-all	proc		1484
+nimgrp	or	tonalli/internal/asyncfutures.html#or-procs-all	proc		862
+nimgrp	callback=	tonalli/internal/asyncfutures.html#callback=-procs-all	proc		419
+nimgrp	addcallback	tonalli/internal/asyncfutures.html#addCallback-procs-all	proc		378
+nimgrp	internalraiseiferror	tonalli/internal/asyncfutures.html#internalRaiseIfError-macros-all	macro		594
+nimgrp	cancelandwait	tonalli/internal/asyncfutures.html#cancelAndWait-templates-all	template		996
+nimgrp	fail	tonalli/internal/asyncfutures.html#fail-templates-all	template		299
+nimgrp	complete	tonalli/internal/asyncfutures.html#complete-templates-all	template		272
+nimgrp	cancelsoon	tonalli/internal/asyncfutures.html#cancelSoon-templates-all	template		945
+nimgrp	Finished	tonalli/internal/asyncfutures.html#Finished-templates-all	template		86

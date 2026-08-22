@@ -1,0 +1,13 @@
+nimTitle	bipbuffer	tonalli/bipbuffer.html	module tonalli/bipbuffer		0
+nim	BipBuffer	tonalli/bipbuffer.html#BipBuffer	object BipBuffer		35
+nim	init	tonalli/bipbuffer.html#init,typedesc[BipBuffer],int	proc init(t: typedesc[BipBuffer]; size: int): BipBuffer		39
+nim	availSpace	tonalli/bipbuffer.html#availSpace,BipBuffer	proc availSpace(bp: BipBuffer): Natural		62
+nim	len	tonalli/bipbuffer.html#len,BipBuffer	proc len(bp: BipBuffer): Natural		67
+nim	reserve	tonalli/bipbuffer.html#reserve,BipBuffer,Natural	proc reserve(bp: var BipBuffer; size: Natural = 0): tuple[data: ptr byte,\n    size: Natural]		71
+nim	commit	tonalli/bipbuffer.html#commit,BipBuffer,Natural	proc commit(bp: var BipBuffer; size: Natural)		97
+nim	consume	tonalli/bipbuffer.html#consume,BipBuffer,Natural	proc consume(bp: var BipBuffer; size: Natural)		115
+nim	items	tonalli/bipbuffer.html#items.i,BipBuffer	iterator items(bp: BipBuffer): byte		130
+nim	regions	tonalli/bipbuffer.html#regions.i,BipBuffer	iterator regions(bp: var BipBuffer): tuple[data: ptr byte, size: Natural]		137
+nim	copyInto	tonalli/bipbuffer.html#copyInto,BipBuffer,openArray[byte]	proc copyInto(bp: var BipBuffer; tgt: var openArray[byte]): Natural		144
+nim	copyUntil	tonalli/bipbuffer.html#copyUntil,BipBuffer,openArray[T],int,openArray[T]	proc copyUntil[T: byte | char](bp: BipBuffer; tgt: var openArray[T]; state: var int;\n                          sep: openArray[T]): tuple[n: Natural, found: bool]		153
+nim	addLineInto	tonalli/bipbuffer.html#addLineInto,BipBuffer,string,int,int,openArray[char]	proc addLineInto(bp: BipBuffer; tgt: var string; state: var int; limit: int;\n            sep: openArray[char]): tuple[n: Natural, done: bool]		183

@@ -1,0 +1,20 @@
+nimTitle	config	tonalli/config.html	module tonalli/config		0
+nim	tonalliHandleException	tonalli/config.html#tonalliHandleException	const tonalliHandleException		27
+nim	tonalliStrictFutureAccess	tonalli/config.html#tonalliStrictFutureAccess	const tonalliStrictFutureAccess		41
+nim	tonalliStackTrace	tonalli/config.html#tonalliStackTrace	const tonalliStackTrace		43
+nim	tonalliFutureId	tonalli/config.html#tonalliFutureId	const tonalliFutureId		46
+nim	tonalliFutureTracking	tonalli/config.html#tonalliFutureTracking	const tonalliFutureTracking		50
+nim	tonalliDumpAsync	tonalli/config.html#tonalliDumpAsync	const tonalliDumpAsync		54
+nim	tonalliProcShell	tonalli/config.html#tonalliProcShell	const tonalliProcShell		57
+nim	tonalliEventsCount	tonalli/config.html#tonalliEventsCount	const tonalliEventsCount		71
+nim	tonalliInitialSize	tonalli/config.html#tonalliInitialSize	const tonalliInitialSize		74
+nim	tonalliEventEngine	tonalli/config.html#tonalliEventEngine	const tonalliEventEngine		77
+nim	tonalliHasRaises	tonalli/config.html#tonalliHasRaises	const tonalliHasRaises		96
+nim	tonalliTransportDefaultBufferSize	tonalli/config.html#tonalliTransportDefaultBufferSize	const tonalliTransportDefaultBufferSize		99
+nim	tonalliStreamDefaultBufferSize	tonalli/config.html#tonalliStreamDefaultBufferSize	const tonalliStreamDefaultBufferSize		102
+nim	tonalliTLSSessionCacheBufferSize	tonalli/config.html#tonalliTLSSessionCacheBufferSize	const tonalliTLSSessionCacheBufferSize		105
+nim	tonalliUseSink	tonalli/config.html#tonalliUseSink	const tonalliUseSink		108
+nim	tonalliStrictReentrancy	tonalli/config.html#tonalliStrictReentrancy	const tonalliStrictReentrancy		115
+nim	chronosSimulation	tonalli/config.html#chronosSimulation	const chronosSimulation		123
+nim	tonalliSink	tonalli/config.html#tonalliSink.t,type	template tonalliSink(T: type): type		155
+nim	tonalliMoveSink	tonalli/config.html#tonalliMoveSink.t,sinkauto	template tonalliMoveSink(v: sink auto): untyped		156

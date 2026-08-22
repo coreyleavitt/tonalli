@@ -1,0 +1,110 @@
+nimTitle	asyncstream	tonalli/streams/asyncstream.html	module tonalli/streams/asyncstream		0
+nim	AsyncStreamDefaultBufferSize	tonalli/streams/asyncstream.html#AsyncStreamDefaultBufferSize	const AsyncStreamDefaultBufferSize		29
+nim	AsyncStreamDefaultQueueSize	tonalli/streams/asyncstream.html#AsyncStreamDefaultQueueSize	const AsyncStreamDefaultQueueSize		31
+nim	AsyncStreamReaderTrackerName	tonalli/streams/asyncstream.html#AsyncStreamReaderTrackerName	const AsyncStreamReaderTrackerName		33
+nim	AsyncStreamWriterTrackerName	tonalli/streams/asyncstream.html#AsyncStreamWriterTrackerName	const AsyncStreamWriterTrackerName		35
+nim	ReadOnceProc	tonalli/streams/asyncstream.html#ReadOnceProc	type ReadOnceProc		76
+nim	AsyncStreamReaderVtbl	tonalli/streams/asyncstream.html#AsyncStreamReaderVtbl	object AsyncStreamReaderVtbl		80
+nim	WriteProc	tonalli/streams/asyncstream.html#WriteProc	type WriteProc		109
+nim	AsyncStreamWriterVtbl	tonalli/streams/asyncstream.html#AsyncStreamWriterVtbl	object AsyncStreamWriterVtbl		112
+nim	AsyncStreamError	tonalli/streams/asyncstream.html#AsyncStreamError	object AsyncStreamError		126
+nim	AsyncStreamIncorrectDefect	tonalli/streams/asyncstream.html#AsyncStreamIncorrectDefect	object AsyncStreamIncorrectDefect		127
+nim	AsyncStreamIncompleteError	tonalli/streams/asyncstream.html#AsyncStreamIncompleteError	object AsyncStreamIncompleteError		128
+nim	AsyncStreamLimitError	tonalli/streams/asyncstream.html#AsyncStreamLimitError	object AsyncStreamLimitError		129
+nim	AsyncStreamUseClosedError	tonalli/streams/asyncstream.html#AsyncStreamUseClosedError	object AsyncStreamUseClosedError		130
+nim	AsyncStreamReadError	tonalli/streams/asyncstream.html#AsyncStreamReadError	object AsyncStreamReadError		131
+nim	AsyncStreamWriteError	tonalli/streams/asyncstream.html#AsyncStreamWriteError	object AsyncStreamWriteError		132
+nim	AsyncStreamWriteEOFError	tonalli/streams/asyncstream.html#AsyncStreamWriteEOFError	object AsyncStreamWriteEOFError		133
+nim	AsyncBuffer	tonalli/streams/asyncstream.html#AsyncBuffer	object AsyncBuffer		135
+nim	AsyncBufferRef	tonalli/streams/asyncstream.html#AsyncBufferRef	type AsyncBufferRef		139
+nim	Pointer	tonalli/streams/asyncstream.html#Pointer	WriteType.Pointer		141
+nim	Sequence	tonalli/streams/asyncstream.html#Sequence	WriteType.Sequence		141
+nim	String	tonalli/streams/asyncstream.html#String	WriteType.String		141
+nim	WriteType	tonalli/streams/asyncstream.html#WriteType	enum WriteType		141
+nim	WriteItem	tonalli/streams/asyncstream.html#WriteItem	object WriteItem		144
+nim	AsyncStreamState	tonalli/streams/asyncstream.html#AsyncStreamState	enum AsyncStreamState		156
+nim	StreamReaderLoop	tonalli/streams/asyncstream.html#StreamReaderLoop	type StreamReaderLoop		164
+nim	StreamWriterLoop	tonalli/streams/asyncstream.html#StreamWriterLoop	type StreamWriterLoop		167
+nim	AsyncStreamReader	tonalli/streams/asyncstream.html#AsyncStreamReader	type AsyncStreamReader		171
+nim	AsyncStreamWriter	tonalli/streams/asyncstream.html#AsyncStreamWriter	type AsyncStreamWriter		184
+nim	AsyncStream	tonalli/streams/asyncstream.html#AsyncStream	object AsyncStream		197
+nim	AsyncStreamRW	tonalli/streams/asyncstream.html#AsyncStreamRW	type AsyncStreamRW		201
+nim	new	tonalli/streams/asyncstream.html#new,typedesc[AsyncBufferRef],int	proc new(t: typedesc[AsyncBufferRef]; size: int): AsyncBufferRef		203
+nim	wait	tonalli/streams/asyncstream.html#wait.t,AsyncBufferRef	template wait(sb: AsyncBufferRef): untyped		209
+nim	transfer	tonalli/streams/asyncstream.html#transfer.t,AsyncBufferRef	template transfer(sb: AsyncBufferRef): untyped		214
+nim	forget	tonalli/streams/asyncstream.html#forget,AsyncBufferRef	proc forget(sb: AsyncBufferRef)		219
+nim	upload	tonalli/streams/asyncstream.html#upload,AsyncBufferRef,ptr.byte,int	proc upload(sb: AsyncBufferRef; pbytes: ptr byte; nbytes: int): InternalRaisesFuture[\n    void, (CancelledError,)]		225
+nim	copyOut	tonalli/streams/asyncstream.html#copyOut.t,pointer,WriteItem,int	template copyOut(dest: pointer; item: WriteItem; length: int)		249
+nim	newAsyncStreamIncompleteError	tonalli/streams/asyncstream.html#newAsyncStreamIncompleteError	proc newAsyncStreamIncompleteError(): ref AsyncStreamIncompleteError		291
+nim	newAsyncStreamLimitError	tonalli/streams/asyncstream.html#newAsyncStreamLimitError	proc newAsyncStreamLimitError(): ref AsyncStreamLimitError		295
+nim	newAsyncStreamUseClosedError	tonalli/streams/asyncstream.html#newAsyncStreamUseClosedError	proc newAsyncStreamUseClosedError(): ref AsyncStreamUseClosedError		298
+nim	raiseAsyncStreamUseClosedError	tonalli/streams/asyncstream.html#raiseAsyncStreamUseClosedError	proc raiseAsyncStreamUseClosedError()		302
+nim	raiseAsyncStreamLimitError	tonalli/streams/asyncstream.html#raiseAsyncStreamLimitError	proc raiseAsyncStreamLimitError()		306
+nim	raiseAsyncStreamIncompleteError	tonalli/streams/asyncstream.html#raiseAsyncStreamIncompleteError	proc raiseAsyncStreamIncompleteError()		310
+nim	newAsyncStreamWriteEOFError	tonalli/streams/asyncstream.html#newAsyncStreamWriteEOFError	proc newAsyncStreamWriteEOFError(): ref AsyncStreamWriteEOFError		314
+nim	raiseAsyncStreamWriteEOFError	tonalli/streams/asyncstream.html#raiseAsyncStreamWriteEOFError	proc raiseAsyncStreamWriteEOFError()		318
+nim	atEof	tonalli/streams/asyncstream.html#atEof,AsyncStreamReader	proc atEof(rstream: AsyncStreamReader): bool		322
+nim	atEof	tonalli/streams/asyncstream.html#atEof,AsyncStreamWriter	proc atEof(wstream: AsyncStreamWriter): bool		327
+nim	closed	tonalli/streams/asyncstream.html#closed,AsyncStreamRW	proc closed(rw: AsyncStreamRW): bool		331
+nim	finished	tonalli/streams/asyncstream.html#finished,AsyncStreamRW	proc finished(rw: AsyncStreamRW): bool		335
+nim	stopped	tonalli/streams/asyncstream.html#stopped,AsyncStreamRW	proc stopped(rw: AsyncStreamRW): bool		339
+nim	running	tonalli/streams/asyncstream.html#running,AsyncStreamRW	proc running(rw: AsyncStreamRW): bool		343
+nim	failed	tonalli/streams/asyncstream.html#failed,AsyncStreamRW	proc failed(rw: AsyncStreamRW): bool		347
+nim	readExactly	tonalli/streams/asyncstream.html#readExactly,AsyncStreamReader,pointer,int	proc readExactly(rstream: AsyncStreamReader; pbytes: pointer; nbytes: int): InternalRaisesFuture[\n    void, (CancelledError, AsyncStreamError)]		393
+nim	readOnce	tonalli/streams/asyncstream.html#readOnce,AsyncStreamReader,pointer,int	proc readOnce(rstream: AsyncStreamReader; pbytes: pointer; nbytes: int): InternalRaisesFuture[\n    int, (CancelledError, AsyncStreamError)]		414
+nim	readUntil	tonalli/streams/asyncstream.html#readUntil,AsyncStreamReader,pointer,int,seq[byte]	proc readUntil(rstream: AsyncStreamReader; pbytes: pointer; nbytes: int;\n          sep: seq[byte]): InternalRaisesFuture[int,\n    (CancelledError, AsyncStreamError)]		434
+nim	readLine	tonalli/streams/asyncstream.html#readLine,AsyncStreamReader,int,string	proc readLine(rstream: AsyncStreamReader; limit = 0; sep = "\r\n"): InternalRaisesFuture[\n    string, (CancelledError, AsyncStreamError)]		463
+nim	read	tonalli/streams/asyncstream.html#read,AsyncStreamReader,int	proc read(rstream: AsyncStreamReader; n: int): InternalRaisesFuture[seq[byte],\n    (CancelledError, AsyncStreamError)]		480
+nim	read	tonalli/streams/asyncstream.html#read,AsyncStreamReader	proc read(rstream: AsyncStreamReader): InternalRaisesFuture[seq[byte],\n    (CancelledError, AsyncStreamError)]		490
+nim	consume	tonalli/streams/asyncstream.html#consume,AsyncStreamReader,int	proc consume(rstream: AsyncStreamReader; n: int): InternalRaisesFuture[int,\n    (CancelledError, AsyncStreamError)]		497
+nim	consume	tonalli/streams/asyncstream.html#consume,AsyncStreamReader	proc consume(rstream: AsyncStreamReader): InternalRaisesFuture[int,\n    (CancelledError, AsyncStreamError)]		507
+nim	readMessage	tonalli/streams/asyncstream.html#readMessage,AsyncStreamReader,ReadMessagePredicate	proc readMessage(rstream: AsyncStreamReader; pred: ReadMessagePredicate): InternalRaisesFuture[\n    void, (CancelledError, AsyncStreamError)]		514
+nim	write	tonalli/streams/asyncstream.html#write,AsyncStreamWriter,pointer,int	proc write(wstream: AsyncStreamWriter; pbytes: pointer; nbytes: int): InternalRaisesFuture[\n    void, (CancelledError, AsyncStreamError)]		534
+nim	write	tonalli/streams/asyncstream.html#write,AsyncStreamWriter,seq[byte],int	proc write(wstream: AsyncStreamWriter; sbytes: seq[byte]; msglen = -1): InternalRaisesFuture[\n    void, (CancelledError, AsyncStreamError)]		546
+nim	write	tonalli/streams/asyncstream.html#write,AsyncStreamWriter,string,int	proc write(wstream: AsyncStreamWriter; sbytes: string; msglen = -1): InternalRaisesFuture[\n    void, (CancelledError, AsyncStreamError)]		560
+nim	finish	tonalli/streams/asyncstream.html#finish,AsyncStreamWriter	proc finish(wstream: AsyncStreamWriter): InternalRaisesFuture[void,\n    (CancelledError, AsyncStreamError)]		572
+nim	join	tonalli/streams/asyncstream.html#join,AsyncStreamRW	proc join(rw: AsyncStreamRW): InternalRaisesFuture[void, (CancelledError,)]		581
+nim	close	tonalli/streams/asyncstream.html#close,AsyncStreamReader	proc close(rstream: AsyncStreamReader)		586
+nim	close	tonalli/streams/asyncstream.html#close,AsyncStreamWriter	proc close(wstream: AsyncStreamWriter)		604
+nim	closeWait	tonalli/streams/asyncstream.html#closeWait,AsyncStreamRW	proc closeWait(rw: AsyncStreamRW): InternalRaisesFuture[void, void]		622
+nim	initUdata	tonalli/streams/asyncstream.html#initUdata,AsyncStreamRW,ref.T	proc initUdata[T](rw: AsyncStreamRW; udata: ref T)		1204
+nim	init	tonalli/streams/asyncstream.html#init,AsyncStreamWriter,AsyncStreamWriterVtbl	proc init(wstream: AsyncStreamWriter; vtbl: AsyncStreamWriterVtbl)		1209
+nim	init	tonalli/streams/asyncstream.html#init,AsyncStreamWriter,AsyncStreamWriter,StreamWriterLoop	proc init(child, wsource: AsyncStreamWriter; loop: StreamWriterLoop;\n     queueSize = AsyncStreamDefaultQueueSize)		1219
+nim	init	tonalli/streams/asyncstream.html#init,AsyncStreamWriter,AsyncStreamWriter,StreamWriterLoop,ref.T	proc init[T](child, wsource: AsyncStreamWriter; loop: StreamWriterLoop;\n        queueSize = AsyncStreamDefaultQueueSize; udata: ref T)		1232
+nim	init	tonalli/streams/asyncstream.html#init,AsyncStreamReader,AsyncStreamReaderVtbl	proc init(rstream: AsyncStreamReader; vtbl: AsyncStreamReaderVtbl)		1240
+nim	init	tonalli/streams/asyncstream.html#init,AsyncStreamReader,AsyncStreamReader,StreamReaderLoop	proc init(child, rsource: AsyncStreamReader; loop: StreamReaderLoop;\n     bufferSize = AsyncStreamDefaultBufferSize)		1250
+nim	init	tonalli/streams/asyncstream.html#init,AsyncStreamReader,AsyncStreamReader,StreamReaderLoop,ref.T	proc init[T](child, rsource: AsyncStreamReader; loop: StreamReaderLoop;\n        bufferSize = AsyncStreamDefaultBufferSize; udata: ref T)		1261
+nim	init	tonalli/streams/asyncstream.html#init,AsyncStreamWriter,StreamTransport	proc init(child: AsyncStreamWriter; tsource: StreamTransport)		1270
+nim	init	tonalli/streams/asyncstream.html#init,AsyncStreamWriter,StreamTransport,ref.T	proc init[T](child: AsyncStreamWriter; tsource: StreamTransport; udata: ref T)		1279
+nim	init	tonalli/streams/asyncstream.html#init,AsyncStreamWriter,AsyncStreamWriter	proc init(child, wsource: AsyncStreamWriter)		1287
+nim	init	tonalli/streams/asyncstream.html#init,AsyncStreamWriter,AsyncStreamWriter,ref.T	proc init[T](child, wsource: AsyncStreamWriter; udata: ref T)		1295
+nim	init	tonalli/streams/asyncstream.html#init,AsyncStreamReader,StreamTransport	proc init(child: AsyncStreamReader; tsource: StreamTransport)		1302
+nim	init	tonalli/streams/asyncstream.html#init,AsyncStreamReader,StreamTransport,ref.T	proc init[T](child: AsyncStreamReader; tsource: StreamTransport; udata: ref T)		1309
+nim	init	tonalli/streams/asyncstream.html#init,AsyncStreamReader,AsyncStreamReader	proc init(child, rsource: AsyncStreamReader)		1317
+nim	init	tonalli/streams/asyncstream.html#init,AsyncStreamReader,AsyncStreamReader,ref.T	proc init[T](child, rsource: AsyncStreamReader; udata: ref T)		1325
+nim	newAsyncStreamReader	tonalli/streams/asyncstream.html#newAsyncStreamReader,AsyncStreamReader,StreamReaderLoop,ref.T	proc newAsyncStreamReader[T](rsource: AsyncStreamReader; loop: StreamReaderLoop;\n                        bufferSize = AsyncStreamDefaultBufferSize; udata: ref T): AsyncStreamReader		1332
+nim	newAsyncStreamReader	tonalli/streams/asyncstream.html#newAsyncStreamReader,AsyncStreamReader,StreamReaderLoop	proc newAsyncStreamReader(rsource: AsyncStreamReader; loop: StreamReaderLoop;\n                     bufferSize = AsyncStreamDefaultBufferSize): AsyncStreamReader		1350
+nim	newAsyncStreamReader	tonalli/streams/asyncstream.html#newAsyncStreamReader,StreamTransport,ref.T	proc newAsyncStreamReader[T](tsource: StreamTransport; udata: ref T): AsyncStreamReader		1366
+nim	newAsyncStreamReader	tonalli/streams/asyncstream.html#newAsyncStreamReader,StreamTransport	proc newAsyncStreamReader(tsource: StreamTransport): AsyncStreamReader		1380
+nim	newAsyncStreamReader	tonalli/streams/asyncstream.html#newAsyncStreamReader,AsyncStreamReader,ref.T	proc newAsyncStreamReader[T](rsource: AsyncStreamReader; udata: ref T): AsyncStreamReader		1387
+nim	newAsyncStreamReader	tonalli/streams/asyncstream.html#newAsyncStreamReader,AsyncStreamReader	proc newAsyncStreamReader(rsource: AsyncStreamReader): AsyncStreamReader		1398
+nim	newAsyncStreamWriter	tonalli/streams/asyncstream.html#newAsyncStreamWriter,AsyncStreamWriter,StreamWriterLoop,ref.T	proc newAsyncStreamWriter[T](wsource: AsyncStreamWriter; loop: StreamWriterLoop;\n                        queueSize = AsyncStreamDefaultQueueSize; udata: ref T): AsyncStreamWriter		1404
+nim	newAsyncStreamWriter	tonalli/streams/asyncstream.html#newAsyncStreamWriter,AsyncStreamWriter,StreamWriterLoop	proc newAsyncStreamWriter(wsource: AsyncStreamWriter; loop: StreamWriterLoop;\n                     queueSize = AsyncStreamDefaultQueueSize): AsyncStreamWriter		1422
+nim	newAsyncStreamWriter	tonalli/streams/asyncstream.html#newAsyncStreamWriter,StreamTransport,ref.T	proc newAsyncStreamWriter[T](tsource: StreamTransport; udata: ref T): AsyncStreamWriter		1438
+nim	newAsyncStreamWriter	tonalli/streams/asyncstream.html#newAsyncStreamWriter,StreamTransport	proc newAsyncStreamWriter(tsource: StreamTransport): AsyncStreamWriter		1452
+nim	newAsyncStreamWriter	tonalli/streams/asyncstream.html#newAsyncStreamWriter,AsyncStreamWriter,ref.T	proc newAsyncStreamWriter[T](wsource: AsyncStreamWriter; udata: ref T): AsyncStreamWriter		1459
+nim	newAsyncStreamWriter	tonalli/streams/asyncstream.html#newAsyncStreamWriter,AsyncStreamWriter	proc newAsyncStreamWriter(wsource: AsyncStreamWriter): AsyncStreamWriter		1470
+nim	getUserData	tonalli/streams/asyncstream.html#getUserData,AsyncStreamRW	proc getUserData[T](rw: AsyncStreamRW): T		1476
+nim	setError	tonalli/streams/asyncstream.html#setError,AsyncStreamRW,ref.AsyncStreamError	proc setError(rw: AsyncStreamRW; error: ref AsyncStreamError)		1481
+nim	setErrorAndRaise	tonalli/streams/asyncstream.html#setErrorAndRaise,AsyncStreamRW,ref.AsyncStreamError	proc setErrorAndRaise(rw: AsyncStreamRW; error: ref AsyncStreamError)		1485
+nim	initSimpleVtbl	tonalli/streams/asyncstream.html#initSimpleVtbl,typeAsyncStreamReaderVtbl,ReadOnceProc	proc initSimpleVtbl(T: type AsyncStreamReaderVtbl; readOnceImpl: ReadOnceProc;\n               streamBufferSize = DefaultStreamBufferSize): T:type		1495
+nim	initSimpleVtbl	tonalli/streams/asyncstream.html#initSimpleVtbl,typeAsyncStreamWriterVtbl,WriteProc	proc initSimpleVtbl(T: type AsyncStreamWriterVtbl; writeImpl: WriteProc): T:type		1686
+nimgrp	close	tonalli/streams/asyncstream.html#close-procs-all	proc		586
+nimgrp	consume	tonalli/streams/asyncstream.html#consume-procs-all	proc		496
+nimgrp	initsimplevtbl	tonalli/streams/asyncstream.html#initSimpleVtbl-procs-all	proc		1495
+nimgrp	write	tonalli/streams/asyncstream.html#write-procs-all	proc		532
+nimgrp	read	tonalli/streams/asyncstream.html#read-procs-all	proc		479
+nimgrp	init	tonalli/streams/asyncstream.html#init-procs-all	proc		1209
+nimgrp	ateof	tonalli/streams/asyncstream.html#atEof-procs-all	proc		322
+nimgrp	newasyncstreamreader	tonalli/streams/asyncstream.html#newAsyncStreamReader-procs-all	proc		1332
+nimgrp	newasyncstreamwriter	tonalli/streams/asyncstream.html#newAsyncStreamWriter-procs-all	proc		1404

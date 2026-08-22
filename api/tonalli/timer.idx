@@ -1,0 +1,96 @@
+nimTitle	timer	tonalli/timer.html	module tonalli/timer		0
+nim	asyncTimer	tonalli/timer.html#asyncTimer	const asyncTimer		34
+nim	fastEpochTime	tonalli/timer.html#fastEpochTime	proc fastEpochTime(): uint64		131
+nim	Moment	tonalli/timer.html#Moment	object Moment		154
+nim	Duration	tonalli/timer.html#Duration	object Duration		160
+nim	SomeIntegerI64	tonalli/timer.html#SomeIntegerI64	type SomeIntegerI64		167
+nim	`+`	tonalli/timer.html#+,Duration,Duration	proc `+`(a: Duration; b: Duration): Duration		169
+nim	`+`	tonalli/timer.html#+,Duration,Moment	proc `+`(a: Duration; b: Moment): Moment		173
+nim	`+`	tonalli/timer.html#+,Moment,Duration	proc `+`(a: Moment; b: Duration): Moment		177
+nim	`+=`	tonalli/timer.html#+=,Moment,Duration	proc `+=`(a: var Moment; b: Duration)		181
+nim	`+=`	tonalli/timer.html#+=,Duration,Duration	proc `+=`(a: var Duration; b: Duration)		185
+nim	`-`	tonalli/timer.html#-,Moment,Moment	proc `-`(a, b: Moment): Duration		189
+nim	`-`	tonalli/timer.html#-,Moment,Duration	proc `-`(a: Moment; b: Duration): Moment		195
+nim	`-`	tonalli/timer.html#-,Duration,Duration	proc `-`(a: Duration; b: Duration): Duration		201
+nim	`-=`	tonalli/timer.html#-=,Duration,Duration	proc `-=`(a: var Duration; b: Duration)		207
+nim	`-=`	tonalli/timer.html#-=,Moment,Duration	proc `-=`(a: var Moment; b: Duration)		211
+nim	`==`	tonalli/timer.html#==,Duration,Duration	proc `==`(a, b: Duration): bool		215
+nim	`==`	tonalli/timer.html#==,Moment,Moment	proc `==`(a, b: Moment): bool		219
+nim	`<`	tonalli/timer.html#<,Duration,Duration	proc `<`(a, b: Duration): bool		223
+nim	`<`	tonalli/timer.html#<,Moment,Moment	proc `<`(a, b: Moment): bool		227
+nim	`<=`	tonalli/timer.html#<=,Duration,Duration	proc `<=`(a, b: Duration): bool		231
+nim	`<=`	tonalli/timer.html#<=,Moment,Moment	proc `<=`(a, b: Moment): bool		235
+nim	`*`	tonalli/timer.html#*,Duration,SomeIntegerI64	proc `*`(a: Duration; b: SomeIntegerI64): Duration		239
+nim	`*`	tonalli/timer.html#*,SomeIntegerI64,Duration	proc `*`(a: SomeIntegerI64; b: Duration): Duration		243
+nim	`div`	tonalli/timer.html#div,Duration,SomeIntegerI64	proc `div`(a: Duration; b: SomeIntegerI64): Duration		247
+nim	Nanosecond	tonalli/timer.html#Nanosecond	const Nanosecond		252
+nim	Microsecond	tonalli/timer.html#Microsecond	const Microsecond		253
+nim	Millisecond	tonalli/timer.html#Millisecond	const Millisecond		254
+nim	Second	tonalli/timer.html#Second	const Second		255
+nim	Minute	tonalli/timer.html#Minute	const Minute		256
+nim	Hour	tonalli/timer.html#Hour	const Hour		257
+nim	Day	tonalli/timer.html#Day	const Day		258
+nim	Week	tonalli/timer.html#Week	const Week		259
+nim	ZeroDuration	tonalli/timer.html#ZeroDuration	const ZeroDuration		261
+nim	InfiniteDuration	tonalli/timer.html#InfiniteDuration	const InfiniteDuration		262
+nim	high	tonalli/timer.html#high.t,typedesc[Moment]	template high(T: typedesc[Moment]): Moment		264
+nim	low	tonalli/timer.html#low.t,typedesc[Moment]	template low(T: typedesc[Moment]): Moment		267
+nim	high	tonalli/timer.html#high.t,typedesc[Duration]	template high(T: typedesc[Duration]): Duration		270
+nim	low	tonalli/timer.html#low.t,typedesc[Duration]	template low(T: typedesc[Duration]): Duration		273
+nim	nanoseconds	tonalli/timer.html#nanoseconds,SomeIntegerI64	proc nanoseconds(v: SomeIntegerI64): Duration		276
+nim	microseconds	tonalli/timer.html#microseconds,SomeIntegerI64	proc microseconds(v: SomeIntegerI64): Duration		280
+nim	milliseconds	tonalli/timer.html#milliseconds,SomeIntegerI64	proc milliseconds(v: SomeIntegerI64): Duration		284
+nim	seconds	tonalli/timer.html#seconds,SomeIntegerI64	proc seconds(v: SomeIntegerI64): Duration		288
+nim	minutes	tonalli/timer.html#minutes,SomeIntegerI64	proc minutes(v: SomeIntegerI64): Duration		292
+nim	hours	tonalli/timer.html#hours,SomeIntegerI64	proc hours(v: SomeIntegerI64): Duration		296
+nim	days	tonalli/timer.html#days,SomeIntegerI64	proc days(v: SomeIntegerI64): Duration		300
+nim	weeks	tonalli/timer.html#weeks,SomeIntegerI64	proc weeks(v: SomeIntegerI64): Duration		304
+nim	nanoseconds	tonalli/timer.html#nanoseconds,Duration	proc nanoseconds(v: Duration): int64		308
+nim	microseconds	tonalli/timer.html#microseconds,Duration	proc microseconds(v: Duration): int64		312
+nim	milliseconds	tonalli/timer.html#milliseconds,Duration	proc milliseconds(v: Duration): int64		316
+nim	seconds	tonalli/timer.html#seconds,Duration	proc seconds(v: Duration): int64		320
+nim	minutes	tonalli/timer.html#minutes,Duration	proc minutes(v: Duration): int64		324
+nim	hours	tonalli/timer.html#hours,Duration	proc hours(v: Duration): int64		328
+nim	days	tonalli/timer.html#days,Duration	proc days(v: Duration): int64		332
+nim	weeks	tonalli/timer.html#weeks,Duration	proc weeks(v: Duration): int64		336
+nim	nanos	tonalli/timer.html#nanos,SomeIntegerI64	proc nanos(v: SomeIntegerI64): Duration		340
+nim	micros	tonalli/timer.html#micros,SomeIntegerI64	proc micros(v: SomeIntegerI64): Duration		343
+nim	millis	tonalli/timer.html#millis,SomeIntegerI64	proc millis(v: SomeIntegerI64): Duration		346
+nim	secs	tonalli/timer.html#secs,SomeIntegerI64	proc secs(v: SomeIntegerI64): Duration		349
+nim	nanos	tonalli/timer.html#nanos,Duration	proc nanos(v: Duration): int64		352
+nim	micros	tonalli/timer.html#micros,Duration	proc micros(v: Duration): int64		355
+nim	millis	tonalli/timer.html#millis,Duration	proc millis(v: Duration): int64		358
+nim	secs	tonalli/timer.html#secs,Duration	proc secs(v: Duration): int64		361
+nim	toString	tonalli/timer.html#toString	proc toString(a: timer.Duration; parts = int.high): string		368
+nim	`$`	tonalli/timer.html#$,Duration	proc `$`(a: Duration): string		400
+nim	`$`	tonalli/timer.html#$,Moment	proc `$`(a: Moment): string		404
+nim	isZero	tonalli/timer.html#isZero,Duration	proc isZero(a: Duration): bool		412
+nim	isInfinite	tonalli/timer.html#isInfinite,Duration	proc isInfinite(a: Duration): bool		416
+nim	now	tonalli/timer.html#now,typedesc[Moment]	proc now(t: typedesc[Moment]): Moment		420
+nim	init	tonalli/timer.html#init,typedesc[Moment],int64,Duration	proc init(t: typedesc[Moment]; value: int64; precision: Duration): Moment		427
+nim	epochSeconds	tonalli/timer.html#epochSeconds,Moment	proc epochSeconds(moment: Moment): int64		432
+nim	epochNanoSeconds	tonalli/timer.html#epochNanoSeconds,Moment	proc epochNanoSeconds(moment: Moment): int64		435
+nim	fromNow	tonalli/timer.html#fromNow,typedesc[Moment],Duration	proc fromNow(t: typedesc[Moment]; a: Duration): Moment		438
+nimgrp	==	tonalli/timer.html#==-procs-all	proc		215
+nimgrp	+	tonalli/timer.html#+-procs-all	proc		169
+nimgrp	-	tonalli/timer.html#--procs-all	proc		189
+nimgrp	micros	tonalli/timer.html#micros-procs-all	proc		343
+nimgrp	$	tonalli/timer.html#$-procs-all	proc		400
+nimgrp	-=	tonalli/timer.html#-=-procs-all	proc		207
+nimgrp	*	tonalli/timer.html#*-procs-all	proc		239
+nimgrp	days	tonalli/timer.html#days-procs-all	proc		300
+nimgrp	millis	tonalli/timer.html#millis-procs-all	proc		346
+nimgrp	seconds	tonalli/timer.html#seconds-procs-all	proc		288
+nimgrp	minutes	tonalli/timer.html#minutes-procs-all	proc		292
+nimgrp	hours	tonalli/timer.html#hours-procs-all	proc		296
+nimgrp	<=	tonalli/timer.html#<=-procs-all	proc		231
+nimgrp	weeks	tonalli/timer.html#weeks-procs-all	proc		304
+nimgrp	<	tonalli/timer.html#<-procs-all	proc		223
+nimgrp	secs	tonalli/timer.html#secs-procs-all	proc		349
+nimgrp	milliseconds	tonalli/timer.html#milliseconds-procs-all	proc		284
+nimgrp	+=	tonalli/timer.html#+=-procs-all	proc		181
+nimgrp	nanoseconds	tonalli/timer.html#nanoseconds-procs-all	proc		276
+nimgrp	nanos	tonalli/timer.html#nanos-procs-all	proc		340
+nimgrp	microseconds	tonalli/timer.html#microseconds-procs-all	proc		280
+nimgrp	low	tonalli/timer.html#low-templates-all	template		267
+nimgrp	high	tonalli/timer.html#high-templates-all	template		264

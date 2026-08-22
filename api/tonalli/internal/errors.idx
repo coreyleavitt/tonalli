@@ -1,0 +1,4 @@
+nimTitle	errors	tonalli/internal/errors.html	module tonalli/internal/errors		0
+nim	AsyncError	tonalli/internal/errors.html#AsyncError	object AsyncError		2
+nim	AsyncTimeoutError	tonalli/internal/errors.html#AsyncTimeoutError	object AsyncTimeoutError		4
+nim	AsyncExceptionError	tonalli/internal/errors.html#AsyncExceptionError	object AsyncExceptionError		7

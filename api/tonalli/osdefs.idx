@@ -1,0 +1,150 @@
+nimTitle	osdefs	tonalli/osdefs.html	module tonalli/osdefs		0
+nim	IP_MULTICAST_TTL	tonalli/osdefs.html#IP_MULTICAST_TTL	const IP_MULTICAST_TTL		1050
+nim	EPOLLIN	tonalli/osdefs.html#EPOLLIN	const EPOLLIN		1055
+nim	EPOLLPRI	tonalli/osdefs.html#EPOLLPRI	const EPOLLPRI		1056
+nim	EPOLLOUT	tonalli/osdefs.html#EPOLLOUT	const EPOLLOUT		1057
+nim	EPOLLERR	tonalli/osdefs.html#EPOLLERR	const EPOLLERR		1058
+nim	EPOLLHUP	tonalli/osdefs.html#EPOLLHUP	const EPOLLHUP		1059
+nim	EPOLLRDNORM	tonalli/osdefs.html#EPOLLRDNORM	const EPOLLRDNORM		1060
+nim	EPOLLRDBAND	tonalli/osdefs.html#EPOLLRDBAND	const EPOLLRDBAND		1061
+nim	EPOLLWRNORM	tonalli/osdefs.html#EPOLLWRNORM	const EPOLLWRNORM		1062
+nim	EPOLLWRBAND	tonalli/osdefs.html#EPOLLWRBAND	const EPOLLWRBAND		1063
+nim	EPOLLMSG	tonalli/osdefs.html#EPOLLMSG	const EPOLLMSG		1064
+nim	EPOLLRDHUP	tonalli/osdefs.html#EPOLLRDHUP	const EPOLLRDHUP		1065
+nim	EPOLLEXCLUSIVE	tonalli/osdefs.html#EPOLLEXCLUSIVE	const EPOLLEXCLUSIVE		1066
+nim	EPOLLWAKEUP	tonalli/osdefs.html#EPOLLWAKEUP	const EPOLLWAKEUP		1067
+nim	EPOLLONESHOT	tonalli/osdefs.html#EPOLLONESHOT	const EPOLLONESHOT		1068
+nim	EPOLLET	tonalli/osdefs.html#EPOLLET	const EPOLLET		1069
+nim	SFD_CLOEXEC	tonalli/osdefs.html#SFD_CLOEXEC	const SFD_CLOEXEC		1071
+nim	SFD_NONBLOCK	tonalli/osdefs.html#SFD_NONBLOCK	const SFD_NONBLOCK		1072
+nim	EFD_CLOEXEC	tonalli/osdefs.html#EFD_CLOEXEC	const EFD_CLOEXEC		1073
+nim	EFD_NONBLOCK	tonalli/osdefs.html#EFD_NONBLOCK	const EFD_NONBLOCK		1074
+nim	TFD_CLOEXEC	tonalli/osdefs.html#TFD_CLOEXEC	const TFD_CLOEXEC		1075
+nim	TFD_NONBLOCK	tonalli/osdefs.html#TFD_NONBLOCK	const TFD_NONBLOCK		1076
+nim	EPOLL_CTL_ADD	tonalli/osdefs.html#EPOLL_CTL_ADD	const EPOLL_CTL_ADD		1078
+nim	EPOLL_CTL_DEL	tonalli/osdefs.html#EPOLL_CTL_DEL	const EPOLL_CTL_DEL		1079
+nim	EPOLL_CTL_MOD	tonalli/osdefs.html#EPOLL_CTL_MOD	const EPOLL_CTL_MOD		1080
+nim	EpollData	tonalli/osdefs.html#EpollData	object EpollData		1090
+nim	EpollEvent	tonalli/osdefs.html#EpollEvent	object EpollEvent		1097
+nim	SignalFdInfo	tonalli/osdefs.html#SignalFdInfo	object SignalFdInfo		1102
+nim	epoll_create	tonalli/osdefs.html#epoll_create,cint	proc epoll_create(size: cint): cint		1121
+nim	epoll_create1	tonalli/osdefs.html#epoll_create1,cint	proc epoll_create1(flags: cint): cint		1124
+nim	epoll_ctl	tonalli/osdefs.html#epoll_ctl,cint,cint,cint,ptr.EpollEvent	proc epoll_ctl(epfd: cint; op: cint; fd: cint; event: ptr EpollEvent): cint		1127
+nim	epoll_wait	tonalli/osdefs.html#epoll_wait,cint,ptr.EpollEvent,cint,cint	proc epoll_wait(epfd: cint; events: ptr EpollEvent; maxevents: cint; timeout: cint): cint		1130
+nim	timerfd_create	tonalli/osdefs.html#timerfd_create,ClockId,cint	proc timerfd_create(clock_id: ClockId; flags: cint): cint		1134
+nim	timerfd_settime	tonalli/osdefs.html#timerfd_settime,cint,cint,Itimerspec,Itimerspec	proc timerfd_settime(ufd: cint; flags: cint; utmr: var Itimerspec;\n                otmr: var Itimerspec): cint		1136
+nim	eventfd	tonalli/osdefs.html#eventfd,cuint,cint	proc eventfd(count: cuint; flags: cint): cint		1139
+nim	signalfd	tonalli/osdefs.html#signalfd,cint,Sigset,cint	proc signalfd(fd: cint; mask: var Sigset; flags: cint): cint		1141
+nim	pipe2	tonalli/osdefs.html#pipe2,array[,cint],cint	proc pipe2(a: array[0 .. 1, cint]; flags: cint): cint		1206
+nim	accept4	tonalli/osdefs.html#accept4,cint,ptr.SockAddr,ptr.SockLen,cint	proc accept4(a1: cint; a2: ptr SockAddr; a3: ptr SockLen; a4: cint): cint		1209
+nim	SOCK_NONBLOCK	tonalli/osdefs.html#SOCK_NONBLOCK	const SOCK_NONBLOCK		1214
+nim	SOCK_CLOEXEC	tonalli/osdefs.html#SOCK_CLOEXEC	const SOCK_CLOEXEC		1215
+nim	TCP_NODELAY	tonalli/osdefs.html#TCP_NODELAY	const TCP_NODELAY		1216
+nim	IPPROTO_TCP	tonalli/osdefs.html#IPPROTO_TCP	const IPPROTO_TCP		1217
+nim	O_CLOEXEC	tonalli/osdefs.html#O_CLOEXEC	const O_CLOEXEC		1218
+nim	POSIX_SPAWN_USEVFORK	tonalli/osdefs.html#POSIX_SPAWN_USEVFORK	const POSIX_SPAWN_USEVFORK		1219
+nim	IPV6_V6ONLY	tonalli/osdefs.html#IPV6_V6ONLY	const IPV6_V6ONLY		1220
+nim	POSIX_SPAWN_RESETIDS	tonalli/osdefs.html#POSIX_SPAWN_RESETIDS	const POSIX_SPAWN_RESETIDS		1280
+nim	POSIX_SPAWN_SETPGROUP	tonalli/osdefs.html#POSIX_SPAWN_SETPGROUP	const POSIX_SPAWN_SETPGROUP		1281
+nim	POSIX_SPAWN_SETSCHEDPARAM	tonalli/osdefs.html#POSIX_SPAWN_SETSCHEDPARAM	const POSIX_SPAWN_SETSCHEDPARAM		1282
+nim	POSIX_SPAWN_SETSCHEDULER	tonalli/osdefs.html#POSIX_SPAWN_SETSCHEDULER	const POSIX_SPAWN_SETSCHEDULER		1283
+nim	POSIX_SPAWN_SETSIGDEF	tonalli/osdefs.html#POSIX_SPAWN_SETSIGDEF	const POSIX_SPAWN_SETSIGDEF		1284
+nim	POSIX_SPAWN_SETSIGMASK	tonalli/osdefs.html#POSIX_SPAWN_SETSIGMASK	const POSIX_SPAWN_SETSIGMASK		1285
+nim	SchedParam	tonalli/osdefs.html#SchedParam	object SchedParam		1289
+nim	PosixSpawnAttr	tonalli/osdefs.html#PosixSpawnAttr	object PosixSpawnAttr		1300
+nim	PosixSpawnFileActions	tonalli/osdefs.html#PosixSpawnFileActions	object PosixSpawnFileActions		1310
+nim	posixSpawn	tonalli/osdefs.html#posixSpawn,Pid,cstring,PosixSpawnFileActions,PosixSpawnAttr,cstringArray,cstringArray	proc posixSpawn(a1: var Pid; a2: cstring; a3: var PosixSpawnFileActions;\n           a4: var PosixSpawnAttr; a5, a6: cstringArray): cint		1316
+nim	posixSpawnp	tonalli/osdefs.html#posixSpawnp,Pid,cstring,PosixSpawnFileActions,PosixSpawnAttr,cstringArray,cstringArray	proc posixSpawnp(a1: var Pid; a2: cstring; a3: var PosixSpawnFileActions;\n            a4: var PosixSpawnAttr; a5, a6: cstringArray): cint		1319
+nim	posixSpawnFileActionsInit	tonalli/osdefs.html#posixSpawnFileActionsInit,PosixSpawnFileActions	proc posixSpawnFileActionsInit(a1: var PosixSpawnFileActions): cint		1323
+nim	posixSpawnFileActionsDestroy	tonalli/osdefs.html#posixSpawnFileActionsDestroy,PosixSpawnFileActions	proc posixSpawnFileActionsDestroy(a1: var PosixSpawnFileActions): cint		1326
+nim	posixSpawnFileActionsAddClose	tonalli/osdefs.html#posixSpawnFileActionsAddClose,PosixSpawnFileActions,cint	proc posixSpawnFileActionsAddClose(a1: var PosixSpawnFileActions; a2: cint): cint		1330
+nim	posixSpawnFileActionsAddDup2	tonalli/osdefs.html#posixSpawnFileActionsAddDup2,PosixSpawnFileActions,cint,cint	proc posixSpawnFileActionsAddDup2(a1: var PosixSpawnFileActions; a2, a3: cint): cint		1334
+nim	posixSpawnFileActionsAddOpen	tonalli/osdefs.html#posixSpawnFileActionsAddOpen,PosixSpawnFileActions,cint,cstring,cint,Mode	proc posixSpawnFileActionsAddOpen(a1: var PosixSpawnFileActions; a2: cint;\n                             a3: cstring; a4: cint; a5: Mode): cint		1338
+nim	posixSpawnAttrInit	tonalli/osdefs.html#posixSpawnAttrInit,PosixSpawnAttr	proc posixSpawnAttrInit(a1: var PosixSpawnAttr): cint		1344
+nim	posixSpawnAttrDestroy	tonalli/osdefs.html#posixSpawnAttrDestroy,PosixSpawnAttr	proc posixSpawnAttrDestroy(a1: var PosixSpawnAttr): cint		1347
+nim	posixSpawnAttrGetSigDefault	tonalli/osdefs.html#posixSpawnAttrGetSigDefault,PosixSpawnAttr,Sigset	proc posixSpawnAttrGetSigDefault(a1: var PosixSpawnAttr; a2: var Sigset): cint		1351
+nim	posixSpawnAttrSetSigDefault	tonalli/osdefs.html#posixSpawnAttrSetSigDefault,PosixSpawnAttr,Sigset	proc posixSpawnAttrSetSigDefault(a1: var PosixSpawnAttr; a2: var Sigset): cint		1355
+nim	posixSpawnAttrGetFlags	tonalli/osdefs.html#posixSpawnAttrGetFlags,PosixSpawnAttr,cshort	proc posixSpawnAttrGetFlags(a1: var PosixSpawnAttr; a2: var cshort): cint		1359
+nim	posixSpawnAttrSetFlags	tonalli/osdefs.html#posixSpawnAttrSetFlags,PosixSpawnAttr,cint	proc posixSpawnAttrSetFlags(a1: var PosixSpawnAttr; a2: cint): cint		1363
+nim	posixSpawnAttrGetPgroup	tonalli/osdefs.html#posixSpawnAttrGetPgroup,PosixSpawnAttr,Pid	proc posixSpawnAttrGetPgroup(a1: var PosixSpawnAttr; a2: var Pid): cint		1366
+nim	posixSpawnAttrSetPgroup	tonalli/osdefs.html#posixSpawnAttrSetPgroup,PosixSpawnAttr,Pid	proc posixSpawnAttrSetPgroup(a1: var PosixSpawnAttr; a2: Pid): cint		1370
+nim	posixSpawnAttrGetSchedParam	tonalli/osdefs.html#posixSpawnAttrGetSchedParam,PosixSpawnAttr,SchedParam	proc posixSpawnAttrGetSchedParam(a1: var PosixSpawnAttr; a2: var SchedParam): cint		1373
+nim	posixSpawnAttrSetSchedParam	tonalli/osdefs.html#posixSpawnAttrSetSchedParam,PosixSpawnAttr,SchedParam	proc posixSpawnAttrSetSchedParam(a1: var PosixSpawnAttr; a2: var SchedParam): cint		1377
+nim	posixSpawnAttrGetSchedPolicy	tonalli/osdefs.html#posixSpawnAttrGetSchedPolicy,PosixSpawnAttr,cint	proc posixSpawnAttrGetSchedPolicy(a1: var PosixSpawnAttr; a2: var cint): cint		1381
+nim	posixSpawnAttrSetSchedPolicy	tonalli/osdefs.html#posixSpawnAttrSetSchedPolicy,PosixSpawnAttr,cint	proc posixSpawnAttrSetSchedPolicy(a1: var PosixSpawnAttr; a2: cint): cint		1385
+nim	posixSpawnAttrGetSigMask	tonalli/osdefs.html#posixSpawnAttrGetSigMask,PosixSpawnAttr,Sigset	proc posixSpawnAttrGetSigMask(a1: var PosixSpawnAttr; a2: var Sigset): cint		1389
+nim	posixSpawnAttrSetSigMask	tonalli/osdefs.html#posixSpawnAttrSetSigMask,PosixSpawnAttr,Sigset	proc posixSpawnAttrSetSigMask(a1: var PosixSpawnAttr; a2: var Sigset): cint		1393
+nim	P_PID	tonalli/osdefs.html#P_PID	const P_PID		1400
+nim	WNOHANG	tonalli/osdefs.html#WNOHANG	const WNOHANG		1401
+nim	WSTOPPED	tonalli/osdefs.html#WSTOPPED	const WSTOPPED		1402
+nim	WEXITED	tonalli/osdefs.html#WEXITED	const WEXITED		1403
+nim	WNOWAIT	tonalli/osdefs.html#WNOWAIT	const WNOWAIT		1404
+nim	WAITEXITSTATUS	tonalli/osdefs.html#WAITEXITSTATUS.t,cint	template WAITEXITSTATUS(s: cint): cint		1407
+nim	WAITTERMSIG	tonalli/osdefs.html#WAITTERMSIG.t,cint	template WAITTERMSIG(s: cint): cint		1409
+nim	WAITSTOPSIG	tonalli/osdefs.html#WAITSTOPSIG.t,cint	template WAITSTOPSIG(s: cint): cint		1411
+nim	WAITIFEXITED	tonalli/osdefs.html#WAITIFEXITED.t,cint	template WAITIFEXITED(s: cint): bool		1413
+nim	WAITIFSIGNALED	tonalli/osdefs.html#WAITIFSIGNALED.t,cint	template WAITIFSIGNALED(s: cint): bool		1415
+nim	WAITIFSTOPPED	tonalli/osdefs.html#WAITIFSTOPPED.t,cint	template WAITIFSTOPPED(s: cint): bool		1417
+nim	WAITIFCONTINUED	tonalli/osdefs.html#WAITIFCONTINUED.t,cint	template WAITIFCONTINUED(s: cint): bool		1419
+nim	INVALID_SOCKET	tonalli/osdefs.html#INVALID_SOCKET	const INVALID_SOCKET		1554
+nim	INVALID_HANDLE_VALUE	tonalli/osdefs.html#INVALID_HANDLE_VALUE	const INVALID_HANDLE_VALUE		1555
+nim	`==`	tonalli/osdefs.html#==,SocketHandle,int	proc `==`(x: SocketHandle; y: int): bool		1557
+nim	`==`	tonalli/osdefs.html#==,SocketHandle,SocketHandle	proc `==`(x: SocketHandle; y: SocketHandle): bool		1559
+nim	AF_NETLINK	tonalli/osdefs.html#AF_NETLINK	const AF_NETLINK		1712
+nim	AF_PACKET	tonalli/osdefs.html#AF_PACKET	const AF_PACKET		1713
+nim	NETLINK_ROUTE	tonalli/osdefs.html#NETLINK_ROUTE	const NETLINK_ROUTE		1714
+nim	NLMSG_ALIGNTO	tonalli/osdefs.html#NLMSG_ALIGNTO	const NLMSG_ALIGNTO		1715
+nim	RTA_ALIGNTO	tonalli/osdefs.html#RTA_ALIGNTO	const RTA_ALIGNTO		1716
+nim	RTA_DST	tonalli/osdefs.html#RTA_DST	const RTA_DST		1718
+nim	RTA_OIF	tonalli/osdefs.html#RTA_OIF	const RTA_OIF		1721
+nim	RTA_GATEWAY	tonalli/osdefs.html#RTA_GATEWAY	const RTA_GATEWAY		1722
+nim	RTA_PREFSRC	tonalli/osdefs.html#RTA_PREFSRC	const RTA_PREFSRC		1724
+nim	RTM_NEWLINK	tonalli/osdefs.html#RTM_NEWLINK	const RTM_NEWLINK		1726
+nim	RTM_NEWROUTE	tonalli/osdefs.html#RTM_NEWROUTE	const RTM_NEWROUTE		1727
+nim	RTM_F_LOOKUP_TABLE	tonalli/osdefs.html#RTM_F_LOOKUP_TABLE	const RTM_F_LOOKUP_TABLE		1729
+nim	RTM_GETLINK	tonalli/osdefs.html#RTM_GETLINK	const RTM_GETLINK		1731
+nim	RTM_GETADDR	tonalli/osdefs.html#RTM_GETADDR	const RTM_GETADDR		1732
+nim	RTM_GETROUTE	tonalli/osdefs.html#RTM_GETROUTE	const RTM_GETROUTE		1733
+nim	NLM_F_REQUEST	tonalli/osdefs.html#NLM_F_REQUEST	const NLM_F_REQUEST		1734
+nim	NLM_F_ROOT	tonalli/osdefs.html#NLM_F_ROOT	const NLM_F_ROOT		1735
+nim	NLM_F_MATCH	tonalli/osdefs.html#NLM_F_MATCH	const NLM_F_MATCH		1736
+nim	NLM_F_DUMP	tonalli/osdefs.html#NLM_F_DUMP	const NLM_F_DUMP		1737
+nim	IFLIST_REPLY_BUFFER	tonalli/osdefs.html#IFLIST_REPLY_BUFFER	const IFLIST_REPLY_BUFFER		1738
+nim	InvalidSocketHandle	tonalli/osdefs.html#InvalidSocketHandle	const InvalidSocketHandle		1739
+nim	NLMSG_DONE	tonalli/osdefs.html#NLMSG_DONE	const NLMSG_DONE		1740
+nim	NLMSG_ERROR	tonalli/osdefs.html#NLMSG_ERROR	const NLMSG_ERROR		1742
+nim	IFLA_ADDRESS	tonalli/osdefs.html#IFLA_ADDRESS	const IFLA_ADDRESS		1745
+nim	IFLA_IFNAME	tonalli/osdefs.html#IFLA_IFNAME	const IFLA_IFNAME		1746
+nim	IFLA_MTU	tonalli/osdefs.html#IFLA_MTU	const IFLA_MTU		1747
+nim	IFLA_OPERSTATE	tonalli/osdefs.html#IFLA_OPERSTATE	const IFLA_OPERSTATE		1748
+nim	IFA_ADDRESS	tonalli/osdefs.html#IFA_ADDRESS	const IFA_ADDRESS		1750
+nim	IFA_LOCAL	tonalli/osdefs.html#IFA_LOCAL	const IFA_LOCAL		1751
+nim	ARPHRD_ETHER	tonalli/osdefs.html#ARPHRD_ETHER	const ARPHRD_ETHER		1755
+nim	ARPHRD_EETHER	tonalli/osdefs.html#ARPHRD_EETHER	const ARPHRD_EETHER		1756
+nim	ARPHRD_ARCNET	tonalli/osdefs.html#ARPHRD_ARCNET	const ARPHRD_ARCNET		1761
+nim	ARPHRD_ATM	tonalli/osdefs.html#ARPHRD_ATM	const ARPHRD_ATM		1764
+nim	ARPHRD_IEEE1394	tonalli/osdefs.html#ARPHRD_IEEE1394	const ARPHRD_IEEE1394		1766
+nim	ARPHRD_SLIP	tonalli/osdefs.html#ARPHRD_SLIP	const ARPHRD_SLIP		1769
+nim	ARPHRD_CSLIP	tonalli/osdefs.html#ARPHRD_CSLIP	const ARPHRD_CSLIP		1770
+nim	ARPHRD_SLIP6	tonalli/osdefs.html#ARPHRD_SLIP6	const ARPHRD_SLIP6		1771
+nim	ARPHRD_CSLIP6	tonalli/osdefs.html#ARPHRD_CSLIP6	const ARPHRD_CSLIP6		1772
+nim	ARPHRD_PPP	tonalli/osdefs.html#ARPHRD_PPP	const ARPHRD_PPP		1779
+nim	ARPHRD_CISCO	tonalli/osdefs.html#ARPHRD_CISCO	const ARPHRD_CISCO		1780
+nim	ARPHRD_HDLC	tonalli/osdefs.html#ARPHRD_HDLC	const ARPHRD_HDLC		1781
+nim	ARPHRD_LAPB	tonalli/osdefs.html#ARPHRD_LAPB	const ARPHRD_LAPB		1782
+nim	ARPHRD_FRAD	tonalli/osdefs.html#ARPHRD_FRAD	const ARPHRD_FRAD		1787
+nim	ARPHRD_LOOPBACK	tonalli/osdefs.html#ARPHRD_LOOPBACK	const ARPHRD_LOOPBACK		1789
+nim	ARPHRD_HIPPI	tonalli/osdefs.html#ARPHRD_HIPPI	const ARPHRD_HIPPI		1797
+nim	ARPHRD_IEEE80211	tonalli/osdefs.html#ARPHRD_IEEE80211	const ARPHRD_IEEE80211		1806
+nim	ARPHRD_IEEE80211_PRISM	tonalli/osdefs.html#ARPHRD_IEEE80211_PRISM	const ARPHRD_IEEE80211_PRISM		1807
+nim	ARPHRD_IEEE80211_RADIOTAP	tonalli/osdefs.html#ARPHRD_IEEE80211_RADIOTAP	const ARPHRD_IEEE80211_RADIOTAP		1808
+nim	Sockaddr_nl	tonalli/osdefs.html#Sockaddr_nl	object Sockaddr_nl		1821
+nim	NlMsgHeader	tonalli/osdefs.html#NlMsgHeader	object NlMsgHeader		1827
+nim	IfInfoMessage	tonalli/osdefs.html#IfInfoMessage	object IfInfoMessage		1834
+nim	IfAddrMessage	tonalli/osdefs.html#IfAddrMessage	object IfAddrMessage		1842
+nim	RtMessage	tonalli/osdefs.html#RtMessage	object RtMessage		1849
+nim	RtAttr	tonalli/osdefs.html#RtAttr	object RtAttr		1860
+nim	RtGenMsg	tonalli/osdefs.html#RtGenMsg	object RtGenMsg		1864
+nim	NLReq	tonalli/osdefs.html#NLReq	object NLReq		1867
+nim	NLRouteReq	tonalli/osdefs.html#NLRouteReq	object NLRouteReq		1871
+nimgrp	==	tonalli/osdefs.html#==-procs-all	proc		1557

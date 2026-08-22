@@ -1,0 +1,84 @@
+nimTitle	common	tonalli/transports/common.html	module tonalli/transports/common		0
+nim	DefaultStreamBufferSize	tonalli/transports/common.html#DefaultStreamBufferSize	const DefaultStreamBufferSize		25
+nim	DefaultDatagramBufferSize	tonalli/transports/common.html#DefaultDatagramBufferSize	const DefaultDatagramBufferSize		27
+nim	ReuseAddr	tonalli/transports/common.html#ReuseAddr	ServerFlags.ReuseAddr		30
+nim	ReusePort	tonalli/transports/common.html#ReusePort	ServerFlags.ReusePort		30
+nim	TcpNoDelay	tonalli/transports/common.html#TcpNoDelay	ServerFlags.TcpNoDelay		30
+nim	NoAutoRead	tonalli/transports/common.html#NoAutoRead	ServerFlags.NoAutoRead		30
+nim	GCUserData	tonalli/transports/common.html#GCUserData	ServerFlags.GCUserData		30
+nim	FirstPipe	tonalli/transports/common.html#FirstPipe	ServerFlags.FirstPipe		30
+nim	NoPipeFlash	tonalli/transports/common.html#NoPipeFlash	ServerFlags.NoPipeFlash		30
+nim	Broadcast	tonalli/transports/common.html#Broadcast	ServerFlags.Broadcast		30
+nim	V4Mapped	tonalli/transports/common.html#V4Mapped	ServerFlags.V4Mapped		30
+nim	ServerFlags	tonalli/transports/common.html#ServerFlags	enum ServerFlags		30
+nim	DualStackType	tonalli/transports/common.html#DualStackType	enum DualStackType		35
+nim	AddressFamily	tonalli/transports/common.html#AddressFamily	enum AddressFamily		38
+nim	TransportAddress	tonalli/transports/common.html#TransportAddress	object TransportAddress		41
+nim	Start	tonalli/transports/common.html#Start	ServerCommand.Start		54
+nim	Pause	tonalli/transports/common.html#Pause	ServerCommand.Pause		54
+nim	Stop	tonalli/transports/common.html#Stop	ServerCommand.Stop		54
+nim	ServerCommand	tonalli/transports/common.html#ServerCommand	enum ServerCommand		54
+nim	ServerStatus	tonalli/transports/common.html#ServerStatus	enum ServerStatus		60
+nim	SocketServer	tonalli/transports/common.html#SocketServer	type SocketServer		69
+nim	TransportError	tonalli/transports/common.html#TransportError	object TransportError		101
+nim	TransportOsError	tonalli/transports/common.html#TransportOsError	object TransportOsError		103
+nim	TransportIncompleteError	tonalli/transports/common.html#TransportIncompleteError	object TransportIncompleteError		106
+nim	TransportLimitError	tonalli/transports/common.html#TransportLimitError	object TransportLimitError		108
+nim	TransportAddressError	tonalli/transports/common.html#TransportAddressError	object TransportAddressError		110
+nim	TransportNoSupport	tonalli/transports/common.html#TransportNoSupport	object TransportNoSupport		113
+nim	TransportUseClosedError	tonalli/transports/common.html#TransportUseClosedError	object TransportUseClosedError		115
+nim	TransportUseEofError	tonalli/transports/common.html#TransportUseEofError	object TransportUseEofError		117
+nim	TransportTooManyError	tonalli/transports/common.html#TransportTooManyError	object TransportTooManyError		119
+nim	TransportAbortedError	tonalli/transports/common.html#TransportAbortedError	object TransportAbortedError		121
+nim	TransportState	tonalli/transports/common.html#TransportState	enum TransportState		124
+nim	AnyAddress	tonalli/transports/common.html#AnyAddress	var AnyAddress		136
+nim	AnyAddress6	tonalli/transports/common.html#AnyAddress6	var AnyAddress6		138
+nim	`==`	tonalli/transports/common.html#==,TransportAddress,TransportAddress	proc `==`(lhs, rhs: TransportAddress): bool		141
+nim	getDomain	tonalli/transports/common.html#getDomain,TransportAddress	proc getDomain(address: TransportAddress): Domain		158
+nim	`$`	tonalli/transports/common.html#$,TransportAddress	proc `$`(address: TransportAddress): string		173
+nim	toIpAddress	tonalli/transports/common.html#toIpAddress,TransportAddress	proc toIpAddress(address: TransportAddress): IpAddress		202
+nim	toHex	tonalli/transports/common.html#toHex,TransportAddress	proc toHex(address: TransportAddress): string		211
+nim	initTAddress	tonalli/transports/common.html#initTAddress,string	proc initTAddress(address: string): TransportAddress		223
+nim	initTAddress	tonalli/transports/common.html#initTAddress,string,Port	proc initTAddress(address: string; port: Port): TransportAddress		273
+nim	initTAddress	tonalli/transports/common.html#initTAddress,string,int	proc initTAddress(address: string; port: int): TransportAddress		291
+nim	initTAddress	tonalli/transports/common.html#initTAddress,IpAddress,Port	proc initTAddress(address: IpAddress; port: Port): TransportAddress		299
+nim	fromSAddr	tonalli/transports/common.html#fromSAddr,ptr.Sockaddr_storage,SockLen,TransportAddress	proc fromSAddr(sa: ptr Sockaddr_storage; sl: SockLen; address: var TransportAddress)		333
+nim	toSAddr	tonalli/transports/common.html#toSAddr,TransportAddress,Sockaddr_storage,SockLen	proc toSAddr(address: TransportAddress; sa: var Sockaddr_storage; sl: var SockLen)		364
+nim	address	tonalli/transports/common.html#address,TransportAddress	proc address(ta: TransportAddress): IpAddress		397
+nim	host	tonalli/transports/common.html#host,TransportAddress	proc host(ta: TransportAddress): string		411
+nim	resolveTAddress	tonalli/transports/common.html#resolveTAddress,string,Port,Domain	proc resolveTAddress(address: string; port: Port; domain: Domain): seq[\n    TransportAddress]		426
+nim	resolveTAddress	tonalli/transports/common.html#resolveTAddress,string,Domain	proc resolveTAddress(address: string; domain: Domain): seq[TransportAddress]		444
+nim	resolveTAddress	tonalli/transports/common.html#resolveTAddress,string	proc resolveTAddress(address: string): seq[TransportAddress]		466
+nim	resolveTAddress	tonalli/transports/common.html#resolveTAddress,string,Port	proc resolveTAddress(address: string; port: Port): seq[TransportAddress]		479
+nim	resolveTAddress	tonalli/transports/common.html#resolveTAddress,string,AddressFamily	proc resolveTAddress(address: string; family: AddressFamily): seq[TransportAddress]		492
+nim	resolveTAddress	tonalli/transports/common.html#resolveTAddress,string,Port,AddressFamily	proc resolveTAddress(address: string; port: Port; family: AddressFamily): seq[\n    TransportAddress]		512
+nim	resolveTAddress	tonalli/transports/common.html#resolveTAddress,string,IpAddressFamily	proc resolveTAddress(address: string; family: IpAddressFamily): seq[TransportAddress]		529
+nim	resolveTAddress	tonalli/transports/common.html#resolveTAddress,string,Port,IpAddressFamily	proc resolveTAddress(address: string; port: Port; family: IpAddressFamily): seq[\n    TransportAddress]		538
+nim	anyAddressFix	tonalli/transports/common.html#anyAddressFix,TransportAddress	proc anyAddressFix(a: TransportAddress): TransportAddress		547
+nim	checkClosed	tonalli/transports/common.html#checkClosed.t,untyped	template checkClosed(t: untyped)		568
+nim	checkClosed	tonalli/transports/common.html#checkClosed.t,untyped,untyped	template checkClosed(t: untyped; future: untyped)		572
+nim	checkWriteEof	tonalli/transports/common.html#checkWriteEof.t,untyped,untyped	template checkWriteEof(t: untyped; future: untyped)		578
+nim	getError	tonalli/transports/common.html#getError.t,untyped	template getError(t: untyped): ref TransportError		584
+nim	getServerUseClosedError	tonalli/transports/common.html#getServerUseClosedError.t	template getServerUseClosedError(): ref TransportUseClosedError		589
+nim	getTransportUseClosedError	tonalli/transports/common.html#getTransportUseClosedError.t	template getTransportUseClosedError(): ref TransportUseClosedError		592
+nim	getTransportOsError	tonalli/transports/common.html#getTransportOsError.t,OSErrorCode	template getTransportOsError(err: OSErrorCode): ref TransportOsError		595
+nim	getTransportOsError	tonalli/transports/common.html#getTransportOsError.t,cint	template getTransportOsError(err: cint): ref TransportOsError		599
+nim	raiseTransportOsError	tonalli/transports/common.html#raiseTransportOsError,OSErrorCode	proc raiseTransportOsError(err: OSErrorCode)		602
+nim	getTransportTooManyError	tonalli/transports/common.html#getTransportTooManyError.t	template getTransportTooManyError(code = OSErrorCode(0)): ref TransportTooManyError		607
+nim	getConnectionAbortedError	tonalli/transports/common.html#getConnectionAbortedError.t,string	template getConnectionAbortedError(m: string = ""): ref TransportAbortedError		641
+nim	getConnectionAbortedError	tonalli/transports/common.html#getConnectionAbortedError.t,OSErrorCode	template getConnectionAbortedError(code: OSErrorCode): ref TransportAbortedError		649
+nim	getTransportError	tonalli/transports/common.html#getTransportError.t,OSErrorCode	template getTransportError(ecode: OSErrorCode): untyped		684
+nim	raiseTransportError	tonalli/transports/common.html#raiseTransportError,OSErrorCode	proc raiseTransportError(ecode: OSErrorCode)		702
+nim	isAvailable	tonalli/transports/common.html#isAvailable,AddressFamily	proc isAvailable(family: AddressFamily): bool		723
+nim	getDomain	tonalli/transports/common.html#getDomain,AsyncFD	proc getDomain(socket: AsyncFD): Result[AddressFamily, OSErrorCode]		734
+nim	setDualstack	tonalli/transports/common.html#setDualstack,AsyncFD,AddressFamily,DualStackType	proc setDualstack(socket: AsyncFD; family: AddressFamily; flag: DualStackType): Result[\n    void, OSErrorCode]		766
+nim	setDualstack	tonalli/transports/common.html#setDualstack,AsyncFD,DualStackType	proc setDualstack(socket: AsyncFD; flag: DualStackType): Result[void, OSErrorCode]		785
+nim	getAutoAddress	tonalli/transports/common.html#getAutoAddress,Port	proc getAutoAddress(port: Port): TransportAddress		795
+nim	getAutoAddresses	tonalli/transports/common.html#getAutoAddresses,Port,Port	proc getAutoAddresses(localPort: Port; remotePort: Port): tuple[\n    local: TransportAddress, remote: TransportAddress]		804
+nimgrp	setdualstack	tonalli/transports/common.html#setDualstack-procs-all	proc		766
+nimgrp	inittaddress	tonalli/transports/common.html#initTAddress-procs-all	proc		223
+nimgrp	resolvetaddress	tonalli/transports/common.html#resolveTAddress-procs-all	proc		426
+nimgrp	getdomain	tonalli/transports/common.html#getDomain-procs-all	proc		158
+nimgrp	getconnectionabortederror	tonalli/transports/common.html#getConnectionAbortedError-templates-all	template		641
+nimgrp	gettransportoserror	tonalli/transports/common.html#getTransportOsError-templates-all	template		595
+nimgrp	checkclosed	tonalli/transports/common.html#checkClosed-templates-all	template		568

@@ -1,0 +1,16 @@
+nimTitle	raisesfutures	tonalli/internal/raisesfutures.html	module tonalli/internal/raisesfutures		0
+nim	InternalRaisesFuture	tonalli/internal/raisesfutures.html#InternalRaisesFuture	type InternalRaisesFuture		8
+nim	makeNoRaises	tonalli/internal/raisesfutures.html#makeNoRaises	proc makeNoRaises(): NimNode		22
+nim	isNoRaises	tonalli/internal/raisesfutures.html#isNoRaises,NimNode	proc isNoRaises(n: NimNode): bool		46
+nim	Raising	tonalli/internal/raisesfutures.html#Raising.m,typedesc[Future[T]],typed	macro Raising[T](F: typedesc[Future[T]]; E: typed): untyped		62
+nim	init	tonalli/internal/raisesfutures.html#init.t,typeInternalRaisesFuture[T,E],static[string]	template init[T, E](F: type InternalRaisesFuture[T, E]; fromProc: static[string] = ""): F:type		93
+nim	init	tonalli/internal/raisesfutures.html#init.t,typeInternalRaisesFuture[T,E],static[string],static[FutureFlags]	template init[T, E](F: type InternalRaisesFuture[T, E]; fromProc: static[string] = "";\n           flags: static[FutureFlags]): F:type		108
+nim	prepend	tonalli/internal/raisesfutures.html#prepend.m,typedesc,varargs[typed]	macro prepend(tup: typedesc; typs: varargs[typed]): typedesc		134
+nim	remove	tonalli/internal/raisesfutures.html#remove.m,typedesc,varargs[typed]	macro remove(tup: typedesc; typs: varargs[typed]): typedesc		146
+nim	union	tonalli/internal/raisesfutures.html#union.m,typedesc,typedesc	macro union(tup0: typedesc; tup1: typedesc): typedesc		155
+nim	getRaisesTypes	tonalli/internal/raisesfutures.html#getRaisesTypes,NimNode	proc getRaisesTypes(raises: NimNode): NimNode		172
+nim	checkRaises	tonalli/internal/raisesfutures.html#checkRaises.m,InternalRaisesFuture,typed,ref.T,staticbool	macro checkRaises[T: CatchableError](future: InternalRaisesFuture; raises: typed;\n                               error: ref T; warn: static bool = true): untyped		178
+nim	failed	tonalli/internal/raisesfutures.html#failed,InternalRaisesFuture[T,void]	proc failed[T](future: InternalRaisesFuture[T, void]): bool		229
+nim	error	tonalli/internal/raisesfutures.html#error,InternalRaisesFuture[T,void]	proc error[T](future: InternalRaisesFuture[T, void]): ref CatchableError		236
+nim	readError	tonalli/internal/raisesfutures.html#readError,InternalRaisesFuture[T,void]	proc readError[T](future: InternalRaisesFuture[T, void]): ref CatchableError		242
+nimgrp	init	tonalli/internal/raisesfutures.html#init-templates-all	template		93

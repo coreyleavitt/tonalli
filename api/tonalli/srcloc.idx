@@ -1,0 +1,4 @@
+nimTitle	srcloc	tonalli/srcloc.html	module tonalli/srcloc		0
+nim	SrcLoc	tonalli/srcloc.html#SrcLoc	object SrcLoc		15
+nim	`$`	tonalli/srcloc.html#$,ptr.SrcLoc	proc `$`(loc: ptr SrcLoc): string		20
+nim	getSrcLocation	tonalli/srcloc.html#getSrcLocation.t,staticstring	template getSrcLocation(procedure: static string = ""): ptr SrcLoc		39

@@ -1,0 +1,32 @@
+nimTitle	selectors2	tonalli/selectors2.html	module tonalli/selectors2		0
+nim	Selector	tonalli/selectors2.html#Selector	type Selector		40
+nim	Event	tonalli/selectors2.html#Event	enum Event		43
+nim	IOSelectorsException	tonalli/selectors2.html#IOSelectorsException	object IOSelectorsException		61
+nim	ReadyKey	tonalli/selectors2.html#ReadyKey	object ReadyKey		63
+nim	SelectEvent	tonalli/selectors2.html#SelectEvent	object SelectEvent		68
+nim	newSelector	tonalli/selectors2.html#newSelector	proc newSelector[T](): Selector[T]		71
+nim	close	tonalli/selectors2.html#close,Selector[T]	proc close[T](s: Selector[T])		74
+nim	registerHandle	tonalli/selectors2.html#registerHandle,Selector[T],,set[Event],T	proc registerHandle[T](s: Selector[T]; fd: int | SocketHandle; events: set[Event];\n                  data: T)		77
+nim	updateHandle	tonalli/selectors2.html#updateHandle,Selector[T],,set[Event]	proc updateHandle[T](s: Selector[T]; fd: int | SocketHandle; events: set[Event])		83
+nim	registerTimer	tonalli/selectors2.html#registerTimer,Selector[T],int,bool,T	proc registerTimer[T](s: Selector[T]; timeout: int; oneshot: bool; data: T): int		88
+nim	registerSignal	tonalli/selectors2.html#registerSignal,Selector[T],int,T	proc registerSignal[T](s: Selector[T]; signal: int; data: T): int		102
+nim	registerProcess	tonalli/selectors2.html#registerProcess,Selector[T],int,T	proc registerProcess[T](s: Selector[T]; pid: int; data: T): int		114
+nim	registerEvent	tonalli/selectors2.html#registerEvent,Selector[T],SelectEvent,T	proc registerEvent[T](s: Selector[T]; ev: SelectEvent; data: T)		124
+nim	registerVnode	tonalli/selectors2.html#registerVnode,Selector[T],cint,set[Event],T	proc registerVnode[T](s: Selector[T]; fd: cint; events: set[Event]; data: T)		130
+nim	newSelectEvent	tonalli/selectors2.html#newSelectEvent	proc newSelectEvent(): SelectEvent		139
+nim	trigger	tonalli/selectors2.html#trigger,SelectEvent	proc trigger(ev: SelectEvent)		142
+nim	close	tonalli/selectors2.html#close,SelectEvent	proc close(ev: SelectEvent)		145
+nim	unregister	tonalli/selectors2.html#unregister,Selector[T],SelectEvent	proc unregister[T](s: Selector[T]; ev: SelectEvent)		148
+nim	unregister	tonalli/selectors2.html#unregister,Selector[T],	proc unregister[T](s: Selector[T]; fd: int | SocketHandle | cint)		151
+nim	selectInto	tonalli/selectors2.html#selectInto,Selector[T],int,openArray[ReadyKey]	proc selectInto[T](s: Selector[T]; timeout: int; results: var openArray[ReadyKey]): int		154
+nim	select	tonalli/selectors2.html#select,Selector[T],int	proc select[T](s: Selector[T]; timeout: int): seq[ReadyKey]		165
+nim	getData	tonalli/selectors2.html#getData,Selector[T],	proc getData[T](s: Selector[T]; fd: SocketHandle | int): var T		174
+nim	setData	tonalli/selectors2.html#setData,Selector[T],,T	proc setData[T](s: Selector[T]; fd: SocketHandle | int; data: var T): bool		179
+nim	isEmpty	tonalli/selectors2.html#isEmpty.t,Selector[T]	template isEmpty[T](s: Selector[T]): bool		184
+nim	withData	tonalli/selectors2.html#withData.t,Selector[T],,untyped,untyped	template withData[T](s: Selector[T]; fd: SocketHandle | int; value, body: untyped)		188
+nim	withData	tonalli/selectors2.html#withData.t,Selector[T],,untyped,untyped,untyped	template withData[T](s: Selector[T]; fd: SocketHandle | int; value, body1, body2: untyped)		201
+nim	contains	tonalli/selectors2.html#contains,Selector[T],	proc contains[T](s: Selector[T]; fd: SocketHandle | int): bool		217
+nim	getFd	tonalli/selectors2.html#getFd,Selector[T]	proc getFd[T](s: Selector[T]): int		220
+nimgrp	close	tonalli/selectors2.html#close-procs-all	proc		74
+nimgrp	unregister	tonalli/selectors2.html#unregister-procs-all	proc		148
+nimgrp	withdata	tonalli/selectors2.html#withData-templates-all	template		188

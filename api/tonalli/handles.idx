@@ -1,0 +1,31 @@
+nimTitle	handles	tonalli/handles.html	module tonalli/handles		0
+nim	asyncInvalidSocket	tonalli/handles.html#asyncInvalidSocket	const asyncInvalidSocket		31
+nim	asyncInvalidPipe	tonalli/handles.html#asyncInvalidPipe	const asyncInvalidPipe		32
+nim	setSocketBlocking	tonalli/handles.html#setSocketBlocking,SocketHandle,bool	proc setSocketBlocking(s: SocketHandle; blocking: bool): bool		34
+nim	setSockOpt2	tonalli/handles.html#setSockOpt2,AsyncFD,int,int,int	proc setSockOpt2(socket: AsyncFD; level, optname, optval: int): Result[void,\n    OSErrorCode]		41
+nim	setSockOpt2	tonalli/handles.html#setSockOpt2,AsyncFD,int,int,pointer,int	proc setSockOpt2(socket: AsyncFD; level, optname: int; value: pointer; valuelen: int): Result[\n    void, OSErrorCode]		50
+nim	setSockOpt	tonalli/handles.html#setSockOpt,AsyncFD,int,int,int	proc setSockOpt(socket: AsyncFD; level, optname, optval: int): bool		60
+nim	setSockOpt	tonalli/handles.html#setSockOpt,AsyncFD,int,int,pointer,int	proc setSockOpt(socket: AsyncFD; level, optname: int; value: pointer; valuelen: int): bool		66
+nim	getSockOpt2	tonalli/handles.html#getSockOpt2,AsyncFD,int,int	proc getSockOpt2(socket: AsyncFD; level, optname: int): Result[cint, OSErrorCode]		73
+nim	getSockOpt2	tonalli/handles.html#getSockOpt2,AsyncFD,int,int,type	proc getSockOpt2(socket: AsyncFD; level, optname: int; T: type): Result[T,\n    OSErrorCode]		84
+nim	getSockOpt	tonalli/handles.html#getSockOpt,AsyncFD,int,int,int	proc getSockOpt(socket: AsyncFD; level, optname: int; value: var int): bool		95
+nim	getSockOpt	tonalli/handles.html#getSockOpt,AsyncFD,int,int,pointer,int	proc getSockOpt(socket: AsyncFD; level, optname: int; value: var pointer;\n           valuelen: var int): bool		103
+nim	getSocketError	tonalli/handles.html#getSocketError,AsyncFD,int	proc getSocketError(socket: AsyncFD; err: var int): bool		111
+nim	getSocketError2	tonalli/handles.html#getSocketError2,AsyncFD	proc getSocketError2(socket: AsyncFD): Result[cint, OSErrorCode]		119
+nim	isAvailable	tonalli/handles.html#isAvailable,Domain	proc isAvailable(domain: Domain): bool		122
+nim	createAsyncSocket2	tonalli/handles.html#createAsyncSocket2,Domain,SockType,Protocol	proc createAsyncSocket2(domain: Domain; sockType: SockType; protocol: Protocol;\n                   inherit = true): Result[AsyncFD, OSErrorCode]		138
+nim	wrapAsyncSocket2	tonalli/handles.html#wrapAsyncSocket2	proc wrapAsyncSocket2(sock: cint | SocketHandle): Result[AsyncFD, OSErrorCode]		197
+nim	createAsyncSocket	tonalli/handles.html#createAsyncSocket,Domain,SockType,Protocol	proc createAsyncSocket(domain: Domain; sockType: SockType; protocol: Protocol;\n                  inherit = true): AsyncFD		209
+nim	wrapAsyncSocket	tonalli/handles.html#wrapAsyncSocket	proc wrapAsyncSocket(sock: cint | SocketHandle): AsyncFD		217
+nim	getMaxOpenFiles2	tonalli/handles.html#getMaxOpenFiles2	proc getMaxOpenFiles2(): Result[int, OSErrorCode]		223
+nim	setMaxOpenFiles2	tonalli/handles.html#setMaxOpenFiles2,int	proc setMaxOpenFiles2(count: int): Result[void, OSErrorCode]		237
+nim	getMaxOpenFiles	tonalli/handles.html#getMaxOpenFiles	proc getMaxOpenFiles(): int		252
+nim	setMaxOpenFiles	tonalli/handles.html#setMaxOpenFiles,int	proc setMaxOpenFiles(count: int)		263
+nim	getInheritable	tonalli/handles.html#getInheritable,AsyncFD	proc getInheritable(fd: AsyncFD): Result[bool, OSErrorCode]		271
+nim	createAsyncPipe	tonalli/handles.html#createAsyncPipe	proc createAsyncPipe(): tuple[read: AsyncFD, write: AsyncFD]		284
+nim	getDualstack	tonalli/handles.html#getDualstack,AsyncFD	proc getDualstack(fd: AsyncFD): Result[bool, OSErrorCode]		295
+nim	setDualstack	tonalli/handles.html#setDualstack,AsyncFD,bool	proc setDualstack(fd: AsyncFD; value: bool): Result[void, OSErrorCode]		306
+nimgrp	setsockopt2	tonalli/handles.html#setSockOpt2-procs-all	proc		41
+nimgrp	getsockopt	tonalli/handles.html#getSockOpt-procs-all	proc		95
+nimgrp	setsockopt	tonalli/handles.html#setSockOpt-procs-all	proc		60
+nimgrp	getsockopt2	tonalli/handles.html#getSockOpt2-procs-all	proc		73

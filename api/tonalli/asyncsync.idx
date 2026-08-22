@@ -1,0 +1,76 @@
+nimTitle	asyncsync	tonalli/asyncsync.html	module tonalli/asyncsync		0
+nim	AsyncLock	tonalli/asyncsync.html#AsyncLock	type AsyncLock		20
+nim	AsyncEvent	tonalli/asyncsync.html#AsyncEvent	type AsyncEvent		33
+nim	AsyncQueue	tonalli/asyncsync.html#AsyncQueue	type AsyncQueue		46
+nim	AsyncQueueEmptyError	tonalli/asyncsync.html#AsyncQueueEmptyError	object AsyncQueueEmptyError		58
+nim	AsyncQueueFullError	tonalli/asyncsync.html#AsyncQueueFullError	object AsyncQueueFullError		60
+nim	AsyncLockError	tonalli/asyncsync.html#AsyncLockError	object AsyncLockError		62
+nim	AsyncEventQueueFullError	tonalli/asyncsync.html#AsyncEventQueueFullError	object AsyncEventQueueFullError		65
+nim	EventQueueKey	tonalli/asyncsync.html#EventQueueKey	type EventQueueKey		67
+nim	EventQueueReader	tonalli/asyncsync.html#EventQueueReader	object EventQueueReader		69
+nim	AsyncEventQueue	tonalli/asyncsync.html#AsyncEventQueue	type AsyncEventQueue		75
+nim	AsyncSemaphore	tonalli/asyncsync.html#AsyncSemaphore	type AsyncSemaphore		82
+nim	AsyncSemaphoreError	tonalli/asyncsync.html#AsyncSemaphoreError	object AsyncSemaphoreError		95
+nim	newAsyncLock	tonalli/asyncsync.html#newAsyncLock	proc newAsyncLock(): AsyncLock		97
+nim	acquire	tonalli/asyncsync.html#acquire,AsyncLock	proc acquire(lock: AsyncLock): InternalRaisesFuture[void, (CancelledError,)]		127
+nim	locked	tonalli/asyncsync.html#locked,AsyncLock	proc locked(lock: AsyncLock): bool		142
+nim	waitersCount	tonalli/asyncsync.html#waitersCount,AsyncLock	proc waitersCount(lock: AsyncLock): int		146
+nim	release	tonalli/asyncsync.html#release,AsyncLock	proc release(lock: AsyncLock)		151
+nim	newAsyncEvent	tonalli/asyncsync.html#newAsyncEvent	proc newAsyncEvent(): AsyncEvent		170
+nim	wait	tonalli/asyncsync.html#wait,AsyncEvent	proc wait(event: AsyncEvent): InternalRaisesFuture[void, (CancelledError,)]		180
+nim	fire	tonalli/asyncsync.html#fire,AsyncEvent	proc fire(event: AsyncEvent)		195
+nim	clear	tonalli/asyncsync.html#clear,AsyncEvent	proc clear(event: AsyncEvent)		206
+nim	isSet	tonalli/asyncsync.html#isSet,AsyncEvent	proc isSet(event: AsyncEvent): bool		212
+nim	waitersCount	tonalli/asyncsync.html#waitersCount,AsyncEvent	proc waitersCount(event: AsyncEvent): int		216
+nim	newAsyncQueue	tonalli/asyncsync.html#newAsyncQueue,int	proc newAsyncQueue[T](maxsize: int = 0): AsyncQueue[T]		221
+nim	full	tonalli/asyncsync.html#full,AsyncQueue[T]	proc full[T](aq: AsyncQueue[T]): bool		245
+nim	empty	tonalli/asyncsync.html#empty,AsyncQueue[T]	proc empty[T](aq: AsyncQueue[T]): bool		255
+nim	addFirstNoWait	tonalli/asyncsync.html#addFirstNoWait,AsyncQueue[T],T	proc addFirstNoWait[T](aq: AsyncQueue[T]; item: T)		277
+nim	addLastNoWait	tonalli/asyncsync.html#addLastNoWait,AsyncQueue[T],T	proc addLastNoWait[T](aq: AsyncQueue[T]; item: T)		286
+nim	popFirstNoWait	tonalli/asyncsync.html#popFirstNoWait,AsyncQueue[T]	proc popFirstNoWait[T](aq: AsyncQueue[T]): T		295
+nim	popLastNoWait	tonalli/asyncsync.html#popLastNoWait,AsyncQueue[T]	proc popLastNoWait[T](aq: AsyncQueue[T]): T		304
+nim	addFirst	tonalli/asyncsync.html#addFirst,AsyncQueue[T],T	proc addFirst[T](aq: AsyncQueue[T]; item: T): InternalRaisesFuture[void,\n    (CancelledError,)]		314
+nim	addLast	tonalli/asyncsync.html#addLast,AsyncQueue[T],T	proc addLast[T](aq: AsyncQueue[T]; item: T): InternalRaisesFuture[void,\n    (CancelledError,)]		330
+nim	popFirst	tonalli/asyncsync.html#popFirst,AsyncQueue[T]	proc popFirst[T](aq: AsyncQueue[T]): InternalRaisesFuture[T, (CancelledError,)]		346
+nim	popLast	tonalli/asyncsync.html#popLast,AsyncQueue[T]	proc popLast[T](aq: AsyncQueue[T]): InternalRaisesFuture[T, (CancelledError,)]		362
+nim	putNoWait	tonalli/asyncsync.html#putNoWait,AsyncQueue[T],T	proc putNoWait[T](aq: AsyncQueue[T]; item: T)		377
+nim	getNoWait	tonalli/asyncsync.html#getNoWait,AsyncQueue[T]	proc getNoWait[T](aq: AsyncQueue[T]): T		382
+nim	put	tonalli/asyncsync.html#put,AsyncQueue[T],T	proc put[T](aq: AsyncQueue[T]; item: T): InternalRaisesFuture[void, (CancelledError,)]		388
+nim	get	tonalli/asyncsync.html#get,AsyncQueue[T]	proc get[T](aq: AsyncQueue[T]): InternalRaisesFuture[T, (CancelledError,)]		393
+nim	clear	tonalli/asyncsync.html#clear,AsyncQueue[T]	proc clear[T](aq: AsyncQueue[T])		397
+nim	len	tonalli/asyncsync.html#len,AsyncQueue[T]	proc len[T](aq: AsyncQueue[T]): int		401
+nim	size	tonalli/asyncsync.html#size,AsyncQueue[T]	proc size[T](aq: AsyncQueue[T]): int		405
+nim	gettersCount	tonalli/asyncsync.html#gettersCount,AsyncQueue[T]	proc gettersCount[T](aq: AsyncQueue[T]): int		409
+nim	puttersCount	tonalli/asyncsync.html#puttersCount,AsyncQueue[T]	proc puttersCount[T](aq: AsyncQueue[T]): int		414
+nim	`[]`	tonalli/asyncsync.html#[],AsyncQueue[T],Natural	proc `[]`[T](aq: AsyncQueue[T]; i: Natural): T		419
+nim	`[]`	tonalli/asyncsync.html#[],AsyncQueue[T],BackwardsIndex	proc `[]`[T](aq: AsyncQueue[T]; i: BackwardsIndex): T		424
+nim	`[]=`	tonalli/asyncsync.html#[]=,AsyncQueue[T],Natural,T	proc `[]=`[T](aq: AsyncQueue[T]; i: Natural; item: T)		429
+nim	`[]=`	tonalli/asyncsync.html#[]=,AsyncQueue[T],BackwardsIndex,T	proc `[]=`[T](aq: AsyncQueue[T]; i: BackwardsIndex; item: T)		433
+nim	items	tonalli/asyncsync.html#items.i,AsyncQueue[T]	iterator items[T](aq: AsyncQueue[T]): T		437
+nim	mitems	tonalli/asyncsync.html#mitems.i,AsyncQueue[T]	iterator mitems[T](aq: AsyncQueue[T]): var T		442
+nim	pairs	tonalli/asyncsync.html#pairs.i,AsyncQueue[T]	iterator pairs[T](aq: AsyncQueue[T]): tuple[key: int, val: T]		447
+nim	contains	tonalli/asyncsync.html#contains,AsyncQueue[T],T	proc contains[T](aq: AsyncQueue[T]; item: T): bool		452
+nim	`$`	tonalli/asyncsync.html#$,AsyncQueue[T]	proc `$`[T](aq: AsyncQueue[T]): string		459
+nim	newAsyncEventQueue	tonalli/asyncsync.html#newAsyncEventQueue,int	proc newAsyncEventQueue[T](limitSize = 0): AsyncEventQueue[T]		499
+nim	len	tonalli/asyncsync.html#len,AsyncEventQueue	proc len(ab: AsyncEventQueue): int		518
+nim	waitersCount	tonalli/asyncsync.html#waitersCount,AsyncEventQueue	proc waitersCount(ab: AsyncEventQueue): int		521
+nim	register	tonalli/asyncsync.html#register,AsyncEventQueue	proc register(ab: AsyncEventQueue): EventQueueKey		537
+nim	unregister	tonalli/asyncsync.html#unregister,AsyncEventQueue,EventQueueKey	proc unregister(ab: AsyncEventQueue; key: EventQueueKey)		545
+nim	close	tonalli/asyncsync.html#close,AsyncEventQueue	proc close(ab: AsyncEventQueue)		556
+nim	closeWait	tonalli/asyncsync.html#closeWait,AsyncEventQueue	proc closeWait(ab: AsyncEventQueue): InternalRaisesFuture[void, void]		564
+nim	readerOverflow	tonalli/asyncsync.html#readerOverflow.t,AsyncEventQueue,EventQueueReader	template readerOverflow(ab: AsyncEventQueue; reader: EventQueueReader): bool		579
+nim	emit	tonalli/asyncsync.html#emit,AsyncEventQueue[T],T	proc emit[T](ab: AsyncEventQueue[T]; data: T)		583
+nim	waitEvents	tonalli/asyncsync.html#waitEvents,AsyncEventQueue[T],EventQueueKey,int	proc waitEvents[T](ab: AsyncEventQueue[T]; key: EventQueueKey; eventsCount = -1): InternalRaisesFuture[\n    seq[T], (AsyncEventQueueFullError, CancelledError)]		621
+nim	newAsyncSemaphore	tonalli/asyncsync.html#newAsyncSemaphore,int	proc newAsyncSemaphore(size: int = 1): AsyncSemaphore		685
+nim	availableSlots	tonalli/asyncsync.html#availableSlots,AsyncSemaphore	proc availableSlots(s: AsyncSemaphore): int		695
+nim	waitersCount	tonalli/asyncsync.html#waitersCount,AsyncSemaphore	proc waitersCount(s: AsyncSemaphore): int		698
+nim	tryAcquire	tonalli/asyncsync.html#tryAcquire,AsyncSemaphore	proc tryAcquire(s: AsyncSemaphore): bool		703
+nim	acquire	tonalli/asyncsync.html#acquire,AsyncSemaphore	proc acquire(s: AsyncSemaphore): InternalRaisesFuture[void, (CancelledError,)]		714
+nim	release	tonalli/asyncsync.html#release,AsyncSemaphore	proc release(s: AsyncSemaphore)		728
+nimgrp	[]=	tonalli/asyncsync.html#[]=-procs-all	proc		429
+nimgrp	release	tonalli/asyncsync.html#release-procs-all	proc		151
+nimgrp	[]	tonalli/asyncsync.html#[]-procs-all	proc		419
+nimgrp	acquire	tonalli/asyncsync.html#acquire-procs-all	proc		127
+nimgrp	clear	tonalli/asyncsync.html#clear-procs-all	proc		206
+nimgrp	waiterscount	tonalli/asyncsync.html#waitersCount-procs-all	proc		146
+nimgrp	len	tonalli/asyncsync.html#len-procs-all	proc		401

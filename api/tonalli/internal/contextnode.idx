@@ -1,0 +1,4 @@
+nimTitle	contextnode	tonalli/internal/contextnode.html	module tonalli/internal/contextnode		0
+nim	ContextNodeBase	tonalli/internal/contextnode.html#ContextNodeBase	type ContextNodeBase		22
+nim	nextNode	tonalli/internal/contextnode.html#nextNode,ContextNodeBase	proc nextNode(node: ContextNodeBase): ContextNodeBase		31
+nim	linkNode	tonalli/internal/contextnode.html#linkNode,ContextNodeBase,ContextNodeBase	proc linkNode(node, prev: ContextNodeBase)		35

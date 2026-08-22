@@ -1,0 +1,7 @@
+nimTitle	callbackqueue	tonalli/internal/callbackqueue.html	module tonalli/internal/callbackqueue		0
+nim	CallbackQueue	tonalli/internal/callbackqueue.html#CallbackQueue	object CallbackQueue		29
+nim	initCallbackQueue	tonalli/internal/callbackqueue.html#initCallbackQueue,int	proc initCallbackQueue[T](initialCap: int = 8): CallbackQueue[T]		84
+nim	len	tonalli/internal/callbackqueue.html#len,CallbackQueue[T]	proc len[T](q: CallbackQueue[T]): int		95
+nim	addLast	tonalli/internal/callbackqueue.html#addLast,CallbackQueue[T],template (T: typedesc): typedescT	proc addLast[T](q: var CallbackQueue[T]; item: tonalliSink T)		134
+nim	prependNoGrow	tonalli/internal/callbackqueue.html#prependNoGrow,CallbackQueue[T],template (T: typedesc): typedescT	proc prependNoGrow[T](q: var CallbackQueue[T]; item: tonalliSink T)		145
+nim	popFirst	tonalli/internal/callbackqueue.html#popFirst.t,CallbackQueue[T]	template popFirst[T](q: var CallbackQueue[T]): T		158

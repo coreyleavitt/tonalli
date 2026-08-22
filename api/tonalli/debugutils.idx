@@ -1,0 +1,7 @@
+nimTitle	debugutils	tonalli/debugutils.html	module tonalli/debugutils		0
+nim	AllFutureStates	tonalli/debugutils.html#AllFutureStates	const AllFutureStates		19
+nim	WithoutCompleted	tonalli/debugutils.html#WithoutCompleted	const WithoutCompleted		21
+nim	OnlyPending	tonalli/debugutils.html#OnlyPending	const OnlyPending		23
+nim	OnlyCompleted	tonalli/debugutils.html#OnlyCompleted	const OnlyCompleted		24
+nim	dumpPendingFutures	tonalli/debugutils.html#dumpPendingFutures	proc dumpPendingFutures(filter = AllFutureStates): string		26
+nim	pendingFuturesCount	tonalli/debugutils.html#pendingFuturesCount,set[FutureState]	proc pendingFuturesCount(filter: set[FutureState]): uint		56
