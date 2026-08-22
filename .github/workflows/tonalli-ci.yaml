@@ -428,7 +428,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup milpa
-        run: pipx install git+https://github.com/coreyleavitt/milpa@6efed43311e4
+        run: pipx install 'git+https://github.com/coreyleavitt/milpa@6efed43311e4#subdirectory=impls/python'
 
       - name: Fetch dependencies
         run: milpa fetch --locked
