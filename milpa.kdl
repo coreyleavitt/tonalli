@@ -1,0 +1,11 @@
+name "tonalli"
+
+deps {
+    "results"
+    "stew"
+    "bearssl"
+    "httputils"
+    "unittest2"
+}
+
+kind "library"
