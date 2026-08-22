@@ -427,8 +427,11 @@ jobs:
           nim-version: ${{ inputs.nim-version }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install dependencies
-        run: bash .github/scripts/nimble-guard.sh nimble install -y --depsOnly
+      - name: Setup milpa
+        run: pipx install git+https://github.com/coreyleavitt/milpa@6efed43311e4
+
+      - name: Fetch dependencies
+        run: milpa fetch --locked
 
       - name: Windows parity check
-        run: bash .github/scripts/nimble-guard.sh nimble check_windows
+        run: bash .github/scripts/check-windows.sh

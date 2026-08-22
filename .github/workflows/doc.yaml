@@ -40,12 +40,27 @@ jobs:
         with:
           nim-version: "2.2.10"
 
+      - name: Setup milpa
+        run: pipx install git+https://github.com/coreyleavitt/milpa@6efed43311e4
+
+      - name: Fetch dependencies
+        run: milpa fetch --locked
+
       - name: Generate doc
         run: |
           nim --version
-          nimble --version
-          nimble install -dy
-          nimble docs
+          mdbook build docs
+          # nim doc reports errors from platform-conditional internals
+          # here but still emits complete html output.
+          nim doc --git.url:https://github.com/coreyleavitt/tonalli --git.commit:master --outdir:docs/book/api --project tonalli || true
+          for f in tonalli/apps/http/*.nim; do
+            nim doc --git.url:https://github.com/coreyleavitt/tonalli --git.commit:master --outdir:docs/book/api/tonalli/apps/http "$f" || true
+          done
+          # The error tolerance above must never hide a doc run that
+          # produced nothing: assert the outputs actually exist.
+          test -f docs/book/api/theindex.html
+          test -f docs/book/api/tonalli.html
+          [ "$(find docs/book/api/tonalli/apps/http -name '*.html' | wc -l)" -ge 1 ]
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v4
